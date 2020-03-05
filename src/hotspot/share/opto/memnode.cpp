@@ -2469,7 +2469,8 @@ Node* LoadRangeNode::Identity(PhaseGVN* phase) {
 //=============================================================================
 //---------------------------StoreNode::make-----------------------------------
 // Polymorphic factory method:
-StoreNode* StoreNode::make(PhaseGVN& gvn, Node* ctl, Node* mem, Node* adr, const TypePtr* adr_type, Node* val, BasicType bt, MemOrd mo) {
+StoreNode* StoreNode::make(PhaseGVN& gvn, Node* ctl, Node* mem, Node* adr, const TypePtr* adr_type,
+                           Node* val, BasicType bt, MemOrd mo) {
   assert((mo == unordered || mo == release), "unexpected");
   Compile* C = gvn.C;
   assert(C->get_alias_index(adr_type) != Compile::AliasIdxRaw ||

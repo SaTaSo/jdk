@@ -68,6 +68,7 @@ void GCArguments::initialize() {
     // Only young gen which is allocated in dram can use large pages, but we currently don't support that.
     FLAG_SET_DEFAULT(UseLargePages, false);
   }
+  LP64_ONLY(FLAG_SET_DEFAULT(UseCompressedOops, false));
 }
 
 void GCArguments::initialize_heap_sizes() {

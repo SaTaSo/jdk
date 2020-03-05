@@ -38,20 +38,25 @@ class G1BarrierSetAssembler: public ModRefBarrierSetAssembler {
   virtual void gen_write_ref_array_pre_barrier(MacroAssembler* masm, DecoratorSet decorators, Register addr, Register count);
   virtual void gen_write_ref_array_post_barrier(MacroAssembler* masm, DecoratorSet decorators, Register addr, Register count, Register tmp);
 
+ public:
   void g1_write_barrier_pre(MacroAssembler* masm,
                             Register obj,
                             Register pre_val,
                             Register thread,
                             Register tmp,
                             bool tosca_live,
-                            bool expand_call);
+                            bool expand_call,
+                            bool from_c2 = false);
 
   void g1_write_barrier_post(MacroAssembler* masm,
                              Register store_addr,
                              Register new_val,
                              Register thread,
                              Register tmp,
-                             Register tmp2);
+                             Register tmp2,
+                             bool from_c2 = false);
+
+ protected:
 
   virtual void oop_store_at(MacroAssembler* masm, DecoratorSet decorators, BasicType type,
                             Address dst, Register val, Register tmp1, Register tmp2);

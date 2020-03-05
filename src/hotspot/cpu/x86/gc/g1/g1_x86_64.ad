@@ -1,0 +1,71 @@
+//
+// Copyright (c) 2020, Oracle and/or its affiliates. All rights reserved.
+// DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+//
+// This code is free software; you can redistribute it and/or modify it
+// under the terms of the GNU General Public License version 2 only, as
+// published by the Free Software Foundation.
+//
+// This code is distributed in the hope that it will be useful, but WITHOUT
+// ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+// FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+// version 2 for more details (a copy is included in the LICENSE file that
+// accompanied this code).
+//
+// You should have received a copy of the GNU General Public License version
+// 2 along with this work; if not, write to the Free Software Foundation,
+// Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+//
+// Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
+// or visit www.oracle.com if you need additional information or have any
+// questions.
+//
+
+source_hpp %{
+
+#include "gc/g1/c2/g1BarrierSetC2.hpp"
+
+%}
+
+source %{
+
+#include "gc/g1/g1BarrierSetAssembler_x86.hpp"
+
+%}
+
+// Store Pointer
+instruct g1StoreP(memory mem, any_RegP src, rRegP tmp1, rRegP tmp2, rRegP tmp3, rFlagsReg cr)
+%{
+  predicate(UseG1GC && n->as_Store()->barrier_data() != 0);
+  match(Set mem (StoreP mem src));
+  effect(TEMP tmp1, TEMP tmp2, TEMP tmp3, KILL cr);
+
+  ins_cost(125); // XXX
+  format %{ "movq    $mem, $src\t# ptr" %}
+  ins_encode %{
+    G1BarrierSetAssembler* g1_asm = static_cast<G1BarrierSetAssembler*>(BarrierSet::barrier_set()->barrier_set_assembler());
+    DecoratorSet decorators = IN_HEAP;
+    __ lea($tmp1$$Register, $mem$$Address);
+    if (barrier_data() & G1C2BarrierPre) {
+      g1_asm->g1_write_barrier_pre(&_masm /* masm */,
+                                   $tmp1$$Register /* obj */,
+                                   $tmp2$$Register /* pre_val */,
+                                   r15_thread /* thread */,
+                                   $tmp3$$Register /* tmp */,
+                                   false /* tosca_live */,
+                                   true /* expand_call */,
+                                   true /* from_c2 */);
+    }
+    __ movq(Address($tmp1$$Register, 0), $src$$Register);
+    if (barrier_data() & G1C2BarrierPost) {
+      g1_asm->g1_write_barrier_post(&_masm /* masm */,
+                                    $tmp1$$Register /* store_adr */,
+                                    $src$$Register /* new_val */,
+                                    r15_thread /* thread */,
+                                    $tmp3$$Register /* tmp */,
+                                    $tmp2$$Register /* tmp2 */,
+                                    true /* from_c2 */);
+    }
+  %}
+  ins_pipe(ialu_mem_reg);
+%}

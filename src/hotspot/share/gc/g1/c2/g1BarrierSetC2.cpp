@@ -304,7 +304,7 @@ void G1BarrierSetC2::pre_barrier(GraphKit* kit,
  * Returns true if the post barrier can be removed
  */
 bool G1BarrierSetC2::g1_can_remove_post_barrier(GraphKit* kit,
-                                                PhaseTransform* phase, Node* store,
+                                                PhaseTransform* phase, Node* store_ctrl,
                                                 Node* adr) const {
   intptr_t      offset = 0;
   Node*         base   = AddPNode::Ideal_base_and_offset(adr, phase, offset);
@@ -319,7 +319,7 @@ bool G1BarrierSetC2::g1_can_remove_post_barrier(GraphKit* kit,
   }
 
   // Start search from Store node
-  Node* mem = store->in(MemNode::Control);
+  Node* mem = store_ctrl;
   if (mem->is_Proj() && mem->in(0)->is_Initialize()) {
 
     InitializeNode* st_init = mem->in(0)->as_Initialize();
@@ -398,7 +398,7 @@ void G1BarrierSetC2::post_barrier(GraphKit* kit,
   }
 
   if (use_ReduceInitialCardMarks()
-      && g1_can_remove_post_barrier(kit, &kit->gvn(), oop_store, adr)) {
+      && g1_can_remove_post_barrier(kit, &kit->gvn(), oop_store->in(MemNode::Control), adr)) {
     return;
   }
 
@@ -869,4 +869,75 @@ bool G1BarrierSetC2::escape_add_to_con_graph(ConnectionGraph* conn_graph, PhaseG
     }
   }
   return false;
+}
+
+int G1BarrierSetC2::get_store_barrier(C2Access& access, C2AccessValue& val) const {
+  int barriers = G1C2BarrierPre | G1C2BarrierPost;
+  DecoratorSet decorators = access.decorators();
+
+  if (!access.is_parse_access()) {
+    // Only support for eliding barriers at parse time for now.
+    return barriers;
+  }
+
+  C2ParseAccess& parse_access = static_cast<C2ParseAccess&>(access);
+  GraphKit* kit = parse_access.kit();
+
+  const TypePtr* adr_type = access.addr().type();
+  Node* adr = access.addr().node();
+
+  uint adr_idx = kit->C->get_alias_index(adr_type);
+  assert(adr_idx != Compile::AliasIdxTop, "use other store_to_memory factory" );
+
+  if (g1_can_remove_pre_barrier(kit, &kit->gvn(), adr, access.type(), adr_idx)) {
+    barriers ^= G1C2BarrierPre;
+  }
+
+  if (val.node() != NULL && val.node()->is_Con() && val.node()->bottom_type() == TypePtr::NULL_PTR) {
+    // Must be NULL
+    const Type* t = val.node()->bottom_type();
+    assert(t == Type::TOP || t == TypePtr::NULL_PTR, "must be NULL");
+    // No post barrier if writing NULLx
+    barriers ^= G1C2BarrierPost;
+  } else if (use_ReduceInitialCardMarks() && access.base() == kit->just_allocated_object(kit->control())) {
+    // We can skip marks on a freshly-allocated object in Eden.
+    // Keep this code in sync with new_deferred_store_barrier() in runtime.cpp.
+    // That routine informs GC to take appropriate compensating steps,
+    // upon a slow-path allocation, so as to make this card-mark
+    // elision safe.
+    barriers ^= G1C2BarrierPost;
+  } else if (use_ReduceInitialCardMarks()
+             && g1_can_remove_post_barrier(kit, &kit->gvn(), kit->control(), adr)) {
+    barriers ^= G1C2BarrierPost;
+  }
+
+  bool is_array = (decorators & IS_ARRAY) != 0;
+  bool anonymous = (decorators & ON_UNKNOWN_OOP_REF) != 0;
+
+  if (is_array || anonymous) {
+    barriers |= G1C2BarrierPostPrecise;
+  }
+
+  return barriers;
+}
+
+Node* G1BarrierSetC2::store_at_resolved(C2Access& access, C2AccessValue& val) const {
+  DecoratorSet decorators = access.decorators();
+
+  const TypePtr* adr_type = access.addr().type();
+  Node* adr = access.addr().node();
+
+  bool is_array = (decorators & IS_ARRAY) != 0;
+  bool anonymous = (decorators & ON_UNKNOWN_OOP_REF) != 0;
+  bool in_heap = (decorators & IN_HEAP) != 0;
+  bool use_precise = is_array || anonymous;
+  bool tightly_coupled_alloc = (decorators & C2_TIGHTLY_COUPLED_ALLOC) != 0;
+
+  if (!access.is_oop() || tightly_coupled_alloc || (!in_heap && !anonymous)) {
+    return BarrierSetC2::store_at_resolved(access, val);
+  }
+
+  access.set_barrier_data(get_store_barrier(access, val));
+
+  return BarrierSetC2::store_at_resolved(access, val);
 }

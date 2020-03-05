@@ -31,6 +31,10 @@ class PhaseTransform;
 class Type;
 class TypeFunc;
 
+const int G1C2BarrierPre         = 1;
+const int G1C2BarrierPost        = 2;
+const int G1C2BarrierPostPrecise = 4;
+
 class G1BarrierSetC2: public CardTableBarrierSetC2 {
 protected:
   virtual void pre_barrier(GraphKit* kit,
@@ -82,7 +86,10 @@ protected:
   static const TypeFunc* write_ref_field_pre_entry_Type();
   static const TypeFunc* write_ref_field_post_entry_Type();
 
+  int get_store_barrier(C2Access& access, C2AccessValue& val) const;
+
   virtual Node* load_at_resolved(C2Access& access, const Type* val_type) const;
+  virtual Node* store_at_resolved(C2Access& access, C2AccessValue& val) const;
 
  public:
   virtual bool is_gc_barrier_node(Node* node) const;
