@@ -24,6 +24,7 @@
 
 #include "precompiled.hpp"
 #include "classfile/classLoaderData.hpp"
+#include "code/vmreg.inline.hpp"
 #include "gc/shared/barrierSet.hpp"
 #include "gc/shared/barrierSetAssembler.hpp"
 #include "gc/shared/barrierSetNMethod.hpp"
@@ -34,6 +35,9 @@
 #include "runtime/jniHandles.hpp"
 #include "runtime/sharedRuntime.hpp"
 #include "runtime/stubRoutines.hpp"
+#ifdef COMPILER2
+#include "opto/node.hpp"
+#endif
 
 #define __ masm->
 
@@ -366,3 +370,34 @@ void BarrierSetAssembler::c2i_entry_barrier(MacroAssembler* masm) {
   __ pop(tmp1);
 #endif
 }
+
+#ifdef COMPILER2
+
+OptoReg::Name BarrierSetAssembler::refine_register(const Node* node, OptoReg::Name opto_reg) {
+  if (!OptoReg::is_reg(opto_reg)) {
+    return OptoReg::Bad;
+  }
+
+  const VMReg vm_reg = OptoReg::as_VMReg(opto_reg);
+  if (vm_reg->is_XMMRegister()) {
+    opto_reg &= ~15;
+    switch (node->ideal_reg()) {
+    case Op_VecX:
+      opto_reg |= 2;
+      break;
+    case Op_VecY:
+      opto_reg |= 4;
+      break;
+    case Op_VecZ:
+      opto_reg |= 8;
+      break;
+    default:
+      opto_reg |= 1;
+      break;
+    }
+  }
+
+  return opto_reg;
+}
+
+#endif // COMPILER2

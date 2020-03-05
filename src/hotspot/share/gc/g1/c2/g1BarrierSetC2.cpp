@@ -31,14 +31,23 @@
 #include "gc/g1/g1ThreadLocalData.hpp"
 #include "gc/g1/heapRegion.hpp"
 #include "opto/arraycopynode.hpp"
+#include "opto/block.hpp"
 #include "opto/compile.hpp"
 #include "opto/escape.hpp"
 #include "opto/graphKit.hpp"
 #include "opto/idealKit.hpp"
+#include "opto/machnode.hpp"
 #include "opto/macro.hpp"
+#include "opto/memnode.hpp"
+#include "opto/node.hpp"
+#include "opto/output.hpp"
+#include "opto/regalloc.hpp"
 #include "opto/rootnode.hpp"
+#include "opto/runtime.hpp"
 #include "opto/type.hpp"
+#include "utilities/growableArray.hpp"
 #include "utilities/macros.hpp"
+#include CPU_HEADER(gc/g1/g1BarrierSetAssembler)
 
 const TypeFunc *G1BarrierSetC2::write_ref_field_pre_entry_Type() {
   const Type **fields = TypeTuple::fields(2);
@@ -303,7 +312,7 @@ void G1BarrierSetC2::pre_barrier(GraphKit* kit,
  * Returns true if the post barrier can be removed
  */
 bool G1BarrierSetC2::g1_can_remove_post_barrier(GraphKit* kit,
-                                                PhaseTransform* phase, Node* store,
+                                                PhaseTransform* phase, Node* store_ctrl,
                                                 Node* adr) const {
   intptr_t      offset = 0;
   Node*         base   = AddPNode::Ideal_base_and_offset(adr, phase, offset);
@@ -318,7 +327,7 @@ bool G1BarrierSetC2::g1_can_remove_post_barrier(GraphKit* kit,
   }
 
   // Start search from Store node
-  Node* mem = store->in(MemNode::Control);
+  Node* mem = store_ctrl;
   if (mem->is_Proj() && mem->in(0)->is_Initialize()) {
 
     InitializeNode* st_init = mem->in(0)->as_Initialize();
@@ -397,7 +406,7 @@ void G1BarrierSetC2::post_barrier(GraphKit* kit,
   }
 
   if (use_ReduceInitialCardMarks()
-      && g1_can_remove_post_barrier(kit, &kit->gvn(), oop_store, adr)) {
+      && g1_can_remove_post_barrier(kit, &kit->gvn(), oop_store->in(MemNode::Control), adr)) {
     return;
   }
 
@@ -795,6 +804,16 @@ void G1BarrierSetC2::eliminate_gc_barrier(PhaseMacroExpand* macro, Node* node) c
   }
 }
 
+void G1BarrierSetC2::eliminate_gc_barrier_data(Node* node) const {
+  if (node->is_LoadStore()) {
+    LoadStoreNode* loadstore = node->as_LoadStore();
+    loadstore->set_barrier_data(0);
+  } else if (node->is_Mem()) {
+    MemNode* mem = node->as_Mem();
+    mem->set_barrier_data(0);
+  }
+}
+
 Node* G1BarrierSetC2::step_over_gc_barrier(Node* c) const {
   if (!use_ReduceInitialCardMarks() &&
       c != NULL && c->is_Region() && c->req() == 3) {
@@ -1055,3 +1074,300 @@ bool G1BarrierSetC2::escape_add_to_con_graph(ConnectionGraph* conn_graph, PhaseG
   }
   return false;
 }
+
+Node* G1BarrierSetC2::store_at_resolved(C2Access& access, C2AccessValue& val) const {
+  DecoratorSet decorators = access.decorators();
+
+  const TypePtr* adr_type = access.addr().type();
+  Node* adr = access.addr().node();
+
+  bool is_array = (decorators & IS_ARRAY) != 0;
+  bool anonymous = (decorators & ON_UNKNOWN_OOP_REF) != 0;
+  bool in_heap = (decorators & IN_HEAP) != 0;
+  bool use_precise = is_array || anonymous;
+  bool tightly_coupled_alloc = (decorators & C2_TIGHTLY_COUPLED_ALLOC) != 0;
+
+  if (!access.is_oop() || tightly_coupled_alloc || (!in_heap && !anonymous)) {
+    return BarrierSetC2::store_at_resolved(access, val);
+  }
+
+  access.set_barrier_data(get_store_barrier(access, val));
+
+  return BarrierSetC2::store_at_resolved(access, val);
+}
+
+// == Super late barrier expansion support
+
+#if defined(X86) && defined(_LP64)
+
+class G1BarrierSetC2State : public ArenaObj {
+private:
+  GrowableArray<G1BarrierStubC2*>* _stubs;
+  Node_Array                       _live;
+
+public:
+  G1BarrierSetC2State(Arena* arena) :
+    _stubs(new (arena) GrowableArray<G1BarrierStubC2*>(arena, 8,  0, NULL)),
+    _live(arena) {}
+
+  GrowableArray<G1BarrierStubC2*>* stubs() {
+    return _stubs;
+  }
+
+  RegMask* live(const Node* node) {
+    if (!node->is_Mach()) {
+      // Don't need liveness for non-MachNodes
+      return NULL;
+    }
+
+    const MachNode* const mach = node->as_Mach();
+    if (mach->barrier_data() == G1C2BarrierElided) {
+      // Don't need liveness data for nodes without barriers
+      return NULL;
+    }
+
+    RegMask* live = (RegMask*)_live[node->_idx];
+    if (live == NULL) {
+      live = new (Compile::current()->comp_arena()->AmallocWords(sizeof(RegMask))) RegMask();
+      _live.map(node->_idx, (Node*)live);
+    }
+
+    return live;
+  }
+};
+
+static G1BarrierSetC2State* barrier_set_state() {
+  return reinterpret_cast<G1BarrierSetC2State*>(Compile::current()->barrier_set_state());
+}
+
+G1BarrierStubC2* G1BarrierStubC2::create(const MachNode* node, Register arg, Register tmp1, Register tmp2, Register tmp3, address slow_path) {
+  G1BarrierStubC2* const stub = new (Compile::current()->comp_arena()) G1BarrierStubC2(node, arg, tmp1, tmp2, tmp3, slow_path);
+  if (!Compile::current()->output()->in_scratch_emit_size()) {
+    barrier_set_state()->stubs()->append(stub);
+  }
+
+  return stub;
+}
+
+G1BarrierStubC2::G1BarrierStubC2(const MachNode* node, Register arg, Register tmp1, Register tmp2, Register tmp3, address slow_path)
+  : _node(node),
+    _arg(arg),
+    _tmp1(tmp1),
+    _tmp2(tmp2),
+    _tmp3(tmp3),
+    _slow_path(slow_path) {}
+
+Register G1BarrierStubC2::tmp1() {
+  return _tmp1;
+}
+
+Register G1BarrierStubC2::tmp2() {
+  return _tmp2;
+}
+
+Register G1BarrierStubC2::tmp3() {
+  return _tmp3;
+}
+
+Register G1BarrierStubC2::arg() {
+  return _arg;
+}
+
+RegMask& G1BarrierStubC2::live() const {
+  RegMask* mask = barrier_set_state()->live(_node);
+  assert(mask != NULL, "must be mach-node with barrier");
+  return *mask;
+}
+
+Label* G1BarrierStubC2::entry() {
+  // The _entry will never be bound when in_scratch_emit_size() is true.
+  // However, we still need to return a label that is not bound now, but
+  // will eventually be bound. Any label will do, as it will only act as
+  // a placeholder, so we return the _continuation label.
+  return Compile::current()->output()->in_scratch_emit_size() ? &_continuation : &_entry;
+}
+
+Label* G1BarrierStubC2::continuation() {
+  return &_continuation;
+}
+
+address G1BarrierStubC2::slow_path() {
+  return _slow_path;
+}
+
+void* G1BarrierSetC2::create_barrier_state(Arena* comp_arena) const {
+  return new (comp_arena) G1BarrierSetC2State(comp_arena);
+}
+
+int G1BarrierSetC2::get_store_barrier(C2Access& access, C2AccessValue& val) const {
+  int barriers = G1C2BarrierPre | G1C2BarrierPost;
+  DecoratorSet decorators = access.decorators();
+
+  if (!access.is_parse_access()) {
+    // Only support for eliding barriers at parse time for now.
+    return barriers;
+  }
+
+  C2ParseAccess& parse_access = static_cast<C2ParseAccess&>(access);
+  GraphKit* kit = parse_access.kit();
+
+  const TypePtr* adr_type = access.addr().type();
+  Node* adr = access.addr().node();
+
+  uint adr_idx = kit->C->get_alias_index(adr_type);
+  assert(adr_idx != Compile::AliasIdxTop, "use other store_to_memory factory" );
+
+  if (g1_can_remove_pre_barrier(kit, &kit->gvn(), adr, access.type(), adr_idx)) {
+    barriers ^= G1C2BarrierPre;
+  }
+
+  if (val.node() != NULL && val.node()->is_Con() && val.node()->bottom_type() == TypePtr::NULL_PTR) {
+    // Must be NULL
+    const Type* t = val.node()->bottom_type();
+    assert(t == Type::TOP || t == TypePtr::NULL_PTR, "must be NULL");
+    // No post barrier if writing NULLx
+    barriers ^= G1C2BarrierPost;
+  } else if (use_ReduceInitialCardMarks() && access.base() == kit->just_allocated_object(kit->control())) {
+    // We can skip marks on a freshly-allocated object in Eden.
+    // Keep this code in sync with new_deferred_store_barrier() in runtime.cpp.
+    // That routine informs GC to take appropriate compensating steps,
+    // upon a slow-path allocation, so as to make this card-mark
+    // elision safe.
+    barriers ^= G1C2BarrierPost;
+  } else if (use_ReduceInitialCardMarks()
+             && g1_can_remove_post_barrier(kit, &kit->gvn(), kit->control(), adr)) {
+    barriers ^= G1C2BarrierPost;
+  }
+
+  bool is_array = (decorators & IS_ARRAY) != 0;
+  bool anonymous = (decorators & ON_UNKNOWN_OOP_REF) != 0;
+
+  if (is_array || anonymous) {
+    barriers |= G1C2BarrierPostPrecise;
+  }
+
+  return barriers;
+}
+
+void G1BarrierSetC2::late_barrier_analysis() const {
+  compute_liveness_at_stubs();
+}
+
+void G1BarrierSetC2::emit_stubs(CodeBuffer& cb) const {
+  MacroAssembler masm(&cb);
+  GrowableArray<G1BarrierStubC2*>* const stubs = barrier_set_state()->stubs();
+  G1BarrierSetAssembler* bs = static_cast<G1BarrierSetAssembler*>(BarrierSet::barrier_set()->barrier_set_assembler());
+
+  for (int i = 0; i < stubs->length(); i++) {
+    // Make sure there is enough space in the code buffer
+    if (cb.insts()->maybe_expand_to_ensure_remaining(PhaseOutput::MAX_inst_size) && cb.blob() == NULL) {
+      ciEnv::current()->record_failure("CodeCache is full");
+      return;
+    }
+
+    bs->emit_c2_barrier_stub(&masm, stubs->at(i));
+  }
+
+  masm.flush();
+}
+
+int G1BarrierSetC2::estimate_stub_size() const {
+  // TODO: Do something clever
+  return 0;
+}
+
+// == Reduced spilling optimization ==
+
+void G1BarrierSetC2::compute_liveness_at_stubs() const {
+  ResourceMark rm;
+  Compile* const C = Compile::current();
+  Arena* const A = Thread::current()->resource_area();
+  PhaseCFG* const cfg = C->cfg();
+  PhaseRegAlloc* const regalloc = C->regalloc();
+  RegMask* const live = NEW_ARENA_ARRAY(A, RegMask, cfg->number_of_blocks() * sizeof(RegMask));
+  BarrierSetAssembler* const bs = BarrierSet::barrier_set()->barrier_set_assembler();
+  Block_List worklist;
+
+  for (uint i = 0; i < cfg->number_of_blocks(); ++i) {
+    new ((void*)(live + i)) RegMask();
+    worklist.push(cfg->get_block(i));
+  }
+
+  while (worklist.size() > 0) {
+    const Block* const block = worklist.pop();
+    RegMask& old_live = live[block->_pre_order];
+    RegMask new_live;
+
+    // Initialize to union of successors
+    for (uint i = 0; i < block->_num_succs; i++) {
+      const uint succ_id = block->_succs[i]->_pre_order;
+      new_live.OR(live[succ_id]);
+    }
+
+    // Walk block backwards, computing liveness
+    for (int i = block->number_of_nodes() - 1; i >= 0; --i) {
+      const Node* const node = block->get_node(i);
+
+      // Remove def bits
+      const OptoReg::Name first = bs->refine_register(node, regalloc->get_reg_first(node));
+      const OptoReg::Name second = bs->refine_register(node, regalloc->get_reg_second(node));
+      if (first != OptoReg::Bad) {
+        new_live.Remove(first);
+      }
+      if (second != OptoReg::Bad) {
+        new_live.Remove(second);
+      }
+
+      // Add use bits
+      for (uint j = 1; j < node->req(); ++j) {
+        const Node* const use = node->in(j);
+        const OptoReg::Name first = bs->refine_register(use, regalloc->get_reg_first(use));
+        const OptoReg::Name second = bs->refine_register(use, regalloc->get_reg_second(use));
+        if (first != OptoReg::Bad) {
+          new_live.Insert(first);
+        }
+        if (second != OptoReg::Bad) {
+          new_live.Insert(second);
+        }
+      }
+
+      // If this node tracks liveness, update it
+      RegMask* const regs = barrier_set_state()->live(node);
+      if (regs != NULL) {
+        regs->OR(new_live);
+      }
+    }
+
+    // Now at block top, see if we have any changes
+    new_live.SUBTRACT(old_live);
+    if (new_live.is_NotEmpty()) {
+      // Liveness has refined, update and propagate to prior blocks
+      old_live.OR(new_live);
+      for (uint i = 1; i < block->num_preds(); ++i) {
+        Block* const pred = cfg->get_block_for_node(block->pred(i));
+        worklist.push(pred);
+      }
+    }
+  }
+}
+
+#else
+
+void* G1BarrierSetC2::create_barrier_state(Arena* comp_arena) const {
+  return nullptr;
+}
+
+void G1BarrierSetC2::late_barrier_analysis() const {
+}
+
+void G1BarrierSetC2::emit_stubs(CodeBuffer& cb) const {
+}
+
+int G1BarrierSetC2::estimate_stub_size() const {
+  return 0;
+}
+
+void G1BarrierSetC2::compute_liveness_at_stubs() const {
+}
+
+#endif

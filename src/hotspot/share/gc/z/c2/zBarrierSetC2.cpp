@@ -43,6 +43,7 @@
 #include "opto/type.hpp"
 #include "utilities/growableArray.hpp"
 #include "utilities/macros.hpp"
+#include CPU_HEADER(gc/g1/g1BarrierSetAssembler)
 
 class ZBarrierSetC2State : public ArenaObj {
 private:

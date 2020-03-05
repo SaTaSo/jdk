@@ -26,13 +26,56 @@
 #define SHARE_GC_G1_C2_G1BARRIERSETC2_HPP
 
 #include "gc/shared/c2/cardTableBarrierSetC2.hpp"
+#include "memory/allocation.hpp"
+#include "opto/node.hpp"
+#include "utilities/growableArray.hpp"
 
 class PhaseTransform;
 class Type;
 class TypeFunc;
 
+const int G1C2BarrierPre         = 1;
+const int G1C2BarrierPost        = 2;
+const int G1C2BarrierPostPrecise = 4;
+const int G1C2BarrierElided      = 8;
+
+class G1BarrierStubC2 : public ArenaObj {
+  const MachNode* _node;
+
+  Register _arg;
+
+  Register _tmp1;
+  Register _tmp2;
+  Register _tmp3;
+
+  address _slow_path;
+
+  Label _entry;
+  Label _continuation;
+
+public:
+  G1BarrierStubC2(const MachNode* node, Register arg, Register tmp1, Register tmp2, Register tmp3, address slow_path);
+
+  RegMask& live() const;
+
+  Register arg();
+
+  Register tmp1();
+  Register tmp2();
+  Register tmp3();
+
+  Label* entry();
+  Label* continuation();
+
+  address slow_path();
+
+  static G1BarrierStubC2* create(const MachNode* node, Register arg, Register tmp1, Register tmp2, Register tmp3, address slow_path);
+};
+
 class G1BarrierSetC2: public CardTableBarrierSetC2 {
 protected:
+  void compute_liveness_at_stubs() const;
+
   virtual void pre_barrier(GraphKit* kit,
                            bool do_load,
                            Node* ctl,
@@ -82,7 +125,10 @@ protected:
   static const TypeFunc* write_ref_field_pre_entry_Type();
   static const TypeFunc* write_ref_field_post_entry_Type();
 
+  int get_store_barrier(C2Access& access, C2AccessValue& val) const;
+
   virtual Node* load_at_resolved(C2Access& access, const Type* val_type) const;
+  virtual Node* store_at_resolved(C2Access& access, C2AccessValue& val) const;
 
 #ifdef ASSERT
   bool has_cas_in_use_chain(Node* x) const;
@@ -95,6 +141,7 @@ public:
   virtual bool is_gc_pre_barrier_node(Node* node) const;
   virtual bool is_gc_barrier_node(Node* node) const;
   virtual void eliminate_gc_barrier(PhaseMacroExpand* macro, Node* node) const;
+  virtual void eliminate_gc_barrier_data(Node* node) const;
   virtual Node* step_over_gc_barrier(Node* c) const;
 
 #ifdef ASSERT
@@ -102,6 +149,12 @@ public:
 #endif
 
   virtual bool escape_add_to_con_graph(ConnectionGraph* conn_graph, PhaseGVN* gvn, Unique_Node_List* delayed_worklist, Node* n, uint opcode) const;
+
+  // Super late barrier support
+  virtual void* create_barrier_state(Arena* comp_arena) const;
+  virtual void emit_stubs(CodeBuffer& cb) const;
+  virtual int estimate_stub_size() const;
+  virtual void late_barrier_analysis() const;
 };
 
 #endif // SHARE_GC_G1_C2_G1BARRIERSETC2_HPP

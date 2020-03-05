@@ -58,6 +58,8 @@ void GCArguments::initialize() {
     // If class unloading is disabled, also disable concurrent class unloading.
     FLAG_SET_CMDLINE(ClassUnloadingWithConcurrentMark, false);
   }
+
+  LP64_ONLY(FLAG_SET_DEFAULT(UseCompressedOops, false));
 }
 
 void GCArguments::initialize_heap_sizes() {

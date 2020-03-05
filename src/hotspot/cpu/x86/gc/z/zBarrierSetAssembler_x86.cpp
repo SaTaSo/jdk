@@ -346,33 +346,6 @@ void ZBarrierSetAssembler::generate_c1_load_barrier_runtime_stub(StubAssembler* 
 
 #ifdef COMPILER2
 
-OptoReg::Name ZBarrierSetAssembler::refine_register(const Node* node, OptoReg::Name opto_reg) {
-  if (!OptoReg::is_reg(opto_reg)) {
-    return OptoReg::Bad;
-  }
-
-  const VMReg vm_reg = OptoReg::as_VMReg(opto_reg);
-  if (vm_reg->is_XMMRegister()) {
-    opto_reg &= ~15;
-    switch (node->ideal_reg()) {
-      case Op_VecX:
-        opto_reg |= 2;
-        break;
-      case Op_VecY:
-        opto_reg |= 4;
-        break;
-      case Op_VecZ:
-        opto_reg |= 8;
-        break;
-      default:
-        opto_reg |= 1;
-        break;
-    }
-  }
-
-  return opto_reg;
-}
-
 // We use the vec_spill_helper from the x86.ad file to avoid reinventing this wheel
 extern void vec_spill_helper(CodeBuffer *cbuf, bool is_load,
                             int stack_offset, int reg, uint ireg, outputStream* st);
