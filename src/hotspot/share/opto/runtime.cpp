@@ -27,12 +27,11 @@
 #include "classfile/vmSymbols.hpp"
 #include "code/codeCache.hpp"
 #include "code/compiledMethod.inline.hpp"
-#include "code/compiledIC.hpp"
-#include "code/icBuffer.hpp"
+
 #include "code/nmethod.hpp"
 #include "code/pcDesc.hpp"
 #include "code/scopeDesc.hpp"
-#include "code/vtableStubs.hpp"
+
 #include "compiler/compileBroker.hpp"
 #include "compiler/oopMap.hpp"
 #include "gc/g1/heapRegion.hpp"

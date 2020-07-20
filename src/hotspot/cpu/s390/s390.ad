@@ -772,31 +772,12 @@ int emit_call_reloc(C2_MacroAssembler &_masm, intptr_t entry_point, relocInfo::r
       return -1;
     }
   } else {
-    assert(rtype == relocInfo::none || rtype == relocInfo::opt_virtual_call_type ||
-           rtype == relocInfo::static_call_type, "unexpected rtype");
+    assert(rtype == relocInfo::none, "unexpected rtype");
     __ relocate(rtype);
     // BRASL must be prepended with a nop to identify it in the instruction stream.
     __ z_nop();
     __ z_brasl(Z_R14, (address)entry_point);
   }
-
-  unsigned int ret_off = __ offset();
-
-  return (ret_off - start_off);
-}
-
-static int emit_call_reloc(C2_MacroAssembler &_masm, intptr_t entry_point, RelocationHolder const& rspec) {
-  __ set_inst_mark(); // Used in z_enc_java_static_call() and emit_java_to_interp().
-  address old_mark = __ inst_mark();
-  unsigned int start_off = __ offset();
-
-  relocInfo::relocType rtype = rspec.type();
-  assert(rtype == relocInfo::opt_virtual_call_type || rtype == relocInfo::static_call_type,
-         "unexpected rtype");
-
-  __ relocate(rspec);
-  __ z_nop();
-  __ z_brasl(Z_R14, (address)entry_point);
 
   unsigned int ret_off = __ offset();
 
@@ -1343,79 +1324,6 @@ class CallStubImpl {
 };
 
 %} // end source_hpp section
-
-source %{
-
-#if !defined(PRODUCT)
-void MachUEPNode::format(PhaseRegAlloc *ra_, outputStream *os) const {
-  os->print_cr("---- MachUEPNode ----");
-  os->print_cr("\tTA");
-  os->print_cr("\tload_const Z_R1, SharedRuntime::get_ic_miss_stub()");
-  os->print_cr("\tBR(Z_R1)");
-  os->print_cr("\tTA  # pad with illtraps");
-  os->print_cr("\t...");
-  os->print_cr("\tTA");
-  os->print_cr("\tLTGR    Z_R2, Z_R2");
-  os->print_cr("\tBRU     ic_miss");
-}
-#endif
-
-void MachUEPNode::emit(CodeBuffer &cbuf, PhaseRegAlloc *ra_) const {
-  C2_MacroAssembler _masm(&cbuf);
-  const int ic_miss_offset = 2;
-
-  // Inline_cache contains a klass.
-  Register ic_klass = as_Register(Matcher::inline_cache_reg_encode());
-  // ARG1 is the receiver oop.
-  Register R2_receiver = Z_ARG1;
-  int      klass_offset = oopDesc::klass_offset_in_bytes();
-  AddressLiteral icmiss(SharedRuntime::get_ic_miss_stub());
-  Register R1_ic_miss_stub_addr = Z_R1_scratch;
-
-  // Null check of receiver.
-  // This is the null check of the receiver that actually should be
-  // done in the caller. It's here because in case of implicit null
-  // checks we get it for free.
-  assert(!MacroAssembler::needs_explicit_null_check(oopDesc::klass_offset_in_bytes()),
-         "second word in oop should not require explicit null check.");
-  if (!ImplicitNullChecks) {
-    Label valid;
-    if (VM_Version::has_CompareBranch()) {
-      __ z_cgij(R2_receiver, 0, Assembler::bcondNotEqual, valid);
-    } else {
-      __ z_ltgr(R2_receiver, R2_receiver);
-      __ z_bre(valid);
-    }
-    // The ic_miss_stub will handle the null pointer exception.
-    __ load_const_optimized(R1_ic_miss_stub_addr, icmiss);
-    __ z_br(R1_ic_miss_stub_addr);
-    __ bind(valid);
-  }
-
-  // Check whether this method is the proper implementation for the class of
-  // the receiver (ic miss check).
-  {
-    Label valid;
-    // Compare cached class against klass from receiver.
-    // This also does an implicit null check!
-    __ compare_klass_ptr(ic_klass, klass_offset, R2_receiver, false);
-    __ z_bre(valid);
-    // The inline cache points to the wrong method. Call the
-    // ic_miss_stub to find the proper method.
-    __ load_const_optimized(R1_ic_miss_stub_addr, icmiss);
-    __ z_br(R1_ic_miss_stub_addr);
-    __ bind(valid);
-  }
-}
-
-uint MachUEPNode::size(PhaseRegAlloc *ra_) const {
-  // Determine size dynamically.
-  return MachNode::size(ra_);
-}
-
-//=============================================================================
-
-%} // interrupt source section
 
 source_hpp %{ // Header information of the source block.
 
@@ -2233,89 +2141,12 @@ encode %{
   %}
 
   enc_class z_enc_java_static_call(method meth) %{
-    // Call to fixup routine. Fixup routine uses ScopeDesc info to determine
-    // whom we intended to call.
-    C2_MacroAssembler _masm(&cbuf);
-    int ret_offset = 0;
-
-    if (!_method) {
-      ret_offset = emit_call_reloc(_masm, $meth$$method,
-                                   relocInfo::runtime_call_w_cp_type, ra_);
-    } else {
-      int method_index = resolved_method_index(cbuf);
-      if (_optimized_virtual) {
-        ret_offset = emit_call_reloc(_masm, $meth$$method,
-                                     opt_virtual_call_Relocation::spec(method_index));
-      } else {
-        ret_offset = emit_call_reloc(_masm, $meth$$method,
-                                     static_call_Relocation::spec(method_index));
-      }
-    }
-    assert(__ inst_mark() != NULL, "emit_call_reloc must set_inst_mark()");
-
-    if (_method) { // Emit stub for static call.
-      address stub = CompiledStaticCall::emit_to_interp_stub(cbuf);
-      if (stub == NULL) {
-        ciEnv::current()->record_failure("CodeCache is full");
-        return;
-      }
-    }
+    // TODO: put in some suitable code
   %}
 
   // Java dynamic call
   enc_class z_enc_java_dynamic_call(method meth) %{
-    C2_MacroAssembler _masm(&cbuf);
-    unsigned int start_off = __ offset();
-
-    int vtable_index = this->_vtable_index;
-    if (vtable_index == -4) {
-      Register ic_reg = reg_to_register_object(Matcher::inline_cache_reg_encode());
-      address virtual_call_oop_addr = NULL;
-
-      AddressLiteral empty_ic((address) Universe::non_oop_word());
-      virtual_call_oop_addr = __ pc();
-      bool success = __ load_const_from_toc(ic_reg, empty_ic);
-      if (!success) {
-        Compile::current()->env()->record_out_of_memory_failure();
-        return;
-      }
-
-      // Call to fixup routine. Fixup routine uses ScopeDesc info
-      // to determine who we intended to call.
-      int method_index = resolved_method_index(cbuf);
-      __ relocate(virtual_call_Relocation::spec(virtual_call_oop_addr, method_index));
-      unsigned int ret_off = __ offset();
-      assert(__ offset() - start_off == 6, "bad prelude len: %d", __ offset() - start_off);
-      ret_off += emit_call_reloc(_masm, $meth$$method, relocInfo::none, ra_);
-      assert(_method, "lazy_constant may be wrong when _method==null");
-    } else {
-      assert(!UseInlineCaches, "expect vtable calls only if not using ICs");
-      // Go through the vtable. Get receiver klass. Receiver already
-      // checked for non-null. If we'll go thru a C2I adapter, the
-      // interpreter expects method in Z_method.
-      // Use Z_method to temporarily hold the klass oop.
-      // Z_R1_scratch is destroyed.
-      __ load_klass(Z_method, Z_R2);
-
-      int entry_offset = in_bytes(Klass::vtable_start_offset()) + vtable_index * vtableEntry::size_in_bytes();
-      int v_off        = entry_offset + vtableEntry::method_offset_in_bytes();
-
-      if (Displacement::is_validDisp(v_off) ) {
-        // Can use load instruction with large offset.
-        __ z_lg(Z_method, Address(Z_method /*class oop*/, v_off /*method offset*/));
-      } else {
-        // Worse case, must load offset into register.
-        __ load_const(Z_R1_scratch, v_off);
-        __ z_lg(Z_method, Address(Z_method /*class oop*/, Z_R1_scratch /*method offset*/));
-      }
-      // NOTE: for vtable dispatches, the vtable entry will never be
-      // null. However it may very well end up in handle_wrong_method
-      // if the method is abstract for the particular class.
-      __ z_lg(Z_R1_scratch, Address(Z_method, Method::from_compiled_offset()));
-      // Call target. Either compiled code or C2I adapter.
-      __ z_basr(Z_R14, Z_R1_scratch);
-      unsigned int ret_off = __ offset();
-    }
+    // TODO: put in some suitable code
   %}
 
   enc_class z_enc_cmov_reg(cmpOp cmp, iRegI dst, iRegI src) %{
@@ -2450,12 +2281,6 @@ source %{
 frame %{
   // What direction does stack grow in (assumed to be same for native & Java).
   stack_direction(TOWARDS_LOW);
-
-  // These two registers define part of the calling convention between
-  // compiled code and the interpreter.
-
-  // Inline Cache Register
-  inline_cache_reg(Z_R9); // Z_inline_cache
 
   // Argument pointer for I2C adapters
   //

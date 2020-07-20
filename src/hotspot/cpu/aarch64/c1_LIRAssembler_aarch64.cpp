@@ -290,31 +290,6 @@ void LIR_Assembler::osr_entry() {
 }
 
 
-// inline cache check; done before the frame is built.
-int LIR_Assembler::check_icache() {
-  Register receiver = FrameMap::receiver_opr->as_register();
-  Register ic_klass = IC_Klass;
-  int start_offset = __ offset();
-  __ inline_cache_check(receiver, ic_klass);
-
-  // if icache check fails, then jump to runtime routine
-  // Note: RECEIVER must still contain the receiver!
-  Label dont;
-  __ br(Assembler::EQ, dont);
-  __ far_jump(RuntimeAddress(SharedRuntime::get_ic_miss_stub()));
-
-  // We align the verified entry point unless the method body
-  // (including its inline cache check) will fit in a single 64-byte
-  // icache line.
-  if (! method()->is_accessor() || __ offset() - start_offset > 4 * 4) {
-    // force alignment after the cache check.
-    __ align(CodeEntryAlignment);
-  }
-
-  __ bind(dont);
-  return start_offset;
-}
-
 void LIR_Assembler::clinit_barrier(ciMethod* method) {
   assert(VM_Version::supports_fast_class_init_checks(), "sanity");
   assert(!method->holder()->is_not_initialized(), "initialization should have been started");
@@ -2049,21 +2024,8 @@ void LIR_Assembler::comp_fl2i(LIR_Code code, LIR_Opr left, LIR_Opr right, LIR_Op
 }
 
 
-void LIR_Assembler::align_call(LIR_Code code) {  }
-
-
 void LIR_Assembler::call(LIR_OpJavaCall* op, relocInfo::relocType rtype) {
   address call = __ trampoline_call(Address(op->addr(), rtype));
-  if (call == NULL) {
-    bailout("trampoline stub overflow");
-    return;
-  }
-  add_call_info(code_offset(), op->info());
-}
-
-
-void LIR_Assembler::ic_call(LIR_OpJavaCall* op) {
-  address call = __ ic_call(op->addr());
   if (call == NULL) {
     bailout("trampoline stub overflow");
     return;
@@ -2075,25 +2037,6 @@ void LIR_Assembler::ic_call(LIR_OpJavaCall* op) {
 /* Currently, vtable-dispatch is only enabled for sparc platforms */
 void LIR_Assembler::vtable_call(LIR_OpJavaCall* op) {
   ShouldNotReachHere();
-}
-
-
-void LIR_Assembler::emit_static_call_stub() {
-  address call_pc = __ pc();
-  address stub = __ start_a_stub(call_stub_size());
-  if (stub == NULL) {
-    bailout("static call stub overflow");
-    return;
-  }
-
-  int start = __ offset();
-
-  __ relocate(static_stub_Relocation::spec(call_pc));
-  __ emit_static_call_stub();
-
-  assert(__ offset() - start + CompiledStaticCall::to_trampoline_stub_size()
-        <= call_stub_size(), "stub too big");
-  __ end_a_stub();
 }
 
 

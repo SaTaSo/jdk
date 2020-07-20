@@ -34,10 +34,12 @@
 #include "classfile/systemDictionary.hpp"
 #include "classfile/verifier.hpp"
 #include "classfile/vmSymbols.hpp"
+#include "code/codeCache.hpp"
 #include "interpreter/bytecodes.hpp"
 #include "interpreter/bytecodeStream.hpp"
 #include "logging/log.hpp"
 #include "logging/logStream.hpp"
+#include "memory/iterator.hpp"
 #include "memory/oopFactory.hpp"
 #include "memory/resourceArea.hpp"
 #include "memory/universe.hpp"
@@ -45,6 +47,7 @@
 #include "oops/instanceKlass.hpp"
 #include "oops/oop.inline.hpp"
 #include "oops/typeArrayOop.hpp"
+#include "runtime/deoptimization.hpp"
 #include "runtime/fieldDescriptor.hpp"
 #include "runtime/handles.inline.hpp"
 #include "runtime/interfaceSupport.inline.hpp"
@@ -53,6 +56,7 @@
 #include "runtime/os.hpp"
 #include "runtime/safepointVerifiers.hpp"
 #include "runtime/thread.hpp"
+#include "runtime/vmThread.hpp"
 #include "services/threadService.hpp"
 #include "utilities/align.hpp"
 #include "utilities/bytes.hpp"
@@ -66,6 +70,12 @@
 
 extern "C" {
   typedef jboolean (*verify_byte_codes_fn_t)(JNIEnv *, jclass, char *, jint, jint);
+}
+
+bool Verifier::_interfaces_are_sane = true;
+
+void Verifier::serialize(SerializeClosure* f) {
+  f->do_bool(&_interfaces_are_sane);
 }
 
 static verify_byte_codes_fn_t volatile _verify_byte_codes_fn = NULL;
@@ -99,6 +109,29 @@ static verify_byte_codes_fn_t verify_byte_codes_fn() {
 
 
 // Methods in Verifier
+
+class DeoptimizeInvokeinterfaceVMOperation : public VM_Operation {
+  VMOp_Type type() const {
+    return VMOp_DeoptimizeInvokeinterfaceVMOperation;
+  }
+
+  void doit() {
+    // This is what you get for spinning up nonsense bytecodes. Don't do that.
+    log_info(itables)("Deoptimizing the world due to malformed bytecodes");
+    Verifier::_interfaces_are_sane = false;
+    CodeCache::mark_all_nmethods_for_deoptimization();
+    Deoptimization::deoptimize_all_marked();
+  }
+};
+
+void Verifier::set_interfaces_are_insane() {
+  if (!_interfaces_are_sane) {
+    // I know they are weird, alright.
+    return;
+  }
+  DeoptimizeInvokeinterfaceVMOperation op;
+  VMThread::execute(&op);
+}
 
 bool Verifier::should_verify_for(oop class_loader, bool should_verify_class) {
   return (class_loader == NULL || !should_verify_class) ?
@@ -308,6 +341,8 @@ Symbol* Verifier::inference_verify(
   log_info(verification)("Verifying class %s with old format", klass->external_name());
 
   jclass cls = (jclass) JNIHandles::make_local(thread, klass->java_mirror());
+  // Unless we change the old verifier, assume interfaces are insane.
+  set_interfaces_are_insane();
   jint result;
 
   {

@@ -35,7 +35,7 @@
 
 // Allocate annotations in metadata area
 Annotations* Annotations::allocate(ClassLoaderData* loader_data, TRAPS) {
-  return new (loader_data, size(), MetaspaceObj::AnnotationsType, THREAD) Annotations();
+  return new (loader_data, size(), 0, MetaspaceObj::AnnotationsType, THREAD) Annotations();
 }
 
 // helper

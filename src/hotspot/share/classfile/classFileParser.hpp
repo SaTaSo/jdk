@@ -156,6 +156,8 @@ class ClassFileParser {
   // Size of Java vtable (in words)
   int _vtable_size;
   int _itable_size;
+  uint32_t _itable_seed;
+  uint32_t* _selector_itable_blob;
 
   int _num_miranda_methods;
 
@@ -557,6 +559,9 @@ class ClassFileParser {
 
   int vtable_size() const { return _vtable_size; }
   int itable_size() const { return _itable_size; }
+  uint32_t itable_seed() const { return _itable_seed; }
+
+  void compute_itable_size();
 
   u2 this_class_index() const { return _this_class_index; }
 

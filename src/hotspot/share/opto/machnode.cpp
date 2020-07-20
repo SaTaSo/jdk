@@ -682,9 +682,16 @@ void MachCallNode::dump_spec(outputStream *st) const {
 #endif
 
 bool MachCallNode::return_value_is_used() const {
-  if (tf()->range()->cnt() == TypeFunc::Parms) {
-    // void return
-    return false;
+  if (is_MachCallDynamicJava()) {
+    if (tf()->range()->cnt() == TypeFunc::Parms + 1) {
+      // void return
+      return false;
+    }
+  } else {
+    if (tf()->range()->cnt() == TypeFunc::Parms) {
+      // void return
+      return false;
+    }
   }
 
   // find the projection corresponding to the return value
@@ -703,8 +710,13 @@ bool MachCallNode::return_value_is_used() const {
 // flow info; the interpreter will "use" things that are dead to the optimizer.
 bool MachCallNode::returns_pointer() const {
   const TypeTuple *r = tf()->range();
-  return (r->cnt() > TypeFunc::Parms &&
-          r->field_at(TypeFunc::Parms)->isa_ptr());
+  if (is_MachCallDynamicJava()) {
+    return (r->cnt() > TypeFunc::Parms + 1 &&
+            r->field_at(TypeFunc::Parms)->isa_ptr());
+  } else {
+    return (r->cnt() > TypeFunc::Parms &&
+            r->field_at(TypeFunc::Parms)->isa_ptr());
+  }
 }
 
 //------------------------------Registers--------------------------------------
@@ -744,6 +756,9 @@ void MachCallJavaNode::dump_spec(outputStream *st) const {
 const RegMask &MachCallJavaNode::in_RegMask(uint idx) const {
   // Values in the domain use the users calling convention, embodied in the
   // _in_rms array of RegMasks.
+  if (is_MachCallDynamicJava() && idx == tf()->domain()->cnt()) {
+    return _in_rms[idx];
+  }
   if (idx < tf()->domain()->cnt()) {
     return _in_rms[idx];
   }

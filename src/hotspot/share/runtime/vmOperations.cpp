@@ -86,14 +86,6 @@ void VM_Operation::print_on_error(outputStream* st) const {
   }
 }
 
-void VM_ClearICs::doit() {
-  if (_preserve_static_stubs) {
-    CodeCache::cleanup_inline_caches();
-  } else {
-    CodeCache::clear_inline_caches();
-  }
-}
-
 VM_DeoptimizeFrame::VM_DeoptimizeFrame(JavaThread* thread, intptr_t* id, int reason) {
   _thread = thread;
   _id     = id;

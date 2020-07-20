@@ -63,7 +63,6 @@ class NMethodSweeper : public AllStatic {
  private:
   enum MethodStateChange {
     None,
-    MadeZombie,
     Flushed
   };
   static long      _traversals;                   // Stack scan count, also sweep ID.

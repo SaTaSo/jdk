@@ -23,12 +23,10 @@
  */
 
 #include "precompiled.hpp"
-#include "code/compiledIC.hpp"
 #include "code/compiledMethod.inline.hpp"
 #include "code/exceptionHandlerTable.hpp"
 #include "code/scopeDesc.hpp"
 #include "code/codeCache.hpp"
-#include "code/icBuffer.hpp"
 #include "gc/shared/barrierSet.hpp"
 #include "gc/shared/barrierSetNMethod.hpp"
 #include "gc/shared/gcBehaviours.hpp"
@@ -47,10 +45,12 @@
 
 CompiledMethod::CompiledMethod(Method* method, const char* name, CompilerType type, const CodeBlobLayout& layout,
                                int frame_complete_offset, int frame_size, ImmutableOopMapSet* oop_maps,
-                               bool caller_must_gc_arguments)
+                               bool caller_must_gc_arguments, LazyInvocation* lazy_invocations)
   : CodeBlob(name, type, layout, frame_complete_offset, frame_size, oop_maps, caller_must_gc_arguments),
     _mark_for_deoptimization_status(not_marked),
     _method(method),
+    _lazy_invocations(lazy_invocations),
+    _purge_list_next(NULL),
     _gc_data(NULL)
 {
   init_defaults();
@@ -58,11 +58,13 @@ CompiledMethod::CompiledMethod(Method* method, const char* name, CompilerType ty
 
 CompiledMethod::CompiledMethod(Method* method, const char* name, CompilerType type, int size,
                                int header_size, CodeBuffer* cb, int frame_complete_offset, int frame_size,
-                               OopMapSet* oop_maps, bool caller_must_gc_arguments)
+                               OopMapSet* oop_maps, bool caller_must_gc_arguments, LazyInvocation* lazy_invocations)
   : CodeBlob(name, type, CodeBlobLayout((address) this, size, header_size, cb), cb,
              frame_complete_offset, frame_size, oop_maps, caller_must_gc_arguments),
     _mark_for_deoptimization_status(not_marked),
     _method(method),
+    _lazy_invocations(lazy_invocations),
+    _purge_list_next(NULL),
     _gc_data(NULL)
 {
   init_defaults();
@@ -87,18 +89,12 @@ bool CompiledMethod::is_method_handle_return(address return_pc) {
 const char* CompiledMethod::state() const {
   int state = get_state();
   switch (state) {
-  case not_installed:
-    return "not installed";
   case in_use:
     return "in use";
   case not_used:
     return "not_used";
   case not_entrant:
     return "not_entrant";
-  case zombie:
-    return "zombie";
-  case unloaded:
-    return "unloaded";
   default:
     fatal("unexpected method state: %d", state);
     return NULL;
@@ -282,6 +278,18 @@ void CompiledMethod::verify_oop_relocations() {
   }
 }
 
+LazyInvocation* CompiledMethod::lazy_invocation_at(address pc) {
+  address base_address = code_begin();
+  intptr_t offset = (intptr_t)pc - (intptr_t)base_address;
+  for (LazyInvocation* current = _lazy_invocations;
+       current != NULL;
+       current = current->next()) {
+    if (current->pc_offset() == offset) {
+      return current;
+    }
+  }
+  return NULL;
+}
 
 ScopeDesc* CompiledMethod::scope_desc_at(address pc) {
   PcDesc* pd = pc_desc_at(pc);
@@ -300,55 +308,7 @@ ScopeDesc* CompiledMethod::scope_desc_near(address pc) {
 }
 
 address CompiledMethod::oops_reloc_begin() const {
-  // If the method is not entrant or zombie then a JMP is plastered over the
-  // first few bytes.  If an oop in the old code was there, that oop
-  // should not get GC'd.  Skip the first few bytes of oops on
-  // not-entrant methods.
-  if (frame_complete_offset() != CodeOffsets::frame_never_safe &&
-      code_begin() + frame_complete_offset() >
-      verified_entry_point() + NativeJump::instruction_size)
-  {
-    // If we have a frame_complete_offset after the native jump, then there
-    // is no point trying to look for oops before that. This is a requirement
-    // for being allowed to scan oops concurrently.
-    return code_begin() + frame_complete_offset();
-  }
-
-  // It is not safe to read oops concurrently using entry barriers, if their
-  // location depend on whether the nmethod is entrant or not.
-  assert(BarrierSet::barrier_set()->barrier_set_nmethod() == NULL, "Not safe oop scan");
-
-  address low_boundary = verified_entry_point();
-  if (!is_in_use() && is_nmethod()) {
-    low_boundary += NativeJump::instruction_size;
-    // %%% Note:  On SPARC we patch only a 4-byte trap, not a full NativeJump.
-    // This means that the low_boundary is going to be a little too high.
-    // This shouldn't matter, since oops of non-entrant methods are never used.
-    // In fact, why are we bothering to look at oops in a non-entrant method??
-  }
-  return low_boundary;
-}
-
-int CompiledMethod::verify_icholder_relocations() {
-  ResourceMark rm;
-  int count = 0;
-
-  RelocIterator iter(this);
-  while(iter.next()) {
-    if (iter.type() == relocInfo::virtual_call_type) {
-      if (CompiledIC::is_icholder_call_site(iter.virtual_call_reloc(), this)) {
-        CompiledIC *ic = CompiledIC_at(&iter);
-        if (TraceCompiledIC) {
-          tty->print("noticed icholder " INTPTR_FORMAT " ", p2i(ic->cached_icholder()));
-          ic->print();
-        }
-        assert(ic->cached_icholder() != NULL, "must be non-NULL");
-        count++;
-      }
-    }
-  }
-
-  return count;
+  return entry_point();
 }
 
 // Method that knows how to preserve outgoing arguments at call. This method must be
@@ -364,7 +324,7 @@ void CompiledMethod::preserve_callee_argument_oops(frame fr, const RegisterMap *
 
     // The method attached by JIT-compilers should be used, if present.
     // Bytecode can be inaccurate in such case.
-    Method* callee = attached_method_before_pc(pc);
+    Method* callee = attached_method_at(pc);
     if (callee != NULL) {
       has_receiver = !(callee->access_flags().is_static());
       has_appendix = false;
@@ -375,54 +335,10 @@ void CompiledMethod::preserve_callee_argument_oops(frame fr, const RegisterMap *
   }
 }
 
-Method* CompiledMethod::attached_method(address call_instr) {
+Method* CompiledMethod::attached_method_at(address call_instr) {
   assert(code_contains(call_instr), "not part of the nmethod");
-  RelocIterator iter(this, call_instr, call_instr + 1);
-  while (iter.next()) {
-    if (iter.addr() == call_instr) {
-      switch(iter.type()) {
-        case relocInfo::static_call_type:      return iter.static_call_reloc()->method_value();
-        case relocInfo::opt_virtual_call_type: return iter.opt_virtual_call_reloc()->method_value();
-        case relocInfo::virtual_call_type:     return iter.virtual_call_reloc()->method_value();
-        default:                               break;
-      }
-    }
-  }
-  return NULL; // not found
-}
-
-Method* CompiledMethod::attached_method_before_pc(address pc) {
-  if (NativeCall::is_call_before(pc)) {
-    NativeCall* ncall = nativeCall_before(pc);
-    return attached_method(ncall->instruction_address());
-  }
-  return NULL; // not a call
-}
-
-void CompiledMethod::clear_inline_caches() {
-  assert(SafepointSynchronize::is_at_safepoint(), "cleaning of IC's only allowed at safepoint");
-  if (is_zombie()) {
-    return;
-  }
-
-  RelocIterator iter(this);
-  while (iter.next()) {
-    iter.reloc()->clear_inline_cache();
-  }
-}
-
-// Clear IC callsites, releasing ICStubs of all compiled ICs
-// as well as any associated CompiledICHolders.
-void CompiledMethod::clear_ic_callsites() {
-  assert(CompiledICLocker::is_safe(this), "mt unsafe call");
-  ResourceMark rm;
-  RelocIterator iter(this);
-  while(iter.next()) {
-    if (iter.type() == relocInfo::virtual_call_type) {
-      CompiledIC* ic = CompiledIC_at(&iter);
-      ic->set_to_clean(false);
-    }
-  }
+  LazyInvocation* lazy = lazy_invocation_at(call_instr);
+  return lazy == NULL ? NULL : lazy->attached_method();
 }
 
 #ifdef ASSERT
@@ -446,104 +362,6 @@ class CheckClass : public MetadataClosure {
 #endif // ASSERT
 
 
-bool CompiledMethod::clean_ic_if_metadata_is_dead(CompiledIC *ic) {
-  if (ic->is_clean()) {
-    return true;
-  }
-  if (ic->is_icholder_call()) {
-    // The only exception is compiledICHolder metdata which may
-    // yet be marked below. (We check this further below).
-    CompiledICHolder* cichk_metdata = ic->cached_icholder();
-
-    if (cichk_metdata->is_loader_alive()) {
-      return true;
-    }
-  } else {
-    Metadata* ic_metdata = ic->cached_metadata();
-    if (ic_metdata != NULL) {
-      if (ic_metdata->is_klass()) {
-        if (((Klass*)ic_metdata)->is_loader_alive()) {
-          return true;
-        }
-      } else if (ic_metdata->is_method()) {
-        Method* method = (Method*)ic_metdata;
-        assert(!method->is_old(), "old method should have been cleaned");
-        if (method->method_holder()->is_loader_alive()) {
-          return true;
-        }
-      } else {
-        ShouldNotReachHere();
-      }
-    }
-  }
-
-  return ic->set_to_clean();
-}
-
-// Clean references to unloaded nmethods at addr from this one, which is not unloaded.
-template <class CompiledICorStaticCall>
-static bool clean_if_nmethod_is_unloaded(CompiledICorStaticCall *ic, address addr, CompiledMethod* from,
-                                         bool clean_all) {
-  // Ok, to lookup references to zombies here
-  CodeBlob *cb = CodeCache::find_blob_unsafe(addr);
-  CompiledMethod* nm = (cb != NULL) ? cb->as_compiled_method_or_null() : NULL;
-  if (nm != NULL) {
-    // Clean inline caches pointing to both zombie and not_entrant methods
-    if (clean_all || !nm->is_in_use() || nm->is_unloading() || (nm->method()->code() != nm)) {
-      // Inline cache cleaning should only be initiated on CompiledMethods that have been
-      // observed to be is_alive(). However, with concurrent code cache unloading, it is
-      // possible that by now, the state has become !is_alive. This can happen in two ways:
-      // 1) It can be racingly flipped to unloaded if the nmethod // being cleaned (from the
-      // sweeper) is_unloading(). This is fine, because if that happens, then the inline
-      // caches have already been cleaned under the same CompiledICLocker that we now hold during
-      // inline cache cleaning, and we will simply walk the inline caches again, and likely not
-      // find much of interest to clean. However, this race prevents us from asserting that the
-      // nmethod is_alive(). The is_unloading() function is completely monotonic; once set due
-      // to an oop dying, it remains set forever until freed. Because of that, all unloaded
-      // nmethods are is_unloading(), but notably, an unloaded nmethod may also subsequently
-      // become zombie (when the sweeper converts it to zombie).
-      // 2) It can be racingly flipped to zombie if the nmethod being cleaned (by the concurrent
-      // GC) cleans a zombie nmethod that is concurrently made zombie by the sweeper. In this
-      // scenario, the sweeper will first transition the nmethod to zombie, and then when
-      // unregistering from the GC, it will wait until the GC is done. The GC will then clean
-      // the inline caches *with IC stubs*, even though no IC stubs are needed. This is fine,
-      // as long as the IC stubs are guaranteed to be released until the next safepoint, where
-      // IC finalization requires live IC stubs to not be associated with zombie nmethods.
-      // This is guaranteed, because the sweeper does not have a single safepoint check until
-      // after it completes the whole transition function; it will wake up after the GC is
-      // done with concurrent code cache cleaning (which blocks out safepoints using the
-      // suspendible threads set), and then call clear_ic_callsites, which will release the
-      // associated IC stubs, before a subsequent safepoint poll can be reached. This
-      // guarantees that the spuriously created IC stubs are released appropriately before
-      // IC finalization in a safepoint gets to run. Therefore, this race is fine. This is also
-      // valid in a scenario where an inline cache of a zombie nmethod gets a spurious IC stub,
-      // and then when cleaning another inline cache, fails to request an IC stub because we
-      // exhausted the IC stub buffer. In this scenario, the GC will request a safepoint after
-      // yielding the suspendible therad set, effectively unblocking safepoints. Before such
-      // a safepoint can be reached, the sweeper similarly has to wake up, clear the IC stubs,
-      // and reach the next safepoint poll, after the whole transition function has completed.
-      // Due to the various races that can cause an nmethod to first be is_alive() and then
-      // racingly become !is_alive(), it is unfortunately not possible to assert the nmethod
-      // is_alive(), !is_unloaded() or !is_zombie() here.
-      if (!ic->set_to_clean(!from->is_unloading())) {
-        return false;
-      }
-      assert(ic->is_clean(), "nmethod " PTR_FORMAT "not clean %s", p2i(from), from->method()->name_and_sig_as_C_string());
-    }
-  }
-  return true;
-}
-
-static bool clean_if_nmethod_is_unloaded(CompiledIC *ic, CompiledMethod* from,
-                                         bool clean_all) {
-  return clean_if_nmethod_is_unloaded(ic, ic->ic_destination(), from, clean_all);
-}
-
-static bool clean_if_nmethod_is_unloaded(CompiledStaticCall *csc, CompiledMethod* from,
-                                         bool clean_all) {
-  return clean_if_nmethod_is_unloaded(csc, csc->destination(), from, clean_all);
-}
-
 // Cleans caches in nmethods that point to either classes that are unloaded
 // or nmethods that are unloaded.
 //
@@ -551,7 +369,7 @@ static bool clean_if_nmethod_is_unloaded(CompiledStaticCall *csc, CompiledMethod
 // nmethods are unloaded.  Return postponed=true in the parallel case for
 // inline caches found that point to nmethods that are not yet visited during
 // the do_unloading walk.
-bool CompiledMethod::unload_nmethod_caches(bool unloading_occurred) {
+void CompiledMethod::unload_nmethod_caches(bool unloading_occurred) {
   ResourceMark rm;
 
   // Exception cache only needs to be called if unloading occurred
@@ -559,16 +377,11 @@ bool CompiledMethod::unload_nmethod_caches(bool unloading_occurred) {
     clean_exception_cache();
   }
 
-  if (!cleanup_inline_caches_impl(unloading_occurred, false)) {
-    return false;
-  }
-
 #ifdef ASSERT
   // Check that the metadata embedded in the nmethod is alive
   CheckClass check_class;
   metadata_do(&check_class);
 #endif
-  return true;
 }
 
 void CompiledMethod::run_nmethod_entry_barrier() {
@@ -580,131 +393,9 @@ void CompiledMethod::run_nmethod_entry_barrier() {
     // like any other nmethod found on the stack of a thread (fewer surprises).
     nmethod* nm = as_nmethod_or_null();
     if (nm != NULL) {
-      bool alive = bs_nm->nmethod_entry_barrier(nm);
-      assert(alive, "should be alive");
+      bs_nm->nmethod_entry_barrier(nm);
     }
   }
-}
-
-void CompiledMethod::cleanup_inline_caches(bool clean_all) {
-  for (;;) {
-    ICRefillVerifier ic_refill_verifier;
-    { CompiledICLocker ic_locker(this);
-      if (cleanup_inline_caches_impl(false, clean_all)) {
-        return;
-      }
-    }
-    // Call this nmethod entry barrier from the sweeper.
-    run_nmethod_entry_barrier();
-    InlineCacheBuffer::refill_ic_stubs();
-  }
-}
-
-// Called to clean up after class unloading for live nmethods and from the sweeper
-// for all methods.
-bool CompiledMethod::cleanup_inline_caches_impl(bool unloading_occurred, bool clean_all) {
-  assert(CompiledICLocker::is_safe(this), "mt unsafe call");
-  ResourceMark rm;
-
-  // Find all calls in an nmethod and clear the ones that point to non-entrant,
-  // zombie and unloaded nmethods.
-  RelocIterator iter(this, oops_reloc_begin());
-  bool is_in_static_stub = false;
-  while(iter.next()) {
-
-    switch (iter.type()) {
-
-    case relocInfo::virtual_call_type:
-      if (unloading_occurred) {
-        // If class unloading occurred we first clear ICs where the cached metadata
-        // is referring to an unloaded klass or method.
-        if (!clean_ic_if_metadata_is_dead(CompiledIC_at(&iter))) {
-          return false;
-        }
-      }
-
-      if (!clean_if_nmethod_is_unloaded(CompiledIC_at(&iter), this, clean_all)) {
-        return false;
-      }
-      break;
-
-    case relocInfo::opt_virtual_call_type:
-      if (!clean_if_nmethod_is_unloaded(CompiledIC_at(&iter), this, clean_all)) {
-        return false;
-      }
-      break;
-
-    case relocInfo::static_call_type:
-      if (!clean_if_nmethod_is_unloaded(compiledStaticCall_at(iter.reloc()), this, clean_all)) {
-        return false;
-      }
-      break;
-
-    case relocInfo::static_stub_type: {
-      is_in_static_stub = true;
-      break;
-    }
-
-    case relocInfo::metadata_type: {
-      // Only the metadata relocations contained in static/opt virtual call stubs
-      // contains the Method* passed to c2i adapters. It is the only metadata
-      // relocation that needs to be walked, as it is the one metadata relocation
-      // that violates the invariant that all metadata relocations have an oop
-      // in the compiled method (due to deferred resolution and code patching).
-
-      // This causes dead metadata to remain in compiled methods that are not
-      // unloading. Unless these slippery metadata relocations of the static
-      // stubs are at least cleared, subsequent class redefinition operations
-      // will access potentially free memory, and JavaThread execution
-      // concurrent to class unloading may call c2i adapters with dead methods.
-      if (!is_in_static_stub) {
-        // The first metadata relocation after a static stub relocation is the
-        // metadata relocation of the static stub used to pass the Method* to
-        // c2i adapters.
-        continue;
-      }
-      is_in_static_stub = false;
-      if (is_unloading()) {
-        // If the nmethod itself is dying, then it may point at dead metadata.
-        // Nobody should follow that metadata; it is strictly unsafe.
-        continue;
-      }
-      metadata_Relocation* r = iter.metadata_reloc();
-      Metadata* md = r->metadata_value();
-      if (md != NULL && md->is_method()) {
-        Method* method = static_cast<Method*>(md);
-        if (!method->method_holder()->is_loader_alive()) {
-          Atomic::store(r->metadata_addr(), (Method*)NULL);
-
-          if (!r->metadata_is_immediate()) {
-            r->fix_metadata_relocation();
-          }
-        }
-      }
-      break;
-    }
-
-    default:
-      break;
-    }
-  }
-
-  return true;
-}
-
-// Iterating over all nmethods, e.g. with the help of CodeCache::nmethods_do(fun) was found
-// to not be inherently safe. There is a chance that fields are seen which are not properly
-// initialized. This happens despite the fact that nmethods_do() asserts the CodeCache_lock
-// to be held.
-// To bundle knowledge about necessary checks in one place, this function was introduced.
-// It is not claimed that these checks are sufficient, but they were found to be necessary.
-bool CompiledMethod::nmethod_access_is_safe(nmethod* nm) {
-  Method* method = (nm == NULL) ? NULL : nm->method();  // nm->method() may be uninitialized, i.e. != NULL, but invalid
-  return (nm != NULL) && (method != NULL) && (method->signature() != NULL) &&
-         !nm->is_zombie() && !nm->is_not_installed() &&
-         os::is_readable_pointer(method) &&
-         os::is_readable_pointer(method->constants()) &&
-         os::is_readable_pointer(method->signature());
 }
 
 address CompiledMethod::continuation_for_implicit_exception(address pc, bool for_div0_check) {

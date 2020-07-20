@@ -434,13 +434,8 @@ void ArrayCopyStub::emit_code(LIR_Assembler* ce) {
   __ lgr_if_needed(Z_ARG4, dst_pos()->as_register());
   __ lgr_if_needed(Z_ARG5, length()->as_register());
 
-  // Must align calls sites, otherwise they can't be updated atomically on MP hardware.
-  ce->align_call(lir_static_call);
-
   assert((__ offset() + NativeCall::call_far_pcrelative_displacement_offset) % NativeCall::call_far_pcrelative_displacement_alignment == 0,
          "must be aligned");
-
-  ce->emit_static_call_stub();
 
   // Prepend each BRASL with a nop.
   __ relocate(relocInfo::static_call_type);

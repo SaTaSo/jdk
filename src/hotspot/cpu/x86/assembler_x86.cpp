@@ -95,12 +95,6 @@ AddressLiteral::AddressLiteral(address target, relocInfo::relocType rtype) {
   case relocInfo::internal_word_type:
     _rspec = internal_word_Relocation::spec(target);
     break;
-  case relocInfo::opt_virtual_call_type:
-    _rspec = opt_virtual_call_Relocation::spec();
-    break;
-  case relocInfo::static_call_type:
-    _rspec = static_call_Relocation::spec();
-    break;
   case relocInfo::runtime_call_type:
     _rspec = runtime_call_Relocation::spec();
     break;
@@ -2073,6 +2067,22 @@ void Assembler::jcc(Condition cc, Label& L, bool maybe_short) {
     emit_int32(0);
   }
 }
+
+void Assembler::jcc(Condition cc, ExternalAddress addr) {
+  InstructionMark im(this);
+  address entry = addr.target();
+  assert(entry != NULL, "invariant");
+  const int long_size = 6;
+  intptr_t offs = (intptr_t)entry - (intptr_t)pc();
+  // 0000 1111 1000 tttn #32-bit disp
+  assert(is_simm32(offs - long_size),
+         "must be 32bit offset (call4)");
+  emit_int8(0x0F);
+  emit_int8((unsigned char)(0x80 | cc));
+  code_section()->relocate(inst_mark(), addr.rspec(), call32_operand);
+  emit_int32(offs - long_size);
+}
+
 
 void Assembler::jccb_0(Condition cc, Label& L, const char* file, int line) {
   if (L.is_bound()) {
@@ -7737,15 +7747,6 @@ bool Assembler::reachable(AddressLiteral adr) {
     // This should be rip relative and easily reachable.
     return true;
   }
-  if (relocType == relocInfo::virtual_call_type ||
-      relocType == relocInfo::opt_virtual_call_type ||
-      relocType == relocInfo::static_call_type ||
-      relocType == relocInfo::static_stub_type ) {
-    // This should be rip relative within the code cache and easily
-    // reachable until we get huge code caches. (At which point
-    // ic code is going to have issues).
-    return true;
-  }
   if (relocType != relocInfo::external_word_type &&
       relocType != relocInfo::poll_return_type &&  // these are really external_word but need special
       relocType != relocInfo::poll_type &&         // relocs to identify them
@@ -7756,9 +7757,6 @@ bool Assembler::reachable(AddressLiteral adr) {
   // Stress the correction code
   if (ForceUnreachable) {
     // Must be runtimecall reloc, see if it is in the codecache
-    // Flipping stuff in the codecache to be unreachable causes issues
-    // with things like inline caches where the additional instructions
-    // are not handled.
     if (CodeCache::find_blob(adr._target) == NULL) {
       return false;
     }

@@ -41,7 +41,6 @@ int CompilerToVM::Data::Klass_vtable_length_offset;
 
 int CompilerToVM::Data::Method_extra_stack_entries;
 
-address CompilerToVM::Data::SharedRuntime_ic_miss_stub;
 address CompilerToVM::Data::SharedRuntime_handle_wrong_method_stub;
 address CompilerToVM::Data::SharedRuntime_deopt_blob_unpack;
 address CompilerToVM::Data::SharedRuntime_deopt_blob_unpack_with_exception_in_tls;
@@ -70,7 +69,7 @@ int CompilerToVM::Data::cardtable_shift;
 
 int CompilerToVM::Data::vm_page_size;
 
-int CompilerToVM::Data::sizeof_vtableEntry = sizeof(vtableEntry);
+int CompilerToVM::Data::sizeof_tableEntry = sizeof(tableEntry);
 int CompilerToVM::Data::sizeof_ExceptionTableElement = sizeof(ExceptionTableElement);
 int CompilerToVM::Data::sizeof_LocalVariableTableElement = sizeof(LocalVariableTableElement);
 int CompilerToVM::Data::sizeof_ConstantPool = sizeof(ConstantPool);
@@ -90,13 +89,11 @@ address CompilerToVM::Data::symbol_init;
 address CompilerToVM::Data::symbol_clinit;
 
 void CompilerToVM::Data::initialize(JVMCI_TRAPS) {
-  Klass_vtable_start_offset = in_bytes(Klass::vtable_start_offset());
+  Klass_vtable_start_offset = Klass::vtable_start_offset();
   Klass_vtable_length_offset = in_bytes(Klass::vtable_length_offset());
 
   Method_extra_stack_entries = Method::extra_stack_entries();
 
-  SharedRuntime_ic_miss_stub = SharedRuntime::get_ic_miss_stub();
-  SharedRuntime_handle_wrong_method_stub = SharedRuntime::get_handle_wrong_method_stub();
   SharedRuntime_deopt_blob_unpack = SharedRuntime::deopt_blob()->unpack();
   SharedRuntime_deopt_blob_unpack_with_exception_in_tls = SharedRuntime::deopt_blob()->unpack_with_exception_in_tls();
   SharedRuntime_deopt_blob_uncommon_trap = SharedRuntime::deopt_blob()->uncommon_trap();

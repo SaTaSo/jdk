@@ -81,6 +81,7 @@
 #include "services/threadService.hpp"
 #include "utilities/dtrace.hpp"
 #include "utilities/events.hpp"
+#include "utilities/globalCounter.hpp"
 #include "utilities/macros.hpp"
 #include "utilities/stringUtils.hpp"
 #ifdef COMPILER1
@@ -474,6 +475,7 @@ InstanceKlass* InstanceKlass::allocate_instance_klass(const ClassFileParser& par
                                        parser.is_interface(),
                                        parser.is_unsafe_anonymous(),
                                        should_store_fingerprint(is_hidden_or_anonymous));
+  const int prefix_size = parser.vtable_size();
 
   const Symbol* const class_name = parser.class_name();
   assert(class_name != NULL, "invariant");
@@ -486,18 +488,18 @@ InstanceKlass* InstanceKlass::allocate_instance_klass(const ClassFileParser& par
   if (REF_NONE == parser.reference_type()) {
     if (class_name == vmSymbols::java_lang_Class()) {
       // mirror
-      ik = new (loader_data, size, THREAD) InstanceMirrorKlass(parser);
+      ik = new (loader_data, size, prefix_size, THREAD) InstanceMirrorKlass(parser);
     }
     else if (is_class_loader(class_name, parser)) {
       // class loader
-      ik = new (loader_data, size, THREAD) InstanceClassLoaderKlass(parser);
+      ik = new (loader_data, size, prefix_size, THREAD) InstanceClassLoaderKlass(parser);
     } else {
       // normal
-      ik = new (loader_data, size, THREAD) InstanceKlass(parser, InstanceKlass::_kind_other);
+      ik = new (loader_data, size, prefix_size, THREAD) InstanceKlass(parser, InstanceKlass::_kind_other);
     }
   } else {
     // reference
-    ik = new (loader_data, size, THREAD) InstanceRefKlass(parser);
+    ik = new (loader_data, size, prefix_size, THREAD) InstanceRefKlass(parser);
   }
 
   // Check for pending exception before adding to the loader data and incrementing
@@ -509,6 +511,14 @@ InstanceKlass* InstanceKlass::allocate_instance_klass(const ClassFileParser& par
   return ik;
 }
 
+void* InstanceKlass::operator new(size_t size, ClassLoaderData* loader_data,
+                                  size_t word_size, size_t prefix_word_size, TRAPS) throw() {
+  MetaWord* result = Metaspace::allocate(loader_data, word_size, MetaspaceObj::ClassType, THREAD);
+  if (result == NULL) {
+    return result;
+  }
+  return result + prefix_word_size;
+}
 
 // copy method ordering from resource area to Metaspace
 void InstanceKlass::copy_method_ordering(const intArray* m, TRAPS) {
@@ -539,8 +549,10 @@ InstanceKlass::InstanceKlass(const ClassFileParser& parser, unsigned kind, Klass
   _record_components(NULL),
   _static_field_size(parser.static_field_size()),
   _nonstatic_oop_map_size(nonstatic_oop_map_size(parser.total_oop_map_count())),
-  _itable_len(parser.itable_size()),
   _nest_host_index(0),
+  _itable_len(parser.itable_size()),
+  _itable_seed(parser.itable_seed()),
+  _interpreter_itable(NULL),
   _init_state(allocated),
   _reference_type(parser.reference_type()),
   _init_thread(NULL)
@@ -980,15 +992,11 @@ bool InstanceKlass::link_class_impl(TRAPS) {
       // fabricate new Method*s.
       // also does loader constraint checking
       //
-      // initialize_vtable and initialize_itable need to be rerun
-      // for a shared class if
-      // 1) the class is loaded by custom class loader or
-      // 2) the class is loaded by built-in class loader but failed to add archived loader constraints
-      bool need_init_table = true;
-      if (is_shared() && SystemDictionaryShared::check_linking_constraints(this, THREAD)) {
-        need_init_table = false;
-      }
-      if (need_init_table) {
+      // initialize_vtable and initialize_itable need to be rerun for
+      // a shared class if the class is not loaded by the NULL classloader.
+      ClassLoaderData * loader_data = class_loader_data();
+      // if (!(is_shared() && loader_data->is_the_null_class_loader_data())) {
+      if (true) {
         vtable().initialize_vtable(true, CHECK_false);
         itable().initialize_itable(true, CHECK_false);
       }
@@ -997,6 +1005,7 @@ bool InstanceKlass::link_class_impl(TRAPS) {
       // In case itable verification is ever added.
       // itable().verify(tty, true);
 #endif
+
       set_init_state(linked);
       if (JvmtiExport::should_post_class_prepare()) {
         Thread *thread = THREAD;
@@ -1052,6 +1061,10 @@ void InstanceKlass::initialize_super_interfaces(TRAPS) {
       ik->initialize(CHECK);
     }
   }
+}
+
+bool InstanceKlass::is_linked_acquire() const {
+  return Atomic::load_acquire(&_init_state) >= linked;
 }
 
 void InstanceKlass::initialize_impl(TRAPS) {
@@ -2467,28 +2480,10 @@ void InstanceKlass::metaspace_pointers_do(MetaspaceClosure* it) {
   it->push(&_method_ordering);
   it->push(&_default_vtable_indices);
   it->push(&_fields);
-
-  if (itable_length() > 0) {
-    itableOffsetEntry* ioe = (itableOffsetEntry*)start_of_itable();
-    int method_table_offset_in_words = ioe->offset()/wordSize;
-    int nof_interfaces = (method_table_offset_in_words - itable_offset_in_words())
-                         / itableOffsetEntry::size();
-
-    for (int i = 0; i < nof_interfaces; i ++, ioe ++) {
-      if (ioe->interface_klass() != NULL) {
-        it->push(ioe->interface_klass_addr());
-        itableMethodEntry* ime = ioe->first_method_entry(this);
-        int n = klassItable::method_count_for_interface(ioe->interface_klass());
-        for (int index = 0; index < n; index ++) {
-          it->push(ime[index].method_addr());
-        }
-      }
-    }
-  }
-
   it->push(&_nest_members);
   it->push(&_permitted_subclasses);
   it->push(&_record_components);
+  it->push(&_interpreter_itable);
 }
 
 void InstanceKlass::remove_unshareable_info() {
@@ -2506,6 +2501,11 @@ void InstanceKlass::remove_unshareable_info() {
   // restored. A class' init_state is set to 'loaded' at runtime when it's
   // being added to class hierarchy (see SystemDictionary:::add_to_hierarchy()).
   _init_state = allocated;
+
+  // TODO: ...and this too.
+  set_default_vtable_indices(NULL);
+  // TODO: ...and this.
+  memset(start_of_itable(), 0, itable_length() * wordSize);
 
   { // Otherwise this needs to take out the Compile_lock.
     assert(SafepointSynchronize::is_at_safepoint(), "only called at safepoint");
@@ -2567,15 +2567,6 @@ void InstanceKlass::restore_unshareable_info(ClassLoaderData* loader_data, Handl
   int num_methods = methods->length();
   for (int index = 0; index < num_methods; ++index) {
     methods->at(index)->restore_unshareable_info(CHECK);
-  }
-  if (JvmtiExport::has_redefined_a_class()) {
-    // Reinitialize vtable because RedefineClasses may have changed some
-    // entries in this vtable for super classes so the CDS vtable might
-    // point to old or obsolete entries.  RedefineClasses doesn't fix up
-    // vtables in the shared system dictionary, only the main one.
-    // It also redefines the itable too so fix that too.
-    vtable().initialize_vtable(false, CHECK);
-    itable().initialize_itable(false, CHECK);
   }
 
   // restore constant pool resolved references
@@ -3109,42 +3100,6 @@ jint InstanceKlass::jvmti_class_status() const {
   return result;
 }
 
-Method* InstanceKlass::method_at_itable(Klass* holder, int index, TRAPS) {
-  itableOffsetEntry* ioe = (itableOffsetEntry*)start_of_itable();
-  int method_table_offset_in_words = ioe->offset()/wordSize;
-  int nof_interfaces = (method_table_offset_in_words - itable_offset_in_words())
-                       / itableOffsetEntry::size();
-
-  for (int cnt = 0 ; ; cnt ++, ioe ++) {
-    // If the interface isn't implemented by the receiver class,
-    // the VM should throw IncompatibleClassChangeError.
-    if (cnt >= nof_interfaces) {
-      ResourceMark rm(THREAD);
-      stringStream ss;
-      bool same_module = (module() == holder->module());
-      ss.print("Receiver class %s does not implement "
-               "the interface %s defining the method to be called "
-               "(%s%s%s)",
-               external_name(), holder->external_name(),
-               (same_module) ? joint_in_module_of_loader(holder) : class_in_module_of_loader(),
-               (same_module) ? "" : "; ",
-               (same_module) ? "" : holder->class_in_module_of_loader());
-      THROW_MSG_NULL(vmSymbols::java_lang_IncompatibleClassChangeError(), ss.as_string());
-    }
-
-    Klass* ik = ioe->interface_klass();
-    if (ik == holder) break;
-  }
-
-  itableMethodEntry* ime = ioe->first_method_entry(this);
-  Method* m = ime[index].method();
-  if (m == NULL) {
-    THROW_NULL(vmSymbols::java_lang_AbstractMethodError());
-  }
-  return m;
-}
-
-
 #if INCLUDE_JVMTI
 // update default_methods for redefineclasses for methods that are
 // not yet in the vtable due to concurrent subclass define and superinterface
@@ -3179,7 +3134,6 @@ void InstanceKlass::adjust_default_methods(bool* trace_name_printed) {
 }
 #endif // INCLUDE_JVMTI
 
-// On-stack replacement stuff
 void InstanceKlass::add_osr_nmethod(nmethod* n) {
   assert_lock_strong(CompiledMethod_lock);
 #ifndef PRODUCT
@@ -3325,21 +3279,6 @@ static const char* state_names[] = {
   "allocated", "loaded", "linked", "being_initialized", "fully_initialized", "initialization_error"
 };
 
-static void print_vtable(intptr_t* start, int len, outputStream* st) {
-  for (int i = 0; i < len; i++) {
-    intptr_t e = start[i];
-    st->print("%d : " INTPTR_FORMAT, i, e);
-    if (MetaspaceObj::is_valid((Metadata*)e)) {
-      st->print(" ");
-      ((Metadata*)e)->print_value_on(st);
-    }
-    st->cr();
-  }
-}
-
-static void print_vtable(vtableEntry* start, int len, outputStream* st) {
-  return print_vtable(reinterpret_cast<intptr_t*>(start), len, st);
-}
 
 void InstanceKlass::print_on(outputStream* st) const {
   assert(is_klass(), "must be klass");
@@ -3447,10 +3386,10 @@ void InstanceKlass::print_on(outputStream* st) const {
   } else {
     st->print_cr(BULLET"java mirror:       NULL");
   }
-  st->print(BULLET"vtable length      %d  (start addr: " INTPTR_FORMAT ")", vtable_length(), p2i(start_of_vtable())); st->cr();
-  if (vtable_length() > 0 && (Verbose || WizardMode))  print_vtable(start_of_vtable(), vtable_length(), st);
+  st->print(BULLET"vtable length      %d", vtable_length()); st->cr();
+  if (vtable_length() > 0 && (Verbose || WizardMode))  vtable().print_on(st);
   st->print(BULLET"itable length      %d (start addr: " INTPTR_FORMAT ")", itable_length(), p2i(start_of_itable())); st->cr();
-  if (itable_length() > 0 && (Verbose || WizardMode))  print_vtable(start_of_itable(), itable_length(), st);
+  if (itable_length() > 0 && (Verbose || WizardMode))  itable().print_on(st);
   st->print_cr(BULLET"---- static fields (%d words):", static_field_size());
   FieldPrinter print_static_field(st);
   ((InstanceKlass*)this)->do_local_static_fields(&print_static_field);
@@ -3534,12 +3473,6 @@ void InstanceKlass::oop_print_on(oop obj, outputStream* st) {
     java_lang_invoke_MethodType::print_signature(obj, st);
     st->cr();
   }
-}
-
-bool InstanceKlass::verify_itable_index(int i) {
-  int method_count = klassItable::method_count_for_interface(this);
-  assert(i >= 0 && i < method_count, "index out of bounds");
-  return true;
 }
 
 #endif //PRODUCT
@@ -3881,7 +3814,7 @@ void InstanceKlass::set_init_state(ClassState state) {
   assert(good_state || state == allocated, "illegal state transition");
 #endif
   assert(_init_thread == NULL, "should be cleared before state change");
-  _init_state = (u1)state;
+  Atomic::release_store(&_init_state, (u1)state);
 }
 
 #if INCLUDE_JVMTI

@@ -54,6 +54,7 @@
 #include "memory/filemap.hpp"
 #include "memory/heapShared.hpp"
 #include "memory/metaspaceClosure.hpp"
+#include "memory/metaspaceShared.hpp"
 #include "memory/oopFactory.hpp"
 #include "memory/resourceArea.hpp"
 #include "memory/universe.hpp"
@@ -61,6 +62,7 @@
 #include "oops/instanceKlass.hpp"
 #include "oops/instanceRefKlass.hpp"
 #include "oops/klass.inline.hpp"
+#include "oops/selectorMap.inline.hpp"
 #include "oops/method.inline.hpp"
 #include "oops/methodData.hpp"
 #include "oops/objArrayKlass.hpp"
@@ -82,6 +84,7 @@
 #include "services/classLoadingService.hpp"
 #include "services/diagnosticCommand.hpp"
 #include "services/threadService.hpp"
+#include "utilities/align.hpp"
 #include "utilities/macros.hpp"
 #include "utilities/utf8.hpp"
 #if INCLUDE_CDS
@@ -95,7 +98,10 @@ PlaceholderTable*      SystemDictionary::_placeholders        = NULL;
 LoaderConstraintTable* SystemDictionary::_loader_constraints  = NULL;
 ResolutionErrorTable*  SystemDictionary::_resolution_errors   = NULL;
 SymbolPropertyTable*   SystemDictionary::_invoke_method_table = NULL;
-ProtectionDomainCacheTable*   SystemDictionary::_pd_cache_table = NULL;
+ProtectionDomainCacheTable* SystemDictionary::_pd_cache_table = NULL;
+uint8_t* volatile SystemDictionary::_method_selector_map_blob = NULL;
+uint8_t* volatile SystemDictionary::_method_selector_freelist = NULL;
+uint8_t* SystemDictionary::_method_selector_purge_list        = NULL;
 
 InstanceKlass*      SystemDictionary::_well_known_klasses[SystemDictionary::WKID_LIMIT]
                                                           =  { NULL /*, NULL...*/ };
@@ -1100,6 +1106,10 @@ InstanceKlass* SystemDictionary::parse_stream(Symbol* class_name,
     if (!cl_info.is_strong_hidden() || is_unsafe_anon_class) {
       k->class_loader_data()->initialize_holder(Handle(THREAD, k->java_mirror()));
     }
+    // We need to track the currently defining unsafe anonymous class so that the
+    // verifier understands cyclic type references back to the defining class.
+    JavaThread* jt = (JavaThread*)THREAD;
+    jt->set_unsafe_anonymous_def(k);
 
     {
       MutexLocker mu_r(THREAD, Compile_lock);
@@ -1982,6 +1992,7 @@ bool SystemDictionary::do_unloading(GCTimer* gc_timer) {
       ClassLoaderDataGraph::clean_module_and_package_info();
       constraints()->purge_loader_constraints();
       resolution_errors()->purge_resolution_errors();
+      unlink_method_selector_map();
     }
   }
 
@@ -1999,6 +2010,80 @@ bool SystemDictionary::do_unloading(GCTimer* gc_timer) {
   }
 
   return unloading_occurred;
+}
+
+class UnlinkDeadSelectorClosure: public SelectorMap<Method*>::EntryBoolClosure {
+public:
+  virtual bool do_entry_b(uint32_t selector, Method* method) {
+    if (method->method_holder() == NULL) {
+      // Still loading; entry is live.
+      return true;
+    }
+    InstanceKlass* holder = method->method_holder();
+    // ClassLoaderData could be NULL for shared selector not yet loaded, so they're alive.
+    return holder->class_loader_data() == NULL || holder->is_loader_alive();
+  }
+};
+
+static UnlinkDeadSelectorClosure _selector_is_alive;
+
+class UnlinkUnshareableSelectorClosure: public SelectorMap<Method*>::EntryBoolClosure {
+public:
+  virtual bool do_entry_b(uint32_t selector, Method* method) {
+    assert (method->method_holder() != NULL, "Loading must be complete");
+    assert(Arguments::is_dumping_archive(), "");
+
+    // Remove excluded Methods for CDS dumping.
+    InstanceKlass* ik = method->method_holder();
+    if (SystemDictionaryShared::is_excluded_class(ik)) {
+      // And reset selector for new hashcode.  Maybe this Method* won't be in the archive
+      // so it doesn't matter.
+      method->set_selector(0);
+      return false;
+    } else {
+      // That the class is not unloaded should always be true but we can check anyway
+      return !method->is_method_handle_intrinsic() && ik->is_loader_alive();
+    }
+  }
+};
+
+static UnlinkUnshareableSelectorClosure _selector_is_shareable;
+
+void SystemDictionary::clean_method_selector_map() {
+  // Clean out unshareable items from the method map for static dumping.
+  SelectorMap<Method*> method_map = method_selector_map();
+  method_map.set_alive_closure(&_selector_is_shareable);
+  _method_selector_purge_list = method_map.unlink();
+}
+
+static uint32_t _selector_map_initial_size = 100;  // can this start with 100?
+
+SelectorMap<Method*> SystemDictionary::method_selector_map() {
+  return SelectorMap<Method*>(&_method_selector_map_blob,
+                              &_method_selector_freelist,
+                              &_selector_is_alive,
+                              _selector_map_initial_size);  // ignored after initial creation
+}
+
+void SystemDictionary::unlink_method_selector_map() {
+  SelectorMap<Method*> method_map = method_selector_map();
+  _method_selector_purge_list = method_map.unlink();
+}
+
+void SystemDictionary::purge_method_selector_map() {
+  SelectorMap<Method*>::purge(_method_selector_purge_list);
+  _method_selector_purge_list = NULL;
+}
+
+void SystemDictionary::adjust_method_table() {
+  SelectorMap<Method*> method_map = method_selector_map();
+  Method** values = method_map.value_table();
+  for (size_t i = 0; i < method_map.capacity(); ++i) {
+    Method* m = values[i];
+    if (m != NULL && m->is_old()) {
+      values[i] = m->get_new_method();
+    }
+  }
 }
 
 // CDS: scan and relocate all classes referenced by _well_known_klasses[].
@@ -2950,6 +3035,45 @@ void SystemDictionary::invoke_bootstrap_method(BootstrapInfo& bootstrap_specifie
 
 ProtectionDomainCacheEntry* SystemDictionary::cache_get(Handle protection_domain) {
   return _pd_cache_table->get(protection_domain);
+}
+
+// Write/Read Method SelectorMap table to/from shared archive.
+void SystemDictionary::serialize(SerializeClosure* soc) {
+  if (soc->reading()) {
+    assert(_method_selector_map_blob == NULL, "Should be uninitialized");
+  } else {
+    // Initialize initial_size with capacity before writing
+    SelectorMap<Method*> method_map = method_selector_map();
+    _selector_map_initial_size = method_map.capacity();
+  }
+  // Get size first, then create the table in the case of reading.
+  soc->do_u4(&_selector_map_initial_size);
+  SelectorMap<Method*> method_map = method_selector_map();
+
+  // Get/put number of elements in the table.
+  soc->do_u4(method_map.size_addr());
+
+  uint32_t* selectors = const_cast<uint32_t*>(method_map.selector_table());
+  for (uint32_t i = 0; i < method_map.capacity(); ++i) {
+    soc->do_u4(selectors + i);
+  }
+
+  Method** methods = method_map.value_table();
+  for (uint32_t i = 0; i < method_map.capacity(); ++i) {
+    Method* m = methods[i];
+    if (m != NULL) m->set_selector_is_shared(true);
+    soc->do_ptr((void**)methods + i);
+  }
+
+  log_info(cds)("Archiving/reading %d methods", method_map.capacity());
+}
+
+void SystemDictionary::metaspace_pointers_do(MetaspaceClosure* it) {
+  SelectorMap<Method*> method_map = method_selector_map();
+  Method** methods = method_map.value_table();
+  for (uint32_t i = 0; i < method_map.capacity(); ++i) {
+    it->push(methods + i);
+  }
 }
 
 // ----------------------------------------------------------------------------

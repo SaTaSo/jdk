@@ -40,7 +40,7 @@
 class ZBarrierSetC1;
 class ZBarrierSetC2;
 
-static BarrierSetNMethod* make_barrier_set_nmethod() {
+static BarrierSetNMethod* z_make_barrier_set_nmethod() {
   // NMethod barriers are only used when class unloading is enabled
   if (!ClassUnloading) {
     return NULL;
@@ -53,7 +53,7 @@ ZBarrierSet::ZBarrierSet() :
     BarrierSet(make_barrier_set_assembler<ZBarrierSetAssembler>(),
                make_barrier_set_c1<ZBarrierSetC1>(),
                make_barrier_set_c2<ZBarrierSetC2>(),
-               make_barrier_set_nmethod(),
+               z_make_barrier_set_nmethod(),
                BarrierSet::FakeRtti(BarrierSet::ZBarrierSet)) {}
 
 ZBarrierSetAssembler* ZBarrierSet::assembler() {

@@ -192,7 +192,7 @@ inline NativePltCall* nativePltCall_before(address addr) {
 
 inline NativeCall* nativeCall_at(address address);
 // The NativeCall is an abstraction for accessing/manipulating native
-// call instructions (used to manipulate inline caches, primitive &
+// call instructions (used to manipulate primitive &
 // DSO calls, etc.).
 
 class NativeCall: public NativeInstruction {
@@ -479,9 +479,6 @@ class NativeJump: public NativeInstruction {
 
   // Insertion of native jump instruction
   static void insert(address code_pos, address entry);
-  // MT-safe insertion of native jump at verified method entry
-  static void check_verified_entry_alignment(address entry, address verified_entry);
-  static void patch_verified_entry(address entry, address verified_entry, address dest);
 };
 
 inline NativeJump* nativeJump_at(address address) {

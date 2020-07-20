@@ -82,6 +82,7 @@ const bool ExecMem = true;
 
 // Typedef for structured exception handling support
 typedef void (*java_call_t)(JavaValue* value, const methodHandle& method, JavaCallArguments* args, Thread* thread);
+int random_helper(unsigned int rand_seed);
 
 class MallocTracker;
 

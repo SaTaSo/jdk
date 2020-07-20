@@ -56,15 +56,10 @@ public class NMethod extends CompiledMethod {
   /** Offsets for entry points */
   /** Entry point with class check */
   private static AddressField  entryPointField;
-  /** Entry point without class check */
-  private static AddressField  verifiedEntryPointField;
   /** Entry point for on stack replacement */
   private static AddressField  osrEntryPointField;
 
   // FIXME: add access to flags (how?)
-
-  /** NMethod Flushing lock (if non-zero, then the nmethod is not removed) */
-  private static JIntField     lockCountField;
 
   /** not_entrant method removal. Each mark_sweep pass will update
       this mark to current sweep invocation count if it is seen on the
@@ -100,9 +95,7 @@ public class NMethod extends CompiledMethod {
     nulChkTableOffsetField      = type.getCIntegerField("_nul_chk_table_offset");
     nmethodEndOffsetField       = type.getCIntegerField("_nmethod_end_offset");
     entryPointField             = type.getAddressField("_entry_point");
-    verifiedEntryPointField     = type.getAddressField("_verified_entry_point");
     osrEntryPointField          = type.getAddressField("_osr_entry_point");
-    lockCountField              = type.getJIntField("_lock_count");
     stackTraversalMarkField     = type.getCIntegerField("_stack_traversal_mark");
     compLevelField              = type.getCIntegerField("_comp_level");
     pcDescSize = db.lookupType("PcDesc").getSize();
@@ -184,7 +177,6 @@ public class NMethod extends CompiledMethod {
 
   /** Entry points */
   public Address getEntryPoint()         { return entryPointField.getValue(addr);         }
-  public Address getVerifiedEntryPoint() { return verifiedEntryPointField.getValue(addr); }
 
   /** Support for oops in scopes and relocs. Note: index 0 is reserved for null. */
   public OopHandle getOopAt(int index) {
@@ -272,8 +264,6 @@ public class NMethod extends CompiledMethod {
 
   // FIXME: add inline cache support
   // FIXME: add flush()
-
-  public boolean isLockedByVM() { return lockCountField.getValue(addr) > 0; }
 
   // FIXME: add mark_as_seen_on_stack
   // FIXME: add can_not_entrant_be_converted
@@ -437,7 +427,6 @@ public class NMethod extends CompiledMethod {
 
   /** Support for code generation. Only here for proof-of-concept. */
   public static int getEntryPointOffset()            { return (int) entryPointField.getOffset();            }
-  public static int getVerifiedEntryPointOffset()    { return (int) verifiedEntryPointField.getOffset();    }
   public static int getOSREntryPointOffset()         { return (int) osrEntryPointField.getOffset();         }
   public static int getEntryBCIOffset()              { return (int) entryBCIField.getOffset();              }
 

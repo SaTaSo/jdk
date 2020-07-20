@@ -3767,17 +3767,17 @@ Node* LibraryCallKit::generate_virtual_guard(Node* obj_klass,
   assert(vtable_index >= 0 || vtable_index == Method::nonvirtual_vtable_index,
          "bad index %d", vtable_index);
   // Get the Method* out of the appropriate vtable entry.
-  int entry_offset  = in_bytes(Klass::vtable_start_offset()) +
-                     vtable_index*vtableEntry::size_in_bytes() +
-                     vtableEntry::method_offset_in_bytes();
+  int entry_offset  = Klass::vtable_start_offset() -
+                      vtable_index * int(sizeof(tableEntry)) +
+                      tableEntry::selector_offset_in_bytes();
   Node* entry_addr  = basic_plus_adr(obj_klass, entry_offset);
-  Node* target_call = make_load(NULL, entry_addr, TypePtr::NOTNULL, T_ADDRESS, MemNode::unordered);
+  Node* target_selector = make_load(NULL, entry_addr, TypeInt::INT, T_INT, MemNode::unordered);
 
   // Compare the target method with the expected method (e.g., Object.hashCode).
-  const TypePtr* native_call_addr = TypeMetadataPtr::make(method);
+  uint32_t selector = method->get_Method()->selector();
+  Node* native_selector = intcon((jint)selector);
 
-  Node* native_call = makecon(native_call_addr);
-  Node* chk_native  = _gvn.transform(new CmpPNode(target_call, native_call));
+  Node* chk_native  = _gvn.transform(new CmpINode(target_selector, native_selector));
   Node* test_native = _gvn.transform(new BoolNode(chk_native, BoolTest::ne));
 
   return generate_slow_guard(test_native, slow_region);
@@ -3796,6 +3796,9 @@ LibraryCallKit::generate_method_call(vmIntrinsics::ID method_id, bool is_virtual
   guarantee(callee() != C->method(), "cannot make slow-call to self");
 
   ciMethod* method = callee();
+  assert(method->is_loaded(), "the intrinsified method must be loaded");
+
+  bool is_dynamic = false;
   // ensure the JVMS we have will be correct for this call
   guarantee(method_id == method->intrinsic_id(), "must match");
 
@@ -3803,40 +3806,37 @@ LibraryCallKit::generate_method_call(vmIntrinsics::ID method_id, bool is_virtual
   CallJavaNode* slow_call;
   if (is_static) {
     assert(!is_virtual, "");
-    slow_call = new CallStaticJavaNode(C, tf,
-                           SharedRuntime::get_resolve_static_call_stub(),
-                           method, bci());
+    slow_call = new CallStaticJavaNode(C, tf, method, bci());
   } else if (is_virtual) {
     null_check_receiver();
     int vtable_index = Method::invalid_vtable_index;
-    if (UseInlineCaches) {
-      // Suppress the vtable call
-    } else {
-      // hashCode and clone are not a miranda methods,
-      // so the vtable index is fixed.
-      // No need to use the linkResolver to get it.
-       vtable_index = method->vtable_index();
-       assert(vtable_index >= 0 || vtable_index == Method::nonvirtual_vtable_index,
-              "bad index %d", vtable_index);
-    }
-    slow_call = new CallDynamicJavaNode(tf,
-                          SharedRuntime::get_resolve_virtual_call_stub(),
-                          method, vtable_index, bci());
+    // hashCode and clone are not a miranda methods,
+    // so the vtable index is fixed.
+    // No need to use the linkResolver to get it.
+     vtable_index = method->vtable_index();
+     assert(vtable_index >= 0 || vtable_index == Method::nonvirtual_vtable_index,
+            "bad index %d", vtable_index);
+    slow_call = new CallDynamicJavaNode(tf, method, vtable_index, bci());
+    is_dynamic = true;
   } else {  // neither virtual nor static:  opt_virtual
     null_check_receiver();
-    slow_call = new CallStaticJavaNode(C, tf,
-                                SharedRuntime::get_resolve_opt_virtual_call_stub(),
-                                method, bci());
+    slow_call = new CallStaticJavaNode(C, tf, method, bci());
     slow_call->set_optimized_virtual(true);
   }
   if (CallGenerator::is_inlined_method_handle_intrinsic(this->method(), bci(), callee())) {
     // To be able to issue a direct call (optimized virtual or virtual)
     // and skip a call to MH.linkTo*/invokeBasic adapter, additional information
     // about the method being invoked should be attached to the call site to
-    // make resolution logic work (see SharedRuntime::resolve_{virtual,opt_virtual}_call_C).
+    // make resolution logic work.
     slow_call->set_override_symbolic_info(true);
   }
   set_arguments_for_java_call(slow_call);
+  if (is_dynamic) {
+    Node* receiver = null_check(argument(0));
+    Node* klass_addr = basic_plus_adr(receiver, receiver, oopDesc::klass_offset_in_bytes());
+    Node* klass = _gvn.transform(LoadKlassNode::make(_gvn, NULL, immutable_memory(), klass_addr, TypeInstPtr::KLASS, TypeKlassPtr::OBJECT));
+    slow_call->init_req(TypeFunc::Parms + method->arg_size(), klass);
+  }
   set_edges_for_java_call(slow_call);
   return slow_call;
 }

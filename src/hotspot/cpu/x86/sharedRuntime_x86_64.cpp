@@ -29,9 +29,7 @@
 #include "asm/macroAssembler.hpp"
 #include "asm/macroAssembler.inline.hpp"
 #include "code/debugInfoRec.hpp"
-#include "code/icBuffer.hpp"
 #include "code/nativeInst.hpp"
-#include "code/vtableStubs.hpp"
 #include "gc/shared/collectedHeap.hpp"
 #include "gc/shared/gcLocker.hpp"
 #include "gc/shared/barrierSet.hpp"
@@ -40,7 +38,6 @@
 #include "logging/log.hpp"
 #include "memory/resourceArea.hpp"
 #include "memory/universe.hpp"
-#include "oops/compiledICHolder.hpp"
 #include "oops/klass.inline.hpp"
 #include "runtime/safepointMechanism.hpp"
 #include "runtime/sharedRuntime.hpp"
@@ -526,64 +523,11 @@ int SharedRuntime::java_calling_convention(const BasicType *sig_bt,
   return align_up(stk_args, 2);
 }
 
-// Patch the callers callsite with entry to compiled code if it exists.
-static void patch_callers_callsite(MacroAssembler *masm) {
-  Label L;
-  __ cmpptr(Address(rbx, in_bytes(Method::code_offset())), (int32_t)NULL_WORD);
-  __ jcc(Assembler::equal, L);
-
-  // Save the current stack pointer
-  __ mov(r13, rsp);
-  // Schedule the branch target address early.
-  // Call into the VM to patch the caller, then jump to compiled callee
-  // rax isn't live so capture return address while we easily can
-  __ movptr(rax, Address(rsp, 0));
-
-  // align stack so push_CPU_state doesn't fault
-  __ andptr(rsp, -(StackAlignmentInBytes));
-  __ push_CPU_state();
-  __ vzeroupper();
-  // VM needs caller's callsite
-  // VM needs target method
-  // This needs to be a long call since we will relocate this adapter to
-  // the codeBuffer and it may not reach
-
-  // Allocate argument register save area
-  if (frame::arg_reg_save_area_bytes != 0) {
-    __ subptr(rsp, frame::arg_reg_save_area_bytes);
-  }
-  __ mov(c_rarg0, rbx);
-  __ mov(c_rarg1, rax);
-  __ call(RuntimeAddress(CAST_FROM_FN_PTR(address, SharedRuntime::fixup_callers_callsite)));
-
-  // De-allocate argument register save area
-  if (frame::arg_reg_save_area_bytes != 0) {
-    __ addptr(rsp, frame::arg_reg_save_area_bytes);
-  }
-
-  __ vzeroupper();
-  __ pop_CPU_state();
-  // restore sp
-  __ mov(rsp, r13);
-  __ bind(L);
-}
-
-
 static void gen_c2i_adapter(MacroAssembler *masm,
                             int total_args_passed,
                             int comp_args_on_stack,
                             const BasicType *sig_bt,
-                            const VMRegPair *regs,
-                            Label& skip_fixup) {
-  // Before we get into the guts of the C2I adapter, see if we should be here
-  // at all.  We've come from compiled code and are attempting to jump to the
-  // interpreter, which means the caller made a static call to get here
-  // (vcalls always get a compiled target if there is one).  Check for a
-  // compiled target.  If there is one, we need to patch the caller's call.
-  patch_callers_callsite(masm);
-
-  __ bind(skip_fixup);
-
+                            const VMRegPair *regs) {
   // Since all args are passed on the stack, total_args_passed *
   // Interpreter::stackElementSize is the space we need. Plus 1 because
   // we also account for the return address location since
@@ -946,62 +890,32 @@ AdapterHandlerEntry* SharedRuntime::generate_i2c2i_adapters(MacroAssembler *masm
   // On exit from the interpreter, the interpreter will restore our SP (lest the
   // compiled code, which relys solely on SP and not RBP, get sick).
 
-  address c2i_unverified_entry = __ pc();
-  Label skip_fixup;
-  Label ok;
+  __ align(CodeEntryAlignment);
+  address c2i_itable_entry = __ pc();
+  __ c2i_itable_entry(); // Unpack selected method selector.
 
-  Register holder = rax;
-  Register receiver = j_rarg0;
-  Register temp = rbx;
-
-  {
-    __ load_klass(temp, receiver, rscratch1);
-    __ cmpptr(temp, Address(holder, CompiledICHolder::holder_klass_offset()));
-    __ movptr(rbx, Address(holder, CompiledICHolder::holder_metadata_offset()));
-    __ jcc(Assembler::equal, ok);
-    __ jump(RuntimeAddress(SharedRuntime::get_ic_miss_stub()));
-
-    __ bind(ok);
-    // Method might have been compiled since the call site was patched to
-    // interpreted if that is the case treat it as a miss so we can get
-    // the call site corrected.
-    __ cmpptr(Address(rbx, in_bytes(Method::code_offset())), (int32_t)NULL_WORD);
-    __ jcc(Assembler::equal, skip_fixup);
-    __ jump(RuntimeAddress(SharedRuntime::get_ic_miss_stub()));
-  }
+  __ align(CodeEntryAlignment);
+  address c2i_vtable_entry = __ pc();
+  __ c2i_vtable_entry(); // Unpack Method* from selector
 
   address c2i_entry = __ pc();
+
+  Label got_code;
+  // If code got installed, we don't want to jump into the interpreter.
+  __ cmpptr(Address(rbx, in_bytes(Method::code_offset())), (int32_t)NULL_WORD);
+  __ jcc(Assembler::notEqual, ExternalAddress(SharedRuntime::get_bad_call_stub()));
 
   // Class initialization barrier for static methods
   address c2i_no_clinit_check_entry = NULL;
   if (VM_Version::supports_fast_class_init_checks()) {
-    Label L_skip_barrier;
-    Register method = rbx;
-
-    { // Bypass the barrier for non-static methods
-      Register flags  = rscratch1;
-      __ movl(flags, Address(method, Method::access_flags_offset()));
-      __ testl(flags, JVM_ACC_STATIC);
-      __ jcc(Assembler::zero, L_skip_barrier); // non-static
-    }
-
-    Register klass = rscratch1;
-    __ load_method_holder(klass, method);
-    __ clinit_barrier(klass, r15_thread, &L_skip_barrier /*L_fast_path*/);
-
-    __ jump(RuntimeAddress(SharedRuntime::get_handle_wrong_method_stub())); // slow path
-
-    __ bind(L_skip_barrier);
+    __ c2i_clinit_entry();
     c2i_no_clinit_check_entry = __ pc();
   }
 
-  BarrierSetAssembler* bs = BarrierSet::barrier_set()->barrier_set_assembler();
-  bs->c2i_entry_barrier(masm);
-
-  gen_c2i_adapter(masm, total_args_passed, comp_args_on_stack, sig_bt, regs, skip_fixup);
+  gen_c2i_adapter(masm, total_args_passed, comp_args_on_stack, sig_bt, regs);
 
   __ flush();
-  return AdapterHandlerLibrary::new_entry(fingerprint, i2c_entry, c2i_entry, c2i_unverified_entry, c2i_no_clinit_check_entry);
+  return AdapterHandlerLibrary::new_entry(fingerprint, i2c_entry, c2i_entry, c2i_itable_entry, c2i_vtable_entry, c2i_no_clinit_check_entry);
 }
 
 int SharedRuntime::c_calling_convention(const BasicType *sig_bt,
@@ -1928,6 +1842,7 @@ nmethod* SharedRuntime::generate_native_wrapper(MacroAssembler* masm,
                                                 address critical_entry) {
   if (method->is_method_handle_intrinsic()) {
     vmIntrinsics::ID iid = method->intrinsic_id();
+    __ align(CodeEntryAlignment);
     intptr_t start = (intptr_t)__ pc();
     int vep_offset = ((intptr_t)__ pc()) - start;
     gen_special_dispatch(masm,
@@ -1957,6 +1872,7 @@ nmethod* SharedRuntime::generate_native_wrapper(MacroAssembler* masm,
 
   // An OopMap for lock (and class if static)
   OopMapSet *oop_maps = new OopMapSet();
+  __ align(CodeEntryAlignment);
   intptr_t start = (intptr_t)__ pc();
 
   // We have received a description of where all the java arg are located
@@ -2130,23 +2046,8 @@ nmethod* SharedRuntime::generate_native_wrapper(MacroAssembler* masm,
   // restoring them except rbp. rbp is the only callee save register
   // as far as the interpreter and the compiler(s) are concerned.
 
-
-  const Register ic_reg = rax;
-  const Register receiver = j_rarg0;
-
   Label hit;
   Label exception_pending;
-
-  assert_different_registers(ic_reg, receiver, rscratch1);
-  __ verify_oop(receiver);
-  __ load_klass(rscratch1, receiver, rscratch2);
-  __ cmpq(ic_reg, rscratch1);
-  __ jcc(Assembler::equal, hit);
-
-  __ jump(RuntimeAddress(SharedRuntime::get_ic_miss_stub()));
-
-  // Verified entry point must be aligned
-  __ align(8);
 
   __ bind(hit);
 
@@ -2158,7 +2059,7 @@ nmethod* SharedRuntime::generate_native_wrapper(MacroAssembler* masm,
     __ mov_metadata(klass, method->method_holder()); // InstanceKlass*
     __ clinit_barrier(klass, r15_thread, &L_skip_barrier /*L_fast_path*/);
 
-    __ jump(RuntimeAddress(SharedRuntime::get_handle_wrong_method_stub())); // slow path
+    __ jump(RuntimeAddress(SharedRuntime::get_bad_call_stub())); // slow path
 
     __ bind(L_skip_barrier);
   }
@@ -2178,9 +2079,6 @@ nmethod* SharedRuntime::generate_native_wrapper(MacroAssembler* masm,
 
   if (UseStackBanging) {
     __ bang_stack_with_offset((int)JavaThread::stack_shadow_zone_size());
-  } else {
-    // need a 5 byte instruction to allow MT safe patching to non-entrant
-    __ fat_nop();
   }
 
   // Generate a new frame for the wrapper.

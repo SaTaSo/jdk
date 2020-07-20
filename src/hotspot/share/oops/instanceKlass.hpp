@@ -137,6 +137,7 @@ class InstanceKlass: public Klass {
   friend class JVMCIVMStructs;
   friend class ClassFileParser;
   friend class CompileReplay;
+  friend class klassItable;
 
  public:
   static const KlassID ID = InstanceKlassID;
@@ -159,6 +160,8 @@ class InstanceKlass: public Klass {
   };
 
  private:
+  void* operator new(size_t size, ClassLoaderData* loader_data,
+                     size_t word_size, size_t prefix_word_size, TRAPS) throw();
   static InstanceKlass* allocate_instance_klass(const ClassFileParser& parser, TRAPS);
 
  protected:
@@ -216,7 +219,6 @@ class InstanceKlass: public Klass {
   int             _static_field_size;    // number words used by static fields (oop and non-oop) in this klass
 
   int             _nonstatic_oop_map_size;// size in words of nonstatic oop map blocks
-  int             _itable_len;           // length of Java itable (in words)
 
   // The NestHost attribute. The class info index for the class
   // that is the nest-host of this class. This data has not been validated.
@@ -227,6 +229,11 @@ class InstanceKlass: public Klass {
   u2              _java_fields_count;    // The number of declared Java fields
 
   volatile u2     _idnum_allocated_count;         // JNI/JVMTI: increments with the addition of methods, old ids don't change
+
+  int             _itable_len;           // length of Java itable (in words)
+  int             _itable_seed;
+
+  Array<uint32_t>* _interpreter_itable;   // Hashtable for interpreter invokeinterface calls
 
   // _is_marked_dependent can be set concurrently, thus cannot be part of the
   // _misc_flags.
@@ -262,9 +269,8 @@ class InstanceKlass: public Klass {
     _misc_is_shared_boot_class                = 1 << 10, // defining class loader is boot class loader
     _misc_is_shared_platform_class            = 1 << 11, // defining class loader is platform class loader
     _misc_is_shared_app_class                 = 1 << 12, // defining class loader is app class loader
-    _misc_has_resolved_methods                = 1 << 13, // resolved methods table entries added for this class
-    _misc_is_being_redefined                  = 1 << 14, // used for locking redefinition
-    _misc_has_contended_annotations           = 1 << 15  // has @Contended annotation
+    _misc_is_being_redefined                  = 1 << 13, // used for locking redefinition
+    _misc_has_contended_annotations           = 1 << 14  // has @Contended annotation
   };
   u2 shared_loader_type_bits() const {
     return _misc_is_shared_boot_class|_misc_is_shared_platform_class|_misc_is_shared_app_class;
@@ -392,8 +398,32 @@ class InstanceKlass: public Klass {
   void set_static_oop_field_count(u2 size) { _static_oop_field_count = size; }
 
   // Java itable
-  int  itable_length() const               { return _itable_len; }
-  void set_itable_length(int len)          { _itable_len = len; }
+  int  itable_length() const                   { return _itable_len; }
+  bool has_itable() const                      { return _itable_len != 0; }
+  int itable_seed()                            { return _itable_seed; }
+
+  uint8_t* interpreter_itable_selector_addr() {
+     assert(_interpreter_itable != NULL, "Must be initialized");
+    // Point to the selector table in the interpreter itable.
+    return ((uint8_t*)_interpreter_itable +
+             Array<uint32_t>::base_offset_in_bytes() +
+             in_bytes(klassItable::itable_table_offset()));
+  }
+  Array<uint32_t>* interpreter_itable() const { return _interpreter_itable; }
+
+  void set_interpreter_itable(Array<uint32_t>* it) { assert(_interpreter_itable == NULL, "Must not be initialized");
+                                                     _interpreter_itable = it; }
+
+  intptr_t* start_of_itable()            const { return ((intptr_t*)this) + itable_offset_in_words(); }
+  intptr_t* end_of_itable()              const { return start_of_itable() + itable_length(); }
+
+  tableEntry* itable_table()             const { return (tableEntry*)(((uint8_t*)start_of_itable()) +
+                                                                      in_bytes(klassItable::itable_table_offset())); }
+
+  static ByteSize itable_selector_map_offset() { return in_ByteSize(offset_of(InstanceKlass, _interpreter_itable)); }
+  static int itable_offset_in_words()            { return InstanceKlass::header_size(); }
+  static ByteSize itable_code_map_mask_offset()  { return in_ByteSize(itable_offset_in_words() * wordSize); }
+  static ByteSize itable_code_map_table_offset() { return itable_code_map_mask_offset() + klassItable::itable_table_offset(); }
 
   // array klasses
   ObjArrayKlass* array_klasses() const     { return _array_klasses; }
@@ -439,6 +469,7 @@ class InstanceKlass: public Klass {
   FieldInfo* field(int index) const { return FieldInfo::from_field_array(_fields, index); }
 
  public:
+
   int     field_offset      (int index) const { return field(index)->offset(); }
   int     field_access_flags(int index) const { return field(index)->access_flags(); }
   Symbol* field_name        (int index) const { return field(index)->name(constants()); }
@@ -546,6 +577,7 @@ public:
   // initialization state
   bool is_loaded() const                   { return _init_state >= loaded; }
   bool is_linked() const                   { return _init_state >= linked; }
+  bool is_linked_acquire() const;
   bool is_initialized() const              { return _init_state == fully_initialized; }
   bool is_not_initialized() const          { return _init_state <  being_initialized; }
   bool is_being_initialized() const        { return _init_state == being_initialized; }
@@ -833,14 +865,6 @@ public:
   void set_is_scratch_class() {
     _misc_flags |= _misc_is_scratch_class;
   }
-
-  bool has_resolved_methods() const {
-    return (_misc_flags & _misc_has_resolved_methods) != 0;
-  }
-
-  void set_has_resolved_methods() {
-    _misc_flags |= _misc_has_resolved_methods;
-  }
 private:
 
   void set_kind(unsigned kind) {
@@ -1093,17 +1117,12 @@ public:
            (has_stored_fingerprint ? (int)sizeof(uint64_t*)/wordSize : 0));
   }
   int size() const                    { return size(vtable_length(),
-                                               itable_length(),
-                                               nonstatic_oop_map_size(),
-                                               is_interface(),
-                                               is_unsafe_anonymous(),
-                                               has_stored_fingerprint());
+                                                    _itable_len,
+                                                    nonstatic_oop_map_size(),
+                                                    is_interface(),
+                                                    is_unsafe_anonymous(),
+                                                    has_stored_fingerprint());
   }
-
-  intptr_t* start_of_itable()   const { return (intptr_t*)start_of_vtable() + vtable_length(); }
-  intptr_t* end_of_itable()     const { return start_of_itable() + itable_length(); }
-
-  int  itable_offset_in_words() const { return start_of_itable() - (intptr_t*)this; }
 
   oop static_field_base_raw() { return java_mirror(); }
 
@@ -1172,7 +1191,6 @@ public:
 
   // Java itable
   klassItable itable() const;        // return klassItable wrapper
-  Method* method_at_itable(Klass* holder, int index, TRAPS);
 
 #if INCLUDE_JVMTI
   void adjust_default_methods(bool* trace_name_printed);
@@ -1351,7 +1369,6 @@ public:
 
   void print_dependent_nmethods(bool verbose = false);
   bool is_dependent_nmethod(nmethod* nm);
-  bool verify_itable_index(int index);
 #endif
 
   const char* internal_name() const;

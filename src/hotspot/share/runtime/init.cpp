@@ -25,7 +25,7 @@
 #include "precompiled.hpp"
 #include "classfile/stringTable.hpp"
 #include "classfile/symbolTable.hpp"
-#include "code/icBuffer.hpp"
+
 #include "gc/shared/collectedHeap.hpp"
 #if INCLUDE_JVMCI
 #include "jvmci/jvmci.hpp"
@@ -76,7 +76,6 @@ void jni_handles_init();
 void vmStructs_init() NOT_DEBUG_RETURN;
 
 void vtableStubs_init();
-void InlineCacheBuffer_init();
 void compilerOracle_init();
 bool compileBroker_init();
 void dependencyContext_init();
@@ -133,8 +132,6 @@ jint init_globals() {
   vmStructs_init();
 #endif // INCLUDE_VM_STRUCTS
 
-  vtableStubs_init();
-  InlineCacheBuffer_init();
   compilerOracle_init();
   dependencyContext_init();
 

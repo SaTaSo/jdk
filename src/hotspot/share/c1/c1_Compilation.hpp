@@ -28,6 +28,7 @@
 #include "ci/ciEnv.hpp"
 #include "ci/ciMethodData.hpp"
 #include "code/exceptionHandlerTable.hpp"
+#include "code/lazyInvocation.hpp"
 #include "compiler/compilerDirectives.hpp"
 #include "memory/resourceArea.hpp"
 #include "runtime/deoptimization.hpp"
@@ -91,6 +92,7 @@ class Compilation: public StackObj {
   CodeBuffer         _code;
   bool               _has_access_indexed;
   int                _interpreter_frame_size; // Stack space needed in case of a deoptimization
+  LazyInvocation*    _lazy_invocations;
 
   // compilation helpers
   void initialize();
@@ -150,6 +152,8 @@ class Compilation: public StackObj {
   Arena* arena()                                 { return _arena; }
   bool has_access_indexed()                      { return _has_access_indexed; }
   bool should_install_code()                     { return _install_code && InstallMethods; }
+
+  LazyInvocation* create_lazy_invocation(LazyInvocation::CallKind call_kind);
 
   // Instruction ids
   int get_next_id()                              { return _next_id++; }

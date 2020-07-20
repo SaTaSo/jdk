@@ -572,6 +572,7 @@ public:
   float        _cnt;          // Estimate of number of times called
   CallGenerator* _generator;  // corresponding CallGenerator for some late inline calls
   const char *_name;           // Printable name, if _method is NULL
+  uint _size;
 
   CallNode(const TypeFunc* tf, address addr, const TypePtr* adr_type)
     : SafePointNode(tf->domain()->cnt(), NULL, adr_type),
@@ -579,7 +580,20 @@ public:
       _entry_point(addr),
       _cnt(COUNT_UNKNOWN),
       _generator(NULL),
-      _name(NULL)
+      _name(NULL),
+      _size(0)
+  {
+    init_class_id(Class_Call);
+  }
+
+  CallNode(const TypeFunc* tf, address addr, const TypePtr* adr_type, int extra_edges)
+    : SafePointNode(tf->domain()->cnt() + extra_edges, NULL, adr_type),
+      _tf(tf),
+      _entry_point(addr),
+      _cnt(COUNT_UNKNOWN),
+      _generator(NULL),
+      _name(NULL),
+      _size(0)
   {
     init_class_id(Class_Call);
   }
@@ -660,11 +674,21 @@ protected:
   bool    _optimized_virtual;
   bool    _method_handle_invoke;
   bool    _override_symbolic_info; // Override symbolic call site info from bytecode
-  ciMethod* _method;               // Method being direct called
+  ciMethod* _method;               // Method being called
 public:
   const int       _bci;         // Byte Code Index of call byte code
   CallJavaNode(const TypeFunc* tf , address addr, ciMethod* method, int bci)
     : CallNode(tf, addr, TypePtr::BOTTOM),
+      _optimized_virtual(false),
+      _method_handle_invoke(false),
+      _override_symbolic_info(false),
+      _method(method), _bci(bci)
+  {
+    init_class_id(Class_CallJava);
+  }
+
+  CallJavaNode(const TypeFunc* tf , address addr, ciMethod* method, int bci, int extra_edges)
+    : CallNode(tf, addr, TypePtr::BOTTOM, extra_edges),
       _optimized_virtual(false),
       _method_handle_invoke(false),
       _override_symbolic_info(false),
@@ -699,8 +723,8 @@ class CallStaticJavaNode : public CallJavaNode {
   virtual bool cmp( const Node &n ) const;
   virtual uint size_of() const; // Size is bigger
 public:
-  CallStaticJavaNode(Compile* C, const TypeFunc* tf, address addr, ciMethod* method, int bci)
-    : CallJavaNode(tf, addr, method, bci) {
+  CallStaticJavaNode(Compile* C, const TypeFunc* tf, ciMethod* method, int bci)
+    : CallJavaNode(tf, NULL, method, bci) {
     init_class_id(Class_CallStaticJava);
     if (C->eliminate_boxing() && (method != NULL) && method->is_boxing_method()) {
       init_flags(Flag_is_macro);
@@ -752,8 +776,11 @@ public:
 class CallDynamicJavaNode : public CallJavaNode {
   virtual bool cmp( const Node &n ) const;
   virtual uint size_of() const; // Size is bigger
+
 public:
-  CallDynamicJavaNode( const TypeFunc *tf , address addr, ciMethod* method, int vtable_index, int bci ) : CallJavaNode(tf,addr,method,bci), _vtable_index(vtable_index) {
+  CallDynamicJavaNode(const TypeFunc *tf, ciMethod* method, int vtable_index, int bci)
+    : CallJavaNode(tf, NULL, method, bci, 1),
+      _vtable_index(vtable_index) {
     init_class_id(Class_CallDynamicJava);
   }
 

@@ -90,7 +90,8 @@ class Method : public Metadata {
     _has_injected_profile  = 1 << 4,
     _running_emcp          = 1 << 5,
     _intrinsic_candidate   = 1 << 6,
-    _reserved_stack_access = 1 << 7
+    _reserved_stack_access = 1 << 7,
+    _method_selector_is_shared = 1 << 8
   };
   mutable u2 _flags;
 
@@ -103,29 +104,42 @@ class Method : public Metadata {
   address _i2i_entry;           // All-args-on-stack calling convention
   // Entry point for calling from compiled code, to compiled code if it exists
   // or else the interpreter.
-  volatile address _from_compiled_entry;        // Cache of: _code ? _code->entry_point() : _adapter->c2i_entry()
+  volatile address _from_compiled_entry; // Cache of: _code ? _code->entry_point() : _adapter->c2i_entry()
   // The entry point for calling both from and to compiled code is
   // "_code->entry_point()".  Because of tiered compilation and de-opt, this
   // field can come and go.  It can transition from NULL to not-null at any
   // time (whenever a compile completes).  It can transition from not-null to
   // NULL only at safepoints (because of a de-opt).
   CompiledMethod* volatile _code;                       // Points to the corresponding piece of native code
-  volatile address           _from_interpreted_entry; // Cache of _code ? _adapter->i2c_entry() : _i2i_entry
+  volatile address _from_interpreted_entry; // Cache of _code ? _adapter->i2c_entry() : _i2i_entry
 
 #if INCLUDE_AOT && defined(TIERED)
   CompiledMethod* _aot_code;
 #endif
 
+  volatile uint32_t _selector;
+
   // Constructor
   Method(ConstMethod* xconst, AccessFlags access_flags);
- public:
 
+ public:
   static Method* allocate(ClassLoaderData* loader_data,
                           int byte_code_size,
                           AccessFlags access_flags,
                           InlineTableSizes* sizes,
                           ConstMethod::MethodType method_type,
                           TRAPS);
+
+  void compute_selector();
+  uint32_t selector() {
+    if (_selector == 0) {
+      compute_selector();
+    }
+    return _selector;
+  }
+
+  bool has_selector() const { return _selector != 0; }
+  void set_selector(uint32_t selector) { _selector = selector; }
 
   // CDS and vtbl checking can create an empty Method to get vtbl pointer.
   Method(){}
@@ -140,7 +154,7 @@ class Method : public Metadata {
   void set_constMethod(ConstMethod* xconst)    { _constMethod = xconst; }
 
 
-  static address make_adapters(const methodHandle& mh, TRAPS);
+  static void make_adapters(const methodHandle& mh, TRAPS);
   address from_compiled_entry() const;
   address from_compiled_entry_no_trampoline() const;
   address from_interpreted_entry() const;
@@ -467,21 +481,10 @@ class Method : public Metadata {
   // if this (shared) method were mapped into another JVM.
   void remove_unshareable_info();
 
-  // nmethod/verified compiler entry
-  address verified_code_entry();
   bool check_code() const;      // Not inline to avoid circular ref
   CompiledMethod* volatile code() const;
-
-  // Locks CompiledMethod_lock if not held.
-  void unlink_code(CompiledMethod *compare);
-  // Locks CompiledMethod_lock if not held.
-  void unlink_code();
-
-private:
-  // Either called with CompiledMethod_lock held or from constructor.
-  void clear_code();
-
-public:
+  void clear_code(bool acquire_lock, bool clear_code);    // Clear out any compiled code
+  void unlink_code(CompiledMethod* cm, bool acquire_lock);
   static void set_code(const methodHandle& mh, CompiledMethod* code);
   void set_adapter_entry(AdapterHandlerEntry* adapter) {
     constMethod()->set_adapter_entry(adapter);
@@ -498,8 +501,9 @@ public:
 
   address get_i2c_entry();
   address get_c2i_entry();
-  address get_c2i_unverified_entry();
   address get_c2i_no_clinit_check_entry();
+  address get_c2i_itable_entry();
+  address get_c2i_vtable_entry();
   AdapterHandlerEntry* adapter() const {
     return constMethod()->adapter();
   }
@@ -516,7 +520,6 @@ public:
     // Valid vtable indexes are non-negative (>= 0).
     // These few negative values are used as sentinels.
     itable_index_max        = -10, // first itable index, growing downward
-    pending_itable_index    = -9,  // itable index will be assigned
     invalid_vtable_index    = -4,  // distinct from any valid vtable index
     garbage_vtable_index    = -3,  // not yet linked; no vtable layout yet
     nonvirtual_vtable_index = -2   // there is no need for vtable dispatch
@@ -526,11 +529,8 @@ public:
   bool has_vtable_index() const                  { return _vtable_index >= 0; }
   int  vtable_index() const                      { return _vtable_index; }
   void set_vtable_index(int index);
-  DEBUG_ONLY(bool valid_itable_index() const     { return _vtable_index <= pending_itable_index; })
+  DEBUG_ONLY(bool valid_itable_index() const     { return _vtable_index <= itable_index_max; })
   bool has_itable_index() const                  { return _vtable_index <= itable_index_max; }
-  int  itable_index() const                      { assert(valid_itable_index(), "");
-                                                   return itable_index_max - _vtable_index; }
-  void set_itable_index(int index);
 
   // interpreter entry
   address interpreter_entry() const              { return _i2i_entry; }
@@ -722,6 +722,7 @@ public:
   static ByteSize access_flags_offset()          { return byte_offset_of(Method, _access_flags      ); }
   static ByteSize from_compiled_offset()         { return byte_offset_of(Method, _from_compiled_entry); }
   static ByteSize code_offset()                  { return byte_offset_of(Method, _code); }
+  static ByteSize selector_offset()              { return byte_offset_of(Method, _selector); }
   static ByteSize method_data_offset()           {
     return byte_offset_of(Method, _method_data);
   }
@@ -846,7 +847,7 @@ public:
   // when the jmethodID does not refer to a valid method.
   static Method* checked_resolve_jmethod_id(jmethodID mid);
 
-  static void change_method_associated_with_jmethod_id(jmethodID old_jmid_ptr, Method* new_method);
+  static void change_method_associated_with_jmethod_id(jmethodID old_jmid_ptr, Method* old_method, Method* new_method);
   static bool is_method_id(jmethodID mid);
 
   // Clear methods
@@ -920,6 +921,14 @@ public:
 
   void set_has_reserved_stack_access(bool x) {
     _flags = x ? (_flags | _reserved_stack_access) : (_flags & ~_reserved_stack_access);
+  }
+
+  bool selector_is_shared() {
+    return (_flags & _method_selector_is_shared) != 0;
+  }
+
+  void set_selector_is_shared(bool x) {
+    _flags = x ? (_flags | _method_selector_is_shared) : (_flags & ~_method_selector_is_shared);
   }
 
   JFR_ONLY(DEFINE_TRACE_FLAG_ACCESSOR;)

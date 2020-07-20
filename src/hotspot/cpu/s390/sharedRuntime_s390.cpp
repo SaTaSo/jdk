@@ -26,14 +26,10 @@
 #include "precompiled.hpp"
 #include "asm/macroAssembler.inline.hpp"
 #include "code/debugInfoRec.hpp"
-#include "code/icBuffer.hpp"
-#include "code/vtableStubs.hpp"
 #include "gc/shared/gcLocker.hpp"
 #include "interpreter/interpreter.hpp"
 #include "interpreter/interp_masm.hpp"
 #include "memory/resourceArea.hpp"
-#include "nativeInst_s390.hpp"
-#include "oops/compiledICHolder.hpp"
 #include "oops/klass.inline.hpp"
 #include "registerSaver_s390.hpp"
 #include "runtime/safepointMechanism.hpp"
@@ -1805,7 +1801,6 @@ nmethod *SharedRuntime::generate_native_wrapper(MacroAssembler *masm,
   unsigned int wrapper_FrameDone;
   unsigned int wrapper_CRegsSet;
   Label     handle_pending_exception;
-  Label     ic_miss;
 
   //---------------------------------------------------------------------
   // Unverified entry point (UEP)
@@ -1813,7 +1808,9 @@ nmethod *SharedRuntime::generate_native_wrapper(MacroAssembler *masm,
   wrapper_UEPStart = __ offset();
 
   // check ic: object class <-> cached class
-  if (!method_is_static) __ nmethod_UEP(ic_miss);
+  if (!method_is_static) {
+    __ itable_entry();
+  }
   // Fill with nops (alignment of verified entry point).
   __ align(CodeEntryAlignment);
 
@@ -2360,11 +2357,6 @@ nmethod *SharedRuntime::generate_native_wrapper(MacroAssembler *masm,
     __ load_const_optimized(Z_R1_scratch, StubRoutines::forward_exception_entry());
     __ restore_return_pc();
     __ z_br(Z_R1_scratch);
-
-    //---------------------------------------------------------------------
-    // Handler for a cache miss (out-of-line)
-    //---------------------------------------------------------------------
-    __ call_ic_miss_handler(ic_miss, 0x77, 0, Z_R1_scratch);
   }
   __ flush();
 
@@ -2655,46 +2647,12 @@ AdapterHandlerEntry* SharedRuntime::generate_i2c2i_adapters(MacroAssembler *masm
 
   address c2i_unverified_entry;
 
-  Label skip_fixup;
-  {
-    Label ic_miss;
-    const int klass_offset           = oopDesc::klass_offset_in_bytes();
-    const int holder_klass_offset    = CompiledICHolder::holder_klass_offset();
-    const int holder_metadata_offset = CompiledICHolder::holder_metadata_offset();
-
-    // Out-of-line call to ic_miss handler.
-    __ call_ic_miss_handler(ic_miss, 0x11, 0, Z_R1_scratch);
-
-    // Unverified Entry Point UEP
-    __ align(CodeEntryAlignment);
-    c2i_unverified_entry = __ pc();
-
-    // Check the pointers.
-    if (!ImplicitNullChecks || MacroAssembler::needs_explicit_null_check(klass_offset)) {
-      __ z_ltgr(Z_ARG1, Z_ARG1);
-      __ z_bre(ic_miss);
-    }
-    __ verify_oop(Z_ARG1, FILE_AND_LINE);
-
-    // Check ic: object class <-> cached class
-    // Compress cached class for comparison. That's more efficient.
-    if (UseCompressedClassPointers) {
-      __ z_lg(Z_R11, holder_klass_offset, Z_method);             // Z_R11 is overwritten a few instructions down anyway.
-      __ compare_klass_ptr(Z_R11, klass_offset, Z_ARG1, false); // Cached class can't be zero.
-    } else {
-      __ z_clc(klass_offset, sizeof(void *)-1, Z_ARG1, holder_klass_offset, Z_method);
-    }
-    __ z_brne(ic_miss);  // Cache miss: call runtime to handle this.
-
-    // This def MUST MATCH code in gen_c2i_adapter!
-    const Register code = Z_R11;
-
-    __ z_lg(Z_method, holder_metadata_offset, Z_method);
-    __ load_and_test_long(Z_R0, method_(code));
-    __ z_brne(ic_miss);  // Cache miss: call runtime to handle this.
-
-    // Fallthru to VEP. Duplicate LTG, but saved taken branch.
-  }
+  // Unverified Entry Point UEP
+  __ align(CodeEntryAlignment);
+  c2i_unverified_entry = __ pc();
+  __ itable_entry();
+  // TODO: track this entry
+  __ vtable_entry();
 
   address c2i_entry = __ pc();
 

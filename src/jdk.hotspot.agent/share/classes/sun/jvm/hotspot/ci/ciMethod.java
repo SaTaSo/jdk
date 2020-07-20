@@ -79,7 +79,7 @@ public class ciMethod extends ciMetadata {
       // XXX
       Method method = method();
       NMethod nm = method.getNativeMethod();
-      if (nm != null) return (int)nm.codeEnd().minus(nm.getVerifiedEntryPoint());
+      if (nm != null) return (int)nm.codeEnd().minus(nm.getEntryPoint());
       return 0;
     }
     return (int) instructionsSizeField.getValue(getAddress());

@@ -346,6 +346,8 @@ void ShenandoahNMethodTable::unregister_nmethod(nmethod* nm) {
     return;
   }
 
+  wait_until_concurrent_iteration_done();
+
   if (Thread::current()->is_Code_cache_sweeper_thread()) {
     wait_until_concurrent_iteration_done();
   }
@@ -355,24 +357,7 @@ void ShenandoahNMethodTable::unregister_nmethod(nmethod* nm) {
 
   ShenandoahReentrantLocker data_locker(data->lock());
   data->mark_unregistered();
-}
 
-void ShenandoahNMethodTable::flush_nmethod(nmethod* nm) {
-  assert(CodeCache_lock->owned_by_self(), "Must have CodeCache_lock held");
-  assert(Thread::current()->is_Code_cache_sweeper_thread(), "Must from Sweep thread");
-  ShenandoahNMethod* data = ShenandoahNMethod::gc_data(nm);
-  assert(data != NULL || !ShenandoahConcurrentRoots::can_do_concurrent_class_unloading(),
-         "Only possible when concurrent class unloading is off");
-  if (data == NULL) {
-    ShenandoahNMethod::assert_no_oops(nm, true /*allow_dead*/);
-    return;
-  }
-
-  // Can not alter the array when iteration is in progress
-  wait_until_concurrent_iteration_done();
-  log_flush_nmethod(nm);
-
-  ShenandoahLocker locker(&_lock);
   int idx = index_of(nm);
   assert(idx >= 0 && idx < _index, "Invalid index");
   ShenandoahNMethod::attach_gc_data(nm, NULL);
@@ -476,16 +461,6 @@ void ShenandoahNMethodTable::log_unregister_nmethod(nmethod* nm) {
             nm->method()->method_holder()->external_name(),
             nm->method()->name()->as_C_string(),
             p2i(nm));
-}
-
-void ShenandoahNMethodTable::log_flush_nmethod(nmethod* nm) {
-  LogTarget(Debug, gc, nmethod) log;
-  if (!log.is_enabled()) {
-    return;
-  }
-
-  ResourceMark rm;
-  log.print("Flush NMethod: (" PTR_FORMAT ")", p2i(nm));
 }
 
 #ifdef ASSERT

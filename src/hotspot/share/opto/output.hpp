@@ -40,6 +40,7 @@ class Block;
 class Block_Array;
 class ciMethod;
 class Compile;
+class LazyInvocation;
 class MachNode;
 class MachSafePointNode;
 class Node;
@@ -118,6 +119,7 @@ public:
                     AbstractCompiler* compiler,
                     bool              has_unsafe_access,
                     bool              has_wide_vectors,
+                    LazyInvocation*   lazy_invocations,
                     RTMState          rtm_state);
 
   void install_stub(const char* stub_name,

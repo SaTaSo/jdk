@@ -31,6 +31,12 @@
 #include "runtime/thread.hpp"
 #include "utilities/debug.hpp"
 
+static int _disarmed_value = 1;
+
+int* BarrierSetNMethod::disarmed_value_address() const {
+  return &_disarmed_value;
+}
+
 int BarrierSetNMethod::disarmed_value() const {
   return *disarmed_value_address();
 }
@@ -47,6 +53,10 @@ bool BarrierSetNMethod::supports_entry_barrier(nmethod* nm) {
   return true;
 }
 
+ByteSize BarrierSetNMethod::thread_disarmed_offset() const {
+  return Thread::nmethod_entry_data_offset();
+}
+
 int BarrierSetNMethod::nmethod_stub_entry_barrier(address* return_address_ptr) {
   address return_address = *return_address_ptr;
   CodeBlob* cb = CodeCache::find_blob(return_address);
@@ -59,24 +69,16 @@ int BarrierSetNMethod::nmethod_stub_entry_barrier(address* return_address_ptr) {
     return 0;
   }
 
-  assert(!nm->is_osr_method(), "Should not reach here");
   // Called upon first entry after being armed
-  bool may_enter = bs_nm->nmethod_entry_barrier(nm);
-
-  // Diagnostic option to force deoptimization 1 in 3 times. It is otherwise
-  // a very rare event.
-  if (DeoptimizeNMethodBarriersALot) {
-    static volatile uint32_t counter=0;
-    if (Atomic::add(&counter, 1u) % 3 == 0) {
-      may_enter = false;
-    }
-  }
-
-  if (!may_enter) {
+  if (nm->is_in_use()) {
+    bs_nm->nmethod_entry_barrier(nm);
+    bs_nm->disarm(nm);
+    return 0;
+  } else {
     log_trace(nmethod, barrier)("Deoptimizing nmethod: " PTR_FORMAT, p2i(nm));
     bs_nm->deoptimize(nm, return_address_ptr);
+    return 1;
   }
-  return may_enter ? 0 : 1;
 }
 
 bool BarrierSetNMethod::nmethod_osr_entry_barrier(nmethod* nm) {
@@ -91,5 +93,11 @@ bool BarrierSetNMethod::nmethod_osr_entry_barrier(nmethod* nm) {
 
   assert(nm->is_osr_method(), "Should not reach here");
   log_trace(nmethod, barrier)("Running osr nmethod entry barrier: " PTR_FORMAT, p2i(nm));
-  return nmethod_entry_barrier(nm);
+  if (nm->is_in_use()) {
+    nmethod_entry_barrier(nm);
+    BarrierSetNMethod* bs_nm = BarrierSet::barrier_set()->barrier_set_nmethod();
+    bs_nm->disarm(nm);
+    return true;
+  }
+  return false;
 }

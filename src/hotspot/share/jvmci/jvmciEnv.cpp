@@ -1374,7 +1374,7 @@ void JVMCIEnv::initialize_installed_code(JVMCIObject installed_code, CodeBlob* c
       JVMCI_THROW_MSG(InternalError, "nmethod has been reclaimed");
     }
     if (nm->is_in_use()) {
-      set_InstalledCode_entryPoint(installed_code, (jlong) nm->verified_entry_point());
+      set_InstalledCode_entryPoint(installed_code, (jlong) nm->entry_point());
     }
   } else {
     set_InstalledCode_entryPoint(installed_code, (jlong) cb->code_begin());
@@ -1391,14 +1391,13 @@ void JVMCIEnv::invalidate_nmethod_mirror(JVMCIObject mirror, JVMCI_TRAPS) {
     JVMCI_THROW(NullPointerException);
   }
 
-  nmethodLocker locker;
-  nmethod* nm = JVMCIENV->get_nmethod(mirror, locker);
+  nmethod* nm = JVMCIENV->get_nmethod(mirror);
   if (nm == NULL) {
     // Nothing to do
     return;
   }
 
-  Thread* THREAD = Thread::current();
+  JavaThread* THREAD = JavaThread::current();
   if (!mirror.is_hotspot() && !THREAD->is_Java_thread()) {
     // Calling back into native might cause the execution to block, so only allow this when calling
     // from a JavaThread, which is the normal case anyway.
@@ -1406,7 +1405,7 @@ void JVMCIEnv::invalidate_nmethod_mirror(JVMCIObject mirror, JVMCI_TRAPS) {
                     "Cannot invalidate HotSpotNmethod object in shared library VM heap from non-JavaThread");
   }
 
-  nmethodLocker nml(nm);
+  CompiledMethodMarker nmm(nm);
   if (nm->is_alive()) {
     // Invalidating the HotSpotNmethod means we want the nmethod to be deoptimized.
     Deoptimization::deoptimize_all_marked(nm);
@@ -1431,7 +1430,7 @@ ConstantPool* JVMCIEnv::asConstantPool(JVMCIObject obj) {
   return *metadataHandle;
 }
 
-CodeBlob* JVMCIEnv::get_code_blob(JVMCIObject obj, nmethodLocker& locker) {
+CodeBlob* JVMCIEnv::get_code_blob(JVMCIObject obj) {
   address code = (address) get_InstalledCode_address(obj);
   if (code == NULL) {
     return NULL;
@@ -1446,10 +1445,6 @@ CodeBlob* JVMCIEnv::get_code_blob(JVMCIObject obj, nmethodLocker& locker) {
       if (cb == (CodeBlob*) code) {
         nmethod* the_nm = cb->as_nmethod_or_null();
         if (the_nm != NULL && the_nm->is_alive()) {
-          // Lock the nmethod to stop any further transitions by the sweeper.  It's still possible
-          // for this code to execute in the middle of the sweeping of the nmethod but that will be
-          // handled below.
-          locker.set_code(nm, true);
           nm = the_nm;
         }
       }
@@ -1461,8 +1456,6 @@ CodeBlob* JVMCIEnv::get_code_blob(JVMCIObject obj, nmethodLocker& locker) {
       // threads have seen the is_locked_by_vm() update above.
       MutexLocker cm_lock(CompiledMethod_lock, Mutex::_no_safepoint_check_flag);
       if (!nm->is_alive()) {
-        //  It was alive when we looked it up but it's no longer alive so release it.
-        locker.set_code(NULL);
         nm = NULL;
       }
     }
@@ -1479,8 +1472,6 @@ CodeBlob* JVMCIEnv::get_code_blob(JVMCIObject obj, nmethodLocker& locker) {
         }
         return nm;
       }
-      // The HotSpotNmethod no longer refers to a valid nmethod so clear the state
-      locker.set_code(NULL);
       nm = NULL;
     }
 
@@ -1499,8 +1490,8 @@ CodeBlob* JVMCIEnv::get_code_blob(JVMCIObject obj, nmethodLocker& locker) {
   return cb;
 }
 
-nmethod* JVMCIEnv::get_nmethod(JVMCIObject obj, nmethodLocker& locker) {
-  CodeBlob* cb = get_code_blob(obj, locker);
+nmethod* JVMCIEnv::get_nmethod(JVMCIObject obj) {
+  CodeBlob* cb = get_code_blob(obj);
   if (cb != NULL) {
     return cb->as_nmethod_or_null();
   }

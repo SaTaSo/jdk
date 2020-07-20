@@ -38,6 +38,7 @@ typedef class BytecodeInterpreter* interpreterState;
 
 class CodeBlob;
 class FrameValues;
+class Symbol;
 class vframeArray;
 class JavaCallWrapper;
 
@@ -248,6 +249,9 @@ class frame {
 
   // Find receiver out of caller's (compiled) argument list
   oop retrieve_receiver(RegisterMap *reg_map);
+
+  // Find appendix out of caller's (compiled) argument list
+  oop retrieve_appendix(RegisterMap* reg_map, Symbol* signature, bool has_receiver);
 
   // Return the monitor owner and BasicLock for compiled synchronized
   // native methods so that biased locking can revoke the receiver's

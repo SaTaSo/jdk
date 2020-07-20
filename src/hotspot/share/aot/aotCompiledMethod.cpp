@@ -25,9 +25,7 @@
 
 #include "aot/aotCodeHeap.hpp"
 #include "aot/aotLoader.hpp"
-#include "aot/compiledIC_aot.hpp"
 #include "code/codeCache.hpp"
-#include "code/compiledIC.hpp"
 #include "code/nativeInst.hpp"
 #include "compiler/compilerOracle.hpp"
 #include "gc/shared/cardTableBarrierSet.hpp"
@@ -188,17 +186,11 @@ bool AOTCompiledMethod::make_not_entrant_helper(int new_state) {
 #endif
 
     // Remove AOTCompiledMethod from method.
-    if (method() != NULL) {
-      method()->unlink_code(this);
+    if (method() != NULL && (method()->code() == this ||
+                             method()->from_compiled_entry() == entry_point())) {
+      method()->clear_code(false /* acquire_lock */, false /* update_tables */);
     }
   } // leave critical region under CompiledMethod_lock
-
-
-  if (TraceCreateZombies) {
-    ResourceMark m;
-    const char *new_state_str = (new_state == not_entrant) ? "not entrant" : "not used";
-    tty->print_cr("aot method <" INTPTR_FORMAT "> %s code made %s", p2i(this), this->method() ? this->method()->name_and_sig_as_C_string() : "null", new_state_str);
-  }
 
   return true;
 }
@@ -226,12 +218,6 @@ bool AOTCompiledMethod::make_entrant() {
     log_state_change();
   } // leave critical region under CompiledMethod_lock
 
-
-  if (TraceCreateZombies) {
-    ResourceMark m;
-    tty->print_cr("aot method <" INTPTR_FORMAT "> %s code made entrant", p2i(this), this->method() ? this->method()->name_and_sig_as_C_string() : "null");
-  }
-
   return true;
 }
 #endif // TIERED
@@ -239,7 +225,7 @@ bool AOTCompiledMethod::make_entrant() {
 // Iterate over metadata calling this function.   Used by RedefineClasses
 // Copied from nmethod::metadata_do
 void AOTCompiledMethod::metadata_do(MetadataClosure* f) {
-  address low_boundary = verified_entry_point();
+  address low_boundary = entry_point();
   {
     // Visit all immediate references that are embedded in the instruction stream.
     RelocIterator iter(this, low_boundary);
@@ -255,28 +241,6 @@ void AOTCompiledMethod::metadata_do(MetadataClosure* f) {
         if (r->metadata_is_immediate() && r->metadata_value() != NULL) {
           Metadata* md = r->metadata_value();
           if (md != _method) f->do_metadata(md);
-        }
-      } else if (iter.type() == relocInfo::virtual_call_type) {
-        ResourceMark rm;
-        // Check compiledIC holders associated with this nmethod
-        CompiledIC *ic = CompiledIC_at(&iter);
-        if (ic->is_icholder_call()) {
-          CompiledICHolder* cichk = ic->cached_icholder();
-          f->do_metadata(cichk->holder_metadata());
-          f->do_metadata(cichk->holder_klass());
-        } else {
-          // Get Klass* or NULL (if value is -1) from GOT cell of virtual call PLT stub.
-          Metadata* ic_oop = ic->cached_metadata();
-          if (ic_oop != NULL) {
-            f->do_metadata(ic_oop);
-          }
-        }
-      } else if (iter.type() == relocInfo::static_call_type ||
-                 iter.type() == relocInfo::opt_virtual_call_type) {
-        // Check Method* in AOT c2i stub for other calls.
-        Metadata* meta = (Metadata*)nativeLoadGot_at(nativePltCall_at(iter.addr())->plt_c2i_stub())->data();
-        if (meta != NULL) {
-          f->do_metadata(meta);
         }
       }
     }
@@ -378,62 +342,7 @@ void AOTCompiledMethod::log_state_change() const {
 }
 
 
-NativeInstruction* PltNativeCallWrapper::get_load_instruction(virtual_call_Relocation* r) const {
-  return nativeLoadGot_at(_call->plt_load_got());
-}
-
-void PltNativeCallWrapper::verify_resolve_call(address dest) const {
-  CodeBlob* db = CodeCache::find_blob_unsafe(dest);
-  if (db == NULL) {
-    assert(dest == _call->plt_resolve_call(), "sanity");
-  }
-}
-
-void PltNativeCallWrapper::set_to_interpreted(const methodHandle& method, CompiledICInfo& info) {
-  assert(!info.to_aot(), "only for nmethod");
-  CompiledPltStaticCall* csc = CompiledPltStaticCall::at(instruction_address());
-  csc->set_to_interpreted(method, info.entry());
-}
-
-NativeCallWrapper* AOTCompiledMethod::call_wrapper_at(address call) const {
-  return new PltNativeCallWrapper((NativePltCall*) call);
-}
-
-NativeCallWrapper* AOTCompiledMethod::call_wrapper_before(address return_pc) const {
-  return new PltNativeCallWrapper(nativePltCall_before(return_pc));
-}
-
-CompiledStaticCall* AOTCompiledMethod::compiledStaticCall_at(Relocation* call_site) const {
-  return CompiledPltStaticCall::at(call_site);
-}
-
-CompiledStaticCall* AOTCompiledMethod::compiledStaticCall_at(address call_site) const {
-  return CompiledPltStaticCall::at(call_site);
-}
-
-CompiledStaticCall* AOTCompiledMethod::compiledStaticCall_before(address return_addr) const {
-  return CompiledPltStaticCall::before(return_addr);
-}
-
 address AOTCompiledMethod::call_instruction_address(address pc) const {
   NativePltCall* pltcall = nativePltCall_before(pc);
   return pltcall->instruction_address();
-}
-
-void AOTCompiledMethod::clear_inline_caches() {
-  assert(SafepointSynchronize::is_at_safepoint(), "cleaning of IC's only allowed at safepoint");
-  if (is_zombie()) {
-    return;
-  }
-
-  ResourceMark rm;
-  RelocIterator iter(this);
-  while (iter.next()) {
-    iter.reloc()->clear_inline_cache();
-    if (iter.type() == relocInfo::opt_virtual_call_type) {
-      CompiledIC* cic = CompiledIC_at(&iter);
-      assert(cic->is_clean(), "!");
-      nativePltCall_at(iter.addr())->set_stub_to_clean();
-    }
-  }
 }

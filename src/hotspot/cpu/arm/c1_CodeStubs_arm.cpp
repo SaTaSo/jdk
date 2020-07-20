@@ -435,7 +435,6 @@ void ArrayCopyStub::emit_code(LIR_Assembler* ce) {
     }
   }
 
-  ce->emit_static_call_stub();
   if (ce->compilation()->bailed_out()) {
     return; // CodeCache is full
   }

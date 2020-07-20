@@ -70,19 +70,12 @@ import static java.lang.invoke.MethodHandleStatics.newInternalError;
  * and those seven fields omit much of the information in Method.
  * @author jrose
  */
-/*non-public*/
-final class ResolvedMethodName {
-    //@Injected JVM_Method* vmtarget;
-    //@Injected Class<?>    vmholder;
-};
-
-/*non-public*/
-final class MemberName implements Member, Cloneable {
+/*non-public*/ final class MemberName implements Member, Cloneable {
     private Class<?> clazz;       // class in which the member is defined
     private String   name;        // may be null if not yet materialized
     private Object   type;        // may be null if not yet materialized
     private int      flags;       // modifier bits; see reflect.Modifier
-    private ResolvedMethodName method;    // cached resolved method information
+    private int      method;      // cached resolved method information
     //@Injected intptr_t       vmindex;   // vtable index or offset of resolved member
     Object   resolution;  // if null, this guy is resolved
 

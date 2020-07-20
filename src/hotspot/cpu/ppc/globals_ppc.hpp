@@ -145,8 +145,6 @@ define_pd_global(intx, InitArrayShortSize, 9*BytesPerLong);
   product(bool, UseSIGTRAP, true,                                           \
           "Allow trap instructions that make use of SIGTRAP. Use this to "  \
           "switch off all optimizations requiring SIGTRAP.")                \
-  product(bool, TrapBasedICMissChecks, true,                                \
-          "Raise and handle SIGTRAP if inline cache miss detected.")        \
   product(bool, TraceTraps, false, "Trace all traps the signal handler"     \
           "handles.")                                                       \
                                                                             \

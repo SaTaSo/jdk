@@ -479,20 +479,6 @@ public:
   int  constant_offset_unchecked() const;
 };
 
-//------------------------------MachUEPNode-----------------------------------
-// Machine Unvalidated Entry Point Node
-class MachUEPNode : public MachIdealNode {
-public:
-  MachUEPNode( ) {}
-  virtual void emit(CodeBuffer &cbuf, PhaseRegAlloc *ra_) const;
-  virtual uint size(PhaseRegAlloc *ra_) const;
-
-#ifndef PRODUCT
-  virtual const char *Name() const { return "Unvalidated-Entry-Point"; }
-  virtual void format( PhaseRegAlloc *, outputStream *st ) const;
-#endif
-};
-
 //------------------------------MachPrologNode--------------------------------
 // Machine function Prolog Node
 class MachPrologNode : public MachIdealNode {
@@ -900,7 +886,7 @@ public:
   virtual bool  pinned() const { return false; }
   virtual const Type* Value(PhaseGVN* phase) const;
   virtual const RegMask &in_RegMask(uint) const;
-  virtual int ret_addr_offset() { return 0; }
+  virtual int ret_addr_offset(PhaseRegAlloc *ra_) { return 0; }
 
   bool returns_long() const { return tf()->return_type() == T_LONG; }
   bool return_value_is_used() const;
@@ -920,7 +906,7 @@ protected:
   virtual bool cmp( const Node &n ) const;
   virtual uint size_of() const; // Size is bigger
 public:
-  ciMethod* _method;                 // Method being direct called
+  ciMethod* _method;                 // Method being called
   bool      _override_symbolic_info; // Override symbolic call site info from bytecode
   int       _bci;                    // Byte Code index of call byte code
   bool      _optimized_virtual;      // Tells if node is a static call or an optimized virtual
@@ -930,17 +916,6 @@ public:
   }
 
   virtual const RegMask &in_RegMask(uint) const;
-
-  int resolved_method_index(CodeBuffer &cbuf) const {
-    if (_override_symbolic_info) {
-      // Attach corresponding Method* to the call site, so VM can use it during resolution
-      // instead of querying symbolic info from bytecode.
-      assert(_method != NULL, "method should be set");
-      assert(_method->constant_encoding()->is_method(), "should point to a Method");
-      return cbuf.oop_recorder()->find_index(_method->constant_encoding());
-    }
-    return 0; // Use symbolic info from bytecode (resolved_method == NULL).
-  }
 
 #ifndef PRODUCT
   virtual void dump_spec(outputStream *st) const;
@@ -961,7 +936,7 @@ public:
   // If this is an uncommon trap, return the request code, else zero.
   int uncommon_trap_request() const;
 
-  virtual int ret_addr_offset();
+  virtual int ret_addr_offset(PhaseRegAlloc *ra_);
 #ifndef PRODUCT
   virtual void dump_spec(outputStream *st) const;
   void dump_trap_args(outputStream *st) const;
@@ -973,11 +948,12 @@ public:
 class MachCallDynamicJavaNode : public MachCallJavaNode {
 public:
   int _vtable_index;
+  Bytecodes::Code _code;
   MachCallDynamicJavaNode() : MachCallJavaNode() {
     init_class_id(Class_MachCallDynamicJava);
     DEBUG_ONLY(_vtable_index = -99);  // throw an assert if uninitialized
   }
-  virtual int ret_addr_offset();
+  virtual int ret_addr_offset(PhaseRegAlloc *ra_);
 #ifndef PRODUCT
   virtual void dump_spec(outputStream *st) const;
 #endif
@@ -993,7 +969,7 @@ public:
   MachCallRuntimeNode() : MachCallNode() {
     init_class_id(Class_MachCallRuntime);
   }
-  virtual int ret_addr_offset();
+  virtual int ret_addr_offset(PhaseRegAlloc *ra_);
 #ifndef PRODUCT
   virtual void dump_spec(outputStream *st) const;
 #endif

@@ -114,6 +114,7 @@ class Universe: AllStatic {
   static LatestMethodCache* _loader_addClass_cache;    // method for registering loaded classes in class loader vector
   static LatestMethodCache* _throw_illegal_access_error_cache; // Unsafe.throwIllegalAccessError() method
   static LatestMethodCache* _throw_no_such_method_error_cache; // Unsafe.throwNoSuchMethodError() method
+  static LatestMethodCache* _throw_abstract_method_error_cache; // Unsafe.throwAbstractMethodError() method
   static LatestMethodCache* _do_stack_walk_cache;      // method for stack walker callback
 
   static Array<int>*            _the_empty_int_array;            // Canonicalized int array
@@ -260,6 +261,7 @@ class Universe: AllStatic {
 
   static Method*      throw_illegal_access_error()    { return _throw_illegal_access_error_cache->get_method(); }
   static Method*      throw_no_such_method_error()    { return _throw_no_such_method_error_cache->get_method(); }
+  static Method*      throw_abstract_method_error()   { return _throw_abstract_method_error_cache->get_method(); }
 
   static Method*      do_stack_walk_method()          { return _do_stack_walk_cache->get_method(); }
 
@@ -355,7 +357,6 @@ class Universe: AllStatic {
     Verify_MetaspaceUtils = 128,
     Verify_JNIHandles = 256,
     Verify_CodeCacheOops = 512,
-    Verify_ResolvedMethodTable = 1024,
     Verify_All = -1
   };
   static void initialize_verify_flags();

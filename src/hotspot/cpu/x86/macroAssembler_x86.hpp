@@ -29,6 +29,10 @@
 #include "utilities/macros.hpp"
 #include "runtime/rtmLocking.hpp"
 
+class ciMethod;
+class ciInstanceKlass;
+class LazyInvocation;
+
 // MacroAssembler extends Assembler by frequently used macros.
 //
 // Instructions for which a 'better' code sequence exists depending
@@ -191,9 +195,6 @@ class MacroAssembler: public Assembler {
   void align(int modulus);
   void align(int modulus, int target);
 
-  // A 5 byte nop that is safe for patching (see patch_verified_entry)
-  void fat_nop();
-
   // Stack frame creation/removal
   void enter();
   void leave();
@@ -308,10 +309,7 @@ class MacroAssembler: public Assembler {
   void testbool(Register dst);
 
   void resolve_oop_handle(Register result, Register tmp = rscratch2);
-  void resolve_weak_handle(Register result, Register tmp);
   void load_mirror(Register mirror, Register method, Register tmp = rscratch2);
-  void load_method_holder_cld(Register rresult, Register rmethod);
-
   void load_method_holder(Register holder, Register method);
 
   // oop manipulations
@@ -527,19 +525,39 @@ class MacroAssembler: public Assembler {
   );
   void zero_memory(Register address, Register length_in_bytes, int offset_in_bytes, Register temp);
 
+  // hash table lookup for invoke
+  void lookup_bucket_from_table_entry(Register result, Register rselector,
+                                      Register rtmp_table, Register rtmp);
+  void lookup_method_from_table_entry(Register rentry, Register rtmp1,
+                                      Register rtmp2, Register rtmp3);
+  void lookup_itable_selector(Register rselector, Register rtmp_klass, Register rtmp1, Register rtmp2);
+
+  // itable and vtable lookup
+  void lookup_vtable_entry(Register dst, Register rklass, int32_t vtable_index);
+  void lookup_vtable_entry(Register dst, Register rklass, Register vtable_index);
+  void lookup_itable_entry(Register rselector, Register rklass, Register rtmp, Label& dispatch_to_entry);
+
+  void unpack_table_entry(Register rmethod, Register rentry);
+
+  // Compiled invoke code
+  void compiled_lazy_call(LazyInvocation* lazy);
+  void compiled_direct_call(ciMethod* method);
+  void compiled_vtable_call(int vtable_index);
+  void compiled_itable_call(Register rselector, Register rrefc, ciMethod* method);
+
+  // Entries
+  void c2i_itable_entry();
+  void c2i_vtable_entry();
+  void c2i_clinit_entry();
+
   // interface method calling
-  void lookup_interface_method(Register recv_klass,
-                               Register intf_klass,
-                               RegisterOrConstant itable_index,
-                               Register method_result,
-                               Register scan_temp,
-                               Label& no_such_interface,
-                               bool return_method = true);
+  // Note that this function assumes that the caller has already performed a RECV is-a REFC check
+  // that makes this valid. This is only necessary, if the verifier has entered insane mode, where
+  // we no longer trust the underlying bytecodes in the JVM to be type safe regarding interfaces.
+  void lookup_interface_method(Register rmethod, Register rklass, Register rtmp1, Register rtmp2);
 
   // virtual method calling
-  void lookup_virtual_method(Register recv_klass,
-                             RegisterOrConstant vtable_index,
-                             Register method_result);
+  void lookup_virtual_method(Register rmethod, Register rklass, Register rtmp1, Register rtmp2);
 
   // Test sub_klass against super_klass, with fast and slow paths.
 
@@ -823,9 +841,6 @@ class MacroAssembler: public Assembler {
   // the address contained by entry. This is because this is more natural
   // for jumps/calls.
   void call(AddressLiteral entry);
-
-  // Emit the CompiledIC call idiom
-  void ic_call(address entry, jint method_index = 0);
 
   // Jumps
 

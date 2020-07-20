@@ -320,13 +320,11 @@ public:
 
   void fthrow_error(const char* file, int line, const char* format, ...) ATTRIBUTE_PRINTF(4, 5);
 
-  // Given an instance of HotSpotInstalledCode return the corresponding CodeBlob*.  The
-  // nmethodLocker is required to keep the CodeBlob alive in the case where it's an nmethod.
-  CodeBlob* get_code_blob(JVMCIObject code, nmethodLocker& locker);
+  // Given an instance of HotSpotInstalledCode return the corresponding CodeBlob*.
+  CodeBlob* get_code_blob(JVMCIObject code);
 
-  // Given an instance of HotSpotInstalledCode return the corresponding nmethod.  The
-  // nmethodLocker is required to keep the nmethod alive.
-  nmethod* get_nmethod(JVMCIObject code, nmethodLocker& locker);
+  // Given an instance of HotSpotInstalledCode return the corresponding nmethod.
+  nmethod* get_nmethod(JVMCIObject code);
 
   MethodData* asMethodData(jlong metaspaceMethodData) {
     return (MethodData*) (address) metaspaceMethodData;

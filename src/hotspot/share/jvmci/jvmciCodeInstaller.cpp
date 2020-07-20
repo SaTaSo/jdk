@@ -22,8 +22,10 @@
  */
 
 #include "precompiled.hpp"
+#include "asm/register.hpp"
 #include "classfile/javaClasses.inline.hpp"
-#include "code/compiledIC.hpp"
+#include "classfile/vmSymbols.hpp"
+#include "code/vmreg.inline.hpp"
 #include "compiler/compileBroker.hpp"
 #include "jvmci/jvmciCodeInstaller.hpp"
 #include "jvmci/jvmciCompilerToVM.hpp"
@@ -778,12 +780,7 @@ int CodeInstaller::estimate_stubs_size(JVMCI_TRAPS) {
 #endif
     }
   }
-  int size = static_call_stubs * CompiledStaticCall::to_interp_stub_size();
-  size += trampoline_stubs * CompiledStaticCall::to_trampoline_stub_size();
-#if INCLUDE_AOT
-  size += aot_call_stubs * CompiledStaticCall::to_aot_stub_size();
-#endif
-  return size;
+  return 0;
 }
 
 // perform data and call relocation on the CodeBuffer
@@ -1252,17 +1249,6 @@ void CodeInstaller::site_Call(CodeBuffer& buffer, jint pc_offset, JVMCIObject si
     if (debug_info.is_null()) {
       JVMCI_ERROR("debug info expected at call at %i", pc_offset);
     }
-
-    JVMCI_event_3("method call");
-    CodeInstaller::pd_relocate_JavaMethod(buffer, hotspot_method, pc_offset, JVMCI_CHECK);
-    if (_next_call_type == INVOKESTATIC || _next_call_type == INVOKESPECIAL) {
-      // Need a static call stub for transitions from compiled to interpreted.
-      CompiledStaticCall::emit_to_interp_stub(buffer, _instructions->start() + pc_offset);
-    }
-#if INCLUDE_AOT
-    // Trampoline to far aot code.
-    CompiledStaticCall::emit_to_aot_stub(buffer, _instructions->start() + pc_offset);
-#endif
   }
 
   _next_call_type = INVOKE_INVALID;
@@ -1336,7 +1322,7 @@ void CodeInstaller::site_Mark(CodeBuffer& buffer, jint pc_offset, JVMCIObject si
         _offsets.set_value(CodeOffsets::Entry, pc_offset);
         break;
       case VERIFIED_ENTRY:
-        _offsets.set_value(CodeOffsets::Verified_Entry, pc_offset);
+        _offsets.set_value(CodeOffsets::Entry, pc_offset);
         break;
       case OSR_ENTRY:
         _offsets.set_value(CodeOffsets::OSR_Entry, pc_offset);

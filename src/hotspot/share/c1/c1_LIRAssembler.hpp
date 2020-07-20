@@ -76,10 +76,6 @@ class LIR_Assembler: public CompilationResourceObj {
 
   // code emission patterns and accessors
   void check_codespace();
-  bool needs_icache(ciMethod* method) const;
-
-  // returns offset of icache check
-  int check_icache();
 
   bool needs_clinit_barrier_on_entry(ciMethod* method) const;
   void clinit_barrier(ciMethod* method);
@@ -139,7 +135,6 @@ class LIR_Assembler: public CompilationResourceObj {
 
   // stubs
   void emit_slow_case_stubs();
-  void emit_static_call_stub();
   void append_code_stub(CodeStub* op);
   void add_call_info_here(CodeEmitInfo* info)                              { add_call_info(code_offset(), info); }
 
@@ -220,9 +215,9 @@ class LIR_Assembler: public CompilationResourceObj {
   void comp_fl2i(LIR_Code code, LIR_Opr left, LIR_Opr right, LIR_Opr result, LIR_Op2* op);
   void cmove(LIR_Condition code, LIR_Opr left, LIR_Opr right, LIR_Opr result, BasicType type);
 
-  void call(        LIR_OpJavaCall* op, relocInfo::relocType rtype);
-  void ic_call(     LIR_OpJavaCall* op);
-  void vtable_call( LIR_OpJavaCall* op);
+  void direct_call(LIR_OpJavaCall* op);
+  void vtable_call(LIR_OpJavaCall* op);
+  void itable_call(LIR_OpJavaCall* op);
 
   void osr_entry();
 
@@ -233,7 +228,6 @@ class LIR_Assembler: public CompilationResourceObj {
   void monitor_address(int monitor_ix, LIR_Opr dst);
 
   void align_backward_branch_target();
-  void align_call(LIR_Code code);
 
   void negate(LIR_Opr left, LIR_Opr dest, LIR_Opr tmp = LIR_OprFact::illegalOpr);
   void leal(LIR_Opr src, LIR_Opr dest, LIR_PatchCode patch_code = lir_patch_none, CodeEmitInfo* info = NULL);

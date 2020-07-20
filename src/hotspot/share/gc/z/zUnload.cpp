@@ -24,7 +24,6 @@
 #include "precompiled.hpp"
 #include "classfile/classLoaderDataGraph.hpp"
 #include "classfile/systemDictionary.hpp"
-#include "code/codeBehaviours.hpp"
 #include "code/codeCache.hpp"
 #include "code/dependencyContext.hpp"
 #include "gc/shared/gcBehaviours.hpp"
@@ -77,32 +76,6 @@ public:
   }
 };
 
-class ZCompiledICProtectionBehaviour : public CompiledICProtectionBehaviour {
-public:
-  virtual bool lock(CompiledMethod* method) {
-    nmethod* const nm = method->as_nmethod();
-    ZReentrantLock* const lock = ZNMethod::lock_for_nmethod(nm);
-    lock->lock();
-    return true;
-  }
-
-  virtual void unlock(CompiledMethod* method) {
-    nmethod* const nm = method->as_nmethod();
-    ZReentrantLock* const lock = ZNMethod::lock_for_nmethod(nm);
-    lock->unlock();
-  }
-
-  virtual bool is_safe(CompiledMethod* method) {
-    if (SafepointSynchronize::is_at_safepoint()) {
-      return true;
-    }
-
-    nmethod* const nm = method->as_nmethod();
-    ZReentrantLock* const lock = ZNMethod::lock_for_nmethod(nm);
-    return lock->is_owned();
-  }
-};
-
 ZUnload::ZUnload(ZWorkers* workers) :
     _workers(workers) {
 
@@ -112,9 +85,6 @@ ZUnload::ZUnload(ZWorkers* workers) :
 
   static ZIsUnloadingBehaviour is_unloading_behaviour;
   IsUnloadingBehaviour::set_current(&is_unloading_behaviour);
-
-  static ZCompiledICProtectionBehaviour ic_protection_behaviour;
-  CompiledICProtectionBehaviour::set_current(&ic_protection_behaviour);
 }
 
 void ZUnload::prepare() {

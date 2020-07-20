@@ -451,8 +451,6 @@ void ArrayCopyStub::emit_code(LIR_Assembler* ce) {
   __ extsw(R6_ARG4, dst_pos()->as_register());
   __ extsw(R7_ARG5, length()->as_register());
 
-  ce->emit_static_call_stub();
-
   bool success = ce->emit_trampoline_stub_for_call(SharedRuntime::get_resolve_static_call_stub());
   if (!success) { return; }
 

@@ -42,7 +42,6 @@ class CompilerToVM {
 
     static int Method_extra_stack_entries;
 
-    static address SharedRuntime_ic_miss_stub;
     static address SharedRuntime_handle_wrong_method_stub;
     static address SharedRuntime_deopt_blob_unpack;
     static address SharedRuntime_deopt_blob_unpack_with_exception_in_tls;
@@ -71,7 +70,7 @@ class CompilerToVM {
 
     static int vm_page_size;
 
-    static int sizeof_vtableEntry;
+    static int sizeof_tableEntry;
     static int sizeof_ExceptionTableElement;
     static int sizeof_LocalVariableTableElement;
     static int sizeof_ConstantPool;

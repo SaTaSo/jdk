@@ -67,14 +67,4 @@ enum {
   _deopt_handler_size = MacroAssembler::bl64_patchable_size
 };
 
-  // '_static_call_stub_size' is only used on ppc (see LIR_Assembler::emit_static_call_stub()
-  // in c1_LIRAssembler_ppc.cpp. The other, shared getters are defined in c1_LIRAssembler.hpp
-  static int static_call_stub_size() {
-    if (UseAOT) {
-      return _static_call_stub_size + _call_aot_stub_size;
-    } else {
-      return _static_call_stub_size;
-    }
-  }
-
 #endif // CPU_PPC_C1_LIRASSEMBLER_PPC_HPP

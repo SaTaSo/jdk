@@ -952,9 +952,9 @@ enum LIR_Code {
   , end_op3
   , begin_opJavaCall
       , lir_static_call
-      , lir_optvirtual_call
-      , lir_icvirtual_call
+      , lir_direct_call
       , lir_virtual_call
+      , lir_interface_call
       , lir_dynamic_call
   , end_opJavaCall
   , begin_opArrayCopy
@@ -1163,32 +1163,40 @@ class LIR_OpJavaCall: public LIR_OpCall {
  friend class LIR_OpVisitState;
 
  private:
-  ciMethod* _method;
-  LIR_Opr   _receiver;
-  LIR_Opr   _method_handle_invoke_SP_save_opr;  // Used in LIR_OpVisitState::visit to store the reference to FrameMap::method_handle_invoke_SP_save_opr.
+  ciMethod*        _method;
+  ciInstanceKlass* _refc;
+  LIR_Opr          _receiver;
+  LIR_Opr          _method_handle_invoke_SP_save_opr;  // Used in LIR_OpVisitState::visit to store the reference to FrameMap::method_handle_invoke_SP_save_opr.
+  CodeEmitInfo*    _info_for_exception;
 
  public:
-  LIR_OpJavaCall(LIR_Code code, ciMethod* method,
+  LIR_OpJavaCall(LIR_Code code, ciMethod* method, ciInstanceKlass* refc,
                  LIR_Opr receiver, LIR_Opr result,
-                 address addr, LIR_OprList* arguments,
-                 CodeEmitInfo* info)
-  : LIR_OpCall(code, addr, result, arguments, info)
+                 LIR_OprList* arguments, CodeEmitInfo* info, CodeEmitInfo* info_for_exception)
+  : LIR_OpCall(code, NULL, result, arguments, info)
   , _method(method)
+  , _refc(refc)
   , _receiver(receiver)
   , _method_handle_invoke_SP_save_opr(LIR_OprFact::illegalOpr)
+  , _info_for_exception(info_for_exception)
   { assert(is_in_range(code, begin_opJavaCall, end_opJavaCall), "code check"); }
 
   LIR_OpJavaCall(LIR_Code code, ciMethod* method,
-                 LIR_Opr receiver, LIR_Opr result, intptr_t vtable_offset,
-                 LIR_OprList* arguments, CodeEmitInfo* info)
-  : LIR_OpCall(code, (address)vtable_offset, result, arguments, info)
+                 LIR_Opr receiver, LIR_Opr result, int vtable_index,
+                 LIR_OprList* arguments, CodeEmitInfo* info, CodeEmitInfo* info_for_exception)
+    : LIR_OpCall(code, (address)(intptr_t)vtable_index, result, arguments, info)
   , _method(method)
+  , _refc(NULL)
   , _receiver(receiver)
   , _method_handle_invoke_SP_save_opr(LIR_OprFact::illegalOpr)
+  , _info_for_exception(info_for_exception)
   { assert(is_in_range(code, begin_opJavaCall, end_opJavaCall), "code check"); }
+
 
   LIR_Opr receiver() const                       { return _receiver; }
   ciMethod* method() const                       { return _method;   }
+  ciInstanceKlass* refc() const                  { return _refc;     }
+  CodeEmitInfo* info_for_exception() const       { return _info_for_exception; }
 
   // JSR 292 support.
   bool is_invokedynamic() const                  { return code() == lir_dynamic_call; }
@@ -1197,10 +1205,7 @@ class LIR_OpJavaCall: public LIR_OpCall {
            method()->is_method_handle_intrinsic();  // JVM-generated MH intrinsic
   }
 
-  intptr_t vtable_offset() const {
-    assert(_code == lir_virtual_call, "only have vtable for real vcall");
-    return (intptr_t) addr();
-  }
+  int vtable_index() { return (int)(intptr_t) addr(); }
 
   virtual void emit_code(LIR_Assembler* masm);
   virtual LIR_OpJavaCall* as_OpJavaCall() { return this; }
@@ -1241,6 +1246,7 @@ class LIR_OpArrayCopy: public LIR_Op {
   LIR_Opr   _tmp;
   ciArrayKlass* _expected_type;
   int       _flags;
+  ciMethod* _method;
 
 public:
   enum Flags {
@@ -1260,7 +1266,7 @@ public:
   };
 
   LIR_OpArrayCopy(LIR_Opr src, LIR_Opr src_pos, LIR_Opr dst, LIR_Opr dst_pos, LIR_Opr length, LIR_Opr tmp,
-                  ciArrayKlass* expected_type, int flags, CodeEmitInfo* info);
+                  ciArrayKlass* expected_type, int flags, CodeEmitInfo* info, ciMethod* method);
 
   LIR_Opr src() const                            { return _src; }
   LIR_Opr src_pos() const                        { return _src_pos; }
@@ -1275,6 +1281,7 @@ public:
   virtual void emit_code(LIR_Assembler* masm);
   virtual LIR_OpArrayCopy* as_OpArrayCopy() { return this; }
   void print_instr(outputStream* out) const PRODUCT_RETURN;
+  ciMethod* method() const { return _method; }
 };
 
 // LIR_OpUpdateCRC32
@@ -2021,26 +2028,25 @@ class LIR_List: public CompilationResourceObj {
 
 
   //---------- instructions -------------
-  void call_opt_virtual(ciMethod* method, LIR_Opr receiver, LIR_Opr result,
-                        address dest, LIR_OprList* arguments,
-                        CodeEmitInfo* info) {
-    append(new LIR_OpJavaCall(lir_optvirtual_call, method, receiver, result, dest, arguments, info));
+  void call_direct(ciMethod* method, LIR_Opr receiver, LIR_Opr result,
+                   LIR_OprList* arguments, CodeEmitInfo* info, CodeEmitInfo* info_for_exception) {
+    append(new LIR_OpJavaCall(lir_direct_call, method, NULL, receiver, result, arguments, info, info_for_exception));
   }
   void call_static(ciMethod* method, LIR_Opr result,
                    address dest, LIR_OprList* arguments, CodeEmitInfo* info) {
-    append(new LIR_OpJavaCall(lir_static_call, method, LIR_OprFact::illegalOpr, result, dest, arguments, info));
-  }
-  void call_icvirtual(ciMethod* method, LIR_Opr receiver, LIR_Opr result,
-                      address dest, LIR_OprList* arguments, CodeEmitInfo* info) {
-    append(new LIR_OpJavaCall(lir_icvirtual_call, method, receiver, result, dest, arguments, info));
+    append(new LIR_OpJavaCall(lir_static_call, method, NULL, LIR_OprFact::illegalOpr, result, arguments, info, NULL));
   }
   void call_virtual(ciMethod* method, LIR_Opr receiver, LIR_Opr result,
-                    intptr_t vtable_offset, LIR_OprList* arguments, CodeEmitInfo* info) {
-    append(new LIR_OpJavaCall(lir_virtual_call, method, receiver, result, vtable_offset, arguments, info));
+                    int vtable_index, LIR_OprList* arguments, CodeEmitInfo* info, CodeEmitInfo* info_for_exception) {
+    append(new LIR_OpJavaCall(lir_virtual_call, method, receiver, result, vtable_index, arguments, info, info_for_exception));
+  }
+  void call_interface(ciMethod* method, ciInstanceKlass* refc, LIR_Opr receiver, LIR_Opr result,
+                      LIR_OprList* arguments, CodeEmitInfo* info, CodeEmitInfo* info_for_exception) {
+    append(new LIR_OpJavaCall(lir_interface_call, method, refc, receiver, result, arguments, info, info_for_exception));
   }
   void call_dynamic(ciMethod* method, LIR_Opr receiver, LIR_Opr result,
-                    address dest, LIR_OprList* arguments, CodeEmitInfo* info) {
-    append(new LIR_OpJavaCall(lir_dynamic_call, method, receiver, result, dest, arguments, info));
+                    address dest, LIR_OprList* arguments, CodeEmitInfo* info, CodeEmitInfo* info_for_exception) {
+    append(new LIR_OpJavaCall(lir_dynamic_call, method, NULL, receiver, result, arguments, info, info_for_exception));
   }
 
   void get_thread(LIR_Opr result)                { append(new LIR_Op0(lir_get_thread, result)); }
@@ -2220,7 +2226,11 @@ class LIR_List: public CompilationResourceObj {
 
   void breakpoint()                                                  { append(new LIR_Op0(lir_breakpoint)); }
 
-  void arraycopy(LIR_Opr src, LIR_Opr src_pos, LIR_Opr dst, LIR_Opr dst_pos, LIR_Opr length, LIR_Opr tmp, ciArrayKlass* expected_type, int flags, CodeEmitInfo* info) { append(new LIR_OpArrayCopy(src, src_pos, dst, dst_pos, length, tmp, expected_type, flags, info)); }
+  void arraycopy(LIR_Opr src, LIR_Opr src_pos, LIR_Opr dst, LIR_Opr dst_pos,
+                 LIR_Opr length, LIR_Opr tmp, ciArrayKlass* expected_type,
+                 int flags, CodeEmitInfo* info, ciMethod* method) {
+    append(new LIR_OpArrayCopy(src, src_pos, dst, dst_pos, length, tmp, expected_type, flags, info, method));
+  }
 
   void update_crc32(LIR_Opr crc, LIR_Opr val, LIR_Opr res)  { append(new LIR_OpUpdateCRC32(crc, val, res)); }
 

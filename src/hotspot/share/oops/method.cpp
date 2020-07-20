@@ -53,6 +53,7 @@
 #include "oops/objArrayKlass.hpp"
 #include "oops/objArrayOop.inline.hpp"
 #include "oops/oop.inline.hpp"
+#include "oops/selectorMap.inline.hpp"
 #include "oops/symbol.hpp"
 #include "prims/jvmtiExport.hpp"
 #include "prims/methodHandles.hpp"
@@ -88,7 +89,53 @@ Method* Method::allocate(ClassLoaderData* loader_data,
                                           method_type,
                                           CHECK_NULL);
   int size = Method::size(access_flags.is_native());
-  return new (loader_data, size, MetaspaceObj::MethodType, THREAD) Method(cm, access_flags);
+  return new (loader_data, size, 0, MetaspaceObj::MethodType, THREAD) Method(cm, access_flags);
+}
+
+void Method::compute_selector() {
+  assert(constMethod() != NULL, "sanity");
+  SelectorMap<Method*> method_map = SystemDictionary::method_selector_map();
+  static volatile uint32_t global_rand = 2063391055u ^ os::javaTimeMillis(); // Super random number.
+  uint32_t selector;
+  for (;;) {
+    uint32_t rand = random_helper(global_rand);
+    selector = rand;
+
+    uint32_t mask1 = selector & 0x7;
+    while (mask1 == 0) {
+      rand = random_helper(rand);
+      mask1 = rand & 0x7;
+      selector |= mask1;
+    }
+
+    uint32_t mask2 = selector & 0x70000;
+    while (mask2 == 0 || mask1 == mask2) {
+      selector ^= mask2;
+      rand = random_helper(rand);
+      mask2 = rand & 0x70000;
+      selector |= mask2;
+    }
+
+    global_rand = rand;
+
+    // Make some extra room for code pointer bits.
+    uint32_t code_bit_mask = ~0u >> CodeCache::code_pointer_shift();
+    selector &= code_bit_mask;
+
+    if (selector == 0 || selector == 0xFFFFFFFF) {
+      continue;
+    }
+
+    if (!method_map.set(selector, this)) {
+      // Already taken, try a new selector
+      continue;
+    }
+    break;
+  }
+  if (Atomic::cmpxchg(&_selector, 0u, selector) != 0) {
+    // Give back the table entry in case of racy collisions.
+    method_map.set(selector, NULL);
+  }
 }
 
 Method::Method(ConstMethod* xconst, AccessFlags access_flags) {
@@ -107,7 +154,8 @@ Method::Method(ConstMethod* xconst, AccessFlags access_flags) {
   // Fix and bury in Method*
   set_interpreter_entry(NULL); // sets i2i entry and from_int
   set_adapter_entry(NULL);
-  Method::clear_code(); // from_c/from_i get set to c2i/i2i
+  _selector = 0;
+  clear_code(false /* acquire_lock */, false /* update_tables */);
 
   if (access_flags.is_native()) {
     clear_native_function();
@@ -150,9 +198,14 @@ address Method::get_c2i_entry() {
   return adapter()->get_c2i_entry();
 }
 
-address Method::get_c2i_unverified_entry() {
+address Method::get_c2i_itable_entry() {
   assert(adapter() != NULL, "must have");
-  return adapter()->get_c2i_unverified_entry();
+  return adapter()->get_c2i_itable_entry();
+}
+
+address Method::get_c2i_vtable_entry() {
+  assert(adapter() != NULL, "must have");
+  return adapter()->get_c2i_vtable_entry();
 }
 
 address Method::get_c2i_no_clinit_check_entry() {
@@ -365,25 +418,13 @@ void Method::set_vtable_index(int index) {
     // At runtime initialize_vtable is rerun as part of link_class_impl()
     // for a shared class loaded by the non-boot loader to obtain the loader
     // constraints based on the runtime classloaders' context.
+    if (_vtable_index != index) {
+      _vtable_index = index;
+    }
     return; // don't write into the shared class
   } else {
     _vtable_index = index;
   }
-}
-
-void Method::set_itable_index(int index) {
-  if (is_shared() && !MetaspaceShared::remapped_readwrite()) {
-    // At runtime initialize_itable is rerun as part of link_class_impl()
-    // for a shared class loaded by the non-boot loader to obtain the loader
-    // constraints based on the runtime classloaders' context. The dumptime
-    // itable index should be the same as the runtime index.
-    assert(_vtable_index == itable_index_max - index,
-           "archived itable index is different from runtime index");
-    return; // don’t write into the shared class
-  } else {
-    _vtable_index = itable_index_max - index;
-  }
-  assert(valid_itable_index(), "");
 }
 
 // The RegisterNatives call being attempted tried to register with a method that
@@ -919,7 +960,7 @@ void Method::clear_native_function() {
   set_native_function(
     SharedRuntime::native_method_throw_unsatisfied_link_error_entry(),
     !native_bind_event_is_interesting);
-  this->unlink_code();
+  clear_code(true /* acquire_lock */, true /* update_tables */);
 }
 
 
@@ -1032,38 +1073,29 @@ void Method::set_not_osr_compilable(const char* reason, int comp_level, bool rep
   assert(!CompilationPolicy::can_be_osr_compiled(methodHandle(Thread::current(), this), comp_level), "sanity check");
 }
 
+void Method::unlink_code(CompiledMethod* cm, bool acquire_lock) {
+  MutexLocker pl(acquire_lock ? CompiledMethod_lock : NULL, Mutex::_no_safepoint_check_flag);
+  if (_code == cm) {
+    clear_code(false /* acquire_lock */, method_holder()->is_loader_alive() /* update_tables */);
+  }
+}
+
 // Revert to using the interpreter and clear out the nmethod
-void Method::clear_code() {
+void Method::clear_code(bool acquire_lock, bool update_tables) {
+  MutexLocker pl(acquire_lock ? CompiledMethod_lock : NULL, Mutex::_no_safepoint_check_flag);
   // this may be NULL if c2i adapters have not been made yet
   // Only should happen at allocate time.
   if (adapter() == NULL) {
-    _from_compiled_entry    = NULL;
+    _from_compiled_entry           = NULL;
   } else {
-    _from_compiled_entry    = adapter()->get_c2i_entry();
+    _from_compiled_entry           = adapter()->get_c2i_entry();
   }
   OrderAccess::storestore();
   _from_interpreted_entry = _i2i_entry;
   OrderAccess::storestore();
-  _code = NULL;
-}
-
-void Method::unlink_code(CompiledMethod *compare) {
-  MutexLocker ml(CompiledMethod_lock->owned_by_self() ? NULL : CompiledMethod_lock, Mutex::_no_safepoint_check_flag);
-  // We need to check if either the _code or _from_compiled_code_entry_point
-  // refer to this nmethod because there is a race in setting these two fields
-  // in Method* as seen in bugid 4947125.
-  // If the vep() points to the zombie nmethod, the memory for the nmethod
-  // could be flushed and the compiler and vtable stubs could still call
-  // through it.
-  if (code() == compare ||
-      from_compiled_entry() == compare->verified_entry_point()) {
-    clear_code();
+  if (_code != NULL) {
+    _code = NULL;
   }
-}
-
-void Method::unlink_code() {
-  MutexLocker ml(CompiledMethod_lock->owned_by_self() ? NULL : CompiledMethod_lock, Mutex::_no_safepoint_check_flag);
-  clear_code();
 }
 
 #if INCLUDE_CDS
@@ -1214,13 +1246,13 @@ void Method::link_method(const methodHandle& h_method, TRAPS) {
   // called from the vtable.  We need adapters on such methods that get loaded
   // later.  Ditto for mega-morphic itable calls.  If this proves to be a
   // problem we'll make these lazily later.
-  (void) make_adapters(h_method, CHECK);
+  make_adapters(h_method, CHECK);
 
   // ONLY USE the h_method now as make_adapter may have blocked
 
 }
 
-address Method::make_adapters(const methodHandle& mh, TRAPS) {
+void Method::make_adapters(const methodHandle& mh, TRAPS) {
   // Adapters for compiled code are made eagerly here.  They are fairly
   // small (generally < 100 bytes) and quick to make (and cached and shared)
   // so making them eagerly shouldn't be too expensive.
@@ -1232,7 +1264,7 @@ address Method::make_adapters(const methodHandle& mh, TRAPS) {
       // Java exception object.
       vm_exit_during_initialization("Out of space in CodeCache for adapters");
     } else {
-      THROW_MSG_NULL(vmSymbols::java_lang_VirtualMachineError(), "Out of space in CodeCache for adapters");
+      THROW_MSG(vmSymbols::java_lang_VirtualMachineError(), "Out of space in CodeCache for adapters");
     }
   }
 
@@ -1243,11 +1275,22 @@ address Method::make_adapters(const methodHandle& mh, TRAPS) {
     mh->set_adapter_entry(adapter);
     mh->_from_compiled_entry = adapter->get_c2i_entry();
   }
-  return adapter->get_c2i_entry();
 }
 
 void Method::restore_unshareable_info(TRAPS) {
   assert(is_method() && is_valid_method(this), "ensure C++ vtable is restored");
+
+  if (_selector != 0) {
+    // TODO: The real solution for CDS is to store the method_selector_map in the archive.
+    // Since I don't now, it is possible that somebody else stole the selector used by this
+    // method at dump time. I will go with this for now because it happens rarely and allows
+    // testing of more things, while waiting for the proper solution.
+    SelectorMap<Method*> method_map = SystemDictionary::method_selector_map();
+    if (!method_map.set(_selector, this)) {
+      Method* what_else = method_map.get(_selector);
+      assert(what_else == this, "expected %lx, found %lx", p2i(this), p2i(what_else));
+    }
+  }
 
   // Since restore_unshareable_info can be called more than once for a method, don't
   // redo any work.
@@ -1257,26 +1300,21 @@ void Method::restore_unshareable_info(TRAPS) {
   }
 }
 
+address Method::from_compiled_entry() const {
+  return Atomic::load_acquire(&_from_compiled_entry);
+}
+
+address Method::from_interpreted_entry() const {
+  return Atomic::load_acquire(&_from_interpreted_entry);
+}
+
 address Method::from_compiled_entry_no_trampoline() const {
   CompiledMethod *code = Atomic::load_acquire(&_code);
   if (code) {
-    return code->verified_entry_point();
+    return code->entry_point();
   } else {
     return adapter()->get_c2i_entry();
   }
-}
-
-// The verified_code_entry() must be called when a invoke is resolved
-// on this method.
-
-// It returns the compiled code entry point, after asserting not null.
-// This function is called after potential safepoints so that nmethod
-// or adapter that it points to is still live and valid.
-// This function must not hit a safepoint!
-address Method::verified_code_entry() {
-  debug_only(NoSafepointVerifier nsv;)
-  assert(_from_compiled_entry != NULL, "must be set");
-  return _from_compiled_entry;
 }
 
 // Check that if an nmethod ref exists, it has a backlink to this or no backlink at all
@@ -1309,7 +1347,8 @@ void Method::set_code(const methodHandle& mh, CompiledMethod *code) {
   }
 
   OrderAccess::storestore();
-  mh->_from_compiled_entry = code->verified_entry_point();
+  address old_from_compiled = mh->_from_compiled_entry;
+  mh->_from_compiled_entry = code->entry_point();
   OrderAccess::storestore();
   // Instantly compiled code can execute.
   if (!mh->is_method_handle_intrinsic())
@@ -1488,7 +1527,7 @@ Klass* Method::check_non_bcp_klass(Klass* klass) {
 
 
 methodHandle Method::clone_with_new_data(const methodHandle& m, u_char* new_code, int new_code_length,
-                                                u_char* new_compressed_linenumber_table, int new_compressed_linenumber_size, TRAPS) {
+                                         u_char* new_compressed_linenumber_table, int new_compressed_linenumber_size, TRAPS) {
   // Code below does not work for native methods - they should never get rewritten anyway
   assert(!m->is_native(), "cannot rewrite native methods");
   // Allocate new Method*
@@ -2240,7 +2279,7 @@ void Method::destroy_jmethod_id(ClassLoaderData* loader_data, jmethodID m) {
   cld->jmethod_ids()->destroy_method(ptr);
 }
 
-void Method::change_method_associated_with_jmethod_id(jmethodID jmid, Method* new_method) {
+void Method::change_method_associated_with_jmethod_id(jmethodID jmid, Method* old_method, Method* new_method) {
   // Can't assert the method_holder is the same because the new method has the
   // scratch method holder.
   assert(resolve_jmethod_id(jmid)->method_holder()->class_loader()

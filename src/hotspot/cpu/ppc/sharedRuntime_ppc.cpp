@@ -26,14 +26,11 @@
 #include "precompiled.hpp"
 #include "asm/macroAssembler.inline.hpp"
 #include "code/debugInfoRec.hpp"
-#include "code/icBuffer.hpp"
-#include "code/vtableStubs.hpp"
 #include "frame_ppc.hpp"
 #include "gc/shared/gcLocker.hpp"
 #include "interpreter/interpreter.hpp"
 #include "interpreter/interp_masm.hpp"
 #include "memory/resourceArea.hpp"
-#include "oops/compiledICHolder.hpp"
 #include "oops/klass.inline.hpp"
 #include "runtime/safepointMechanism.hpp"
 #include "runtime/sharedRuntime.hpp"
@@ -1212,64 +1209,9 @@ AdapterHandlerEntry* SharedRuntime::generate_i2c2i_adapters(MacroAssembler *masm
   BLOCK_COMMENT("c2i unverified entry");
   c2i_unverified_entry = __ pc();
 
-  // inline_cache contains a compiledICHolder
-  const Register ic             = R19_method;
-  const Register ic_klass       = R11_scratch1;
-  const Register receiver_klass = R12_scratch2;
-  const Register code           = R21_tmp1;
-  const Register ientry         = R23_tmp3;
-
-  assert_different_registers(ic, ic_klass, receiver_klass, R3_ARG1, code, ientry);
-  assert(R11_scratch1 == R11, "need prologue scratch register");
-
-  Label call_interpreter;
-
-  assert(!MacroAssembler::needs_explicit_null_check(oopDesc::klass_offset_in_bytes()),
-         "klass offset should reach into any page");
-  // Check for NULL argument if we don't have implicit null checks.
-  if (!ImplicitNullChecks || !os::zero_page_read_protected()) {
-    if (TrapBasedNullChecks) {
-      __ trap_null_check(R3_ARG1);
-    } else {
-      Label valid;
-      __ cmpdi(CCR0, R3_ARG1, 0);
-      __ bne_predict_taken(CCR0, valid);
-      // We have a null argument, branch to ic_miss_stub.
-      __ b64_patchable((address)SharedRuntime::get_ic_miss_stub(),
-                       relocInfo::runtime_call_type);
-      __ BIND(valid);
-    }
-  }
-  // Assume argument is not NULL, load klass from receiver.
-  __ load_klass(receiver_klass, R3_ARG1);
-
-  __ ld(ic_klass, CompiledICHolder::holder_klass_offset(), ic);
-
-  if (TrapBasedICMissChecks) {
-    __ trap_ic_miss_check(receiver_klass, ic_klass);
-  } else {
-    Label valid;
-    __ cmpd(CCR0, receiver_klass, ic_klass);
-    __ beq_predict_taken(CCR0, valid);
-    // We have an unexpected klass, branch to ic_miss_stub.
-    __ b64_patchable((address)SharedRuntime::get_ic_miss_stub(),
-                     relocInfo::runtime_call_type);
-    __ BIND(valid);
-  }
-
-  // Argument is valid and klass is as expected, continue.
-
-  // Extract method from inline cache, verified entry point needs it.
-  __ ld(R19_method, CompiledICHolder::holder_metadata_offset(), ic);
-  assert(R19_method == ic, "the inline cache register is dead here");
-
-  __ ld(code, method_(code));
-  __ cmpdi(CCR0, code, 0);
-  __ ld(ientry, method_(interpreter_entry)); // preloaded
-  __ beq_predict_taken(CCR0, call_interpreter);
-
-  // Branch to ic_miss_stub.
-  __ b64_patchable((address)SharedRuntime::get_ic_miss_stub(), relocInfo::runtime_call_type);
+  __ itable_entry();
+  // TODO: track vtable entry
+  __ vtable_entry();
 
   // entry: c2i
 
@@ -2064,7 +2006,6 @@ nmethod *SharedRuntime::generate_native_wrapper(MacroAssembler *masm,
   intptr_t frame_done_pc;
   intptr_t oopmap_pc;
 
-  Label    ic_miss;
   Label    handle_pending_exception;
 
   Register r_callers_sp = R21;
@@ -2090,18 +2031,8 @@ nmethod *SharedRuntime::generate_native_wrapper(MacroAssembler *masm,
 
   // Check ic: object class == cached class?
   if (!method_is_static) {
-  Register ic = R19_inline_cache_reg;
-  Register receiver_klass = r_temp_1;
-
-  __ cmpdi(CCR0, R3_ARG1, 0);
-  __ beq(CCR0, ic_miss);
-  __ verify_oop(R3_ARG1, FILE_AND_LINE);
-  __ load_klass(receiver_klass, R3_ARG1);
-
-  __ cmpd(CCR0, receiver_klass, ic);
-  __ bne(CCR0, ic_miss);
+    __ itable_entry();
   }
-
 
   // Generate the Verified Entry Point (VEP).
   // --------------------------------------------------------------------------
@@ -2629,16 +2560,6 @@ nmethod *SharedRuntime::generate_native_wrapper(MacroAssembler *masm,
   __ pop_frame();
   __ restore_LR_CR(R11);
   __ b64_patchable((address)StubRoutines::forward_exception_entry(),
-                       relocInfo::runtime_call_type);
-  }
-
-  // Handler for a cache miss (out-of-line).
-  // --------------------------------------------------------------------------
-
-  if (!method_is_static) {
-  __ bind(ic_miss);
-
-  __ b64_patchable((address)SharedRuntime::get_ic_miss_stub(),
                        relocInfo::runtime_call_type);
   }
 

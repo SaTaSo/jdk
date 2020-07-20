@@ -3482,6 +3482,14 @@ public final class Unsafe {
     }
 
     /**
+     * Throws AbstractMethodError; for use by the VM for invocation support.
+     * @since 13
+     */
+    private static void throwAbstractMethodError() {
+        throw new AbstractMethodError();
+    }
+
+    /**
      * @return Returns true if the native byte ordering of this
      * platform is big-endian, false if it is little-endian.
      */

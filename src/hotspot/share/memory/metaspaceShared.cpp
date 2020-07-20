@@ -35,6 +35,7 @@
 #include "classfile/stringTable.hpp"
 #include "classfile/systemDictionary.hpp"
 #include "classfile/systemDictionaryShared.hpp"
+#include "classfile/verifier.hpp"
 #include "code/codeCache.hpp"
 #include "gc/shared/softRefPolicy.hpp"
 #include "interpreter/bytecodeStream.hpp"
@@ -568,6 +569,7 @@ void MetaspaceShared::serialize(SerializeClosure* soc) {
   // Dump/restore miscellaneous metadata.
   JavaClasses::serialize_offsets(soc);
   Universe::serialize(soc);
+  Verifier::serialize(soc);
   soc->do_tag(--tag);
 
   // Dump/restore references to commonly used names and signatures.
@@ -584,6 +586,10 @@ void MetaspaceShared::serialize(SerializeClosure* soc) {
 
   // Dump/restore well known classes (pointers)
   SystemDictionaryShared::serialize_well_known_klasses(soc);
+  soc->do_tag(--tag);
+
+  // Dump/restore the method selector table.
+  SystemDictionary::serialize(soc);
   soc->do_tag(--tag);
 
   serialize_cloned_cpp_vtptrs(soc);
@@ -1289,6 +1295,7 @@ public:
     size_t alignment = BytesPerWord;
     char* oldtop;
     char* newtop;
+    int prefix_size = 0;
 
     if (read_only) {
       oldtop = _ro_region.top();
@@ -1302,6 +1309,7 @@ public:
         // without building another hashtable. See RunTimeSharedClassInfo::get_for()
         // in systemDictionaryShared.cpp.
         Klass* klass = (Klass*)obj;
+        prefix_size = klass->vtable_length() * BytesPerWord;
         if (klass->is_instance_klass()) {
           SystemDictionaryShared::validate_before_archiving(InstanceKlass::cast(klass));
           _rw_region.allocate(sizeof(address), BytesPerWord);
@@ -1310,7 +1318,8 @@ public:
       p = _rw_region.allocate(bytes, alignment);
       newtop = _rw_region.top();
     }
-    memcpy(p, obj, bytes);
+    memcpy(p, obj - prefix_size, bytes);
+    p += prefix_size;
 
     intptr_t* archived_vtable = MetaspaceShared::get_archived_cpp_vtable(ref->msotype(), (address)p);
     if (archived_vtable != NULL) {
@@ -1494,6 +1503,7 @@ public:
       }
     }
     FileMapInfo::metaspace_pointers_do(it, false);
+    SystemDictionary::metaspace_pointers_do(it);
     SystemDictionaryShared::dumptime_classes_do(it);
     Universe::metaspace_pointers_do(it);
     SymbolTable::metaspace_pointers_do(it);
@@ -1644,6 +1654,9 @@ void VM_PopulateDumpSharedSpace::doit() {
   CollectClassesClosure collect_classes;
   ClassLoaderDataGraph::loaded_classes_do(&collect_classes);
   _global_klass_objects->sort(global_klass_compare);
+
+  // Clean out Method SelectorMap to remove unshareable methods.
+  SystemDictionary::clean_method_selector_map();
 
   print_class_stats();
 
@@ -2612,6 +2625,7 @@ void MetaspaceShared::initialize_shared_spaces() {
     ReadClosure rc(&buffer);
     SymbolTable::serialize_shared_table_header(&rc, false);
     SystemDictionaryShared::serialize_dictionary_headers(&rc, false);
+    DynamicArchive::serialize_method_selector_table(&rc);
     dynamic_mapinfo->close();
   }
 

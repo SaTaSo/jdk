@@ -29,7 +29,6 @@
 #include "classfile/symbolTable.hpp"
 #include "classfile/systemDictionary.hpp"
 #include "code/codeCache.hpp"
-#include "code/icBuffer.hpp"
 #include "code/nmethod.hpp"
 #include "code/pcDesc.hpp"
 #include "code/scopeDesc.hpp"
@@ -490,8 +489,6 @@ void SafepointSynchronize::end() {
 }
 
 bool SafepointSynchronize::is_cleanup_needed() {
-  // Need a safepoint if some inline cache buffers is non-empty
-  if (!InlineCacheBuffer::is_empty()) return true;
   if (StringTable::needs_rehashing()) return true;
   if (SymbolTable::needs_rehashing()) return true;
   return false;
@@ -515,15 +512,6 @@ public:
       EventSafepointCleanupTask event;
       TraceTime timer(name, TRACETIME_LOG(Info, safepoint, cleanup));
       ObjectSynchronizer::do_safepoint_work();
-
-      post_safepoint_cleanup_task_event(event, safepoint_id, name);
-    }
-
-    if (_subtasks.try_claim_task(SafepointSynchronize::SAFEPOINT_CLEANUP_UPDATE_INLINE_CACHES)) {
-      const char* name = "updating inline caches";
-      EventSafepointCleanupTask event;
-      TraceTime timer(name, TRACETIME_LOG(Info, safepoint, cleanup));
-      InlineCacheBuffer::update_inline_caches();
 
       post_safepoint_cleanup_task_event(event, safepoint_id, name);
     }
@@ -607,8 +595,6 @@ void SafepointSynchronize::do_cleanup_tasks() {
     TraceTime timer(name, TRACETIME_LOG(Info, safepoint, cleanup));
     ClassLoaderDataGraph::walk_metadata_and_clean_metaspaces();
   }
-
-  assert(InlineCacheBuffer::is_empty(), "should have cleaned up ICBuffer");
 }
 
 // Methods for determining if a JavaThread is safepoint safe.

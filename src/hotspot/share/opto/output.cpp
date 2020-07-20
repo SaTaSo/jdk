@@ -25,7 +25,6 @@
 #include "precompiled.hpp"
 #include "asm/assembler.inline.hpp"
 #include "asm/macroAssembler.inline.hpp"
-#include "code/compiledIC.hpp"
 #include "code/debugInfo.hpp"
 #include "code/debugInfoRec.hpp"
 #include "compiler/compileBroker.hpp"
@@ -298,12 +297,6 @@ void PhaseOutput::Output() {
       // TODO: Should use a ShouldNotReachHereNode...
       C->cfg()->insert( broot, 0, new MachBreakpointNode() );
     }
-  } else {
-    if( C->method() && !C->method()->flags().is_static() ) {
-      // Insert unvalidated entry point
-      C->cfg()->insert( broot, 0, new MachUEPNode() );
-    }
-
   }
 
   // Break before main entry point
@@ -501,15 +494,6 @@ void PhaseOutput::shorten_branches(uint* blk_starts) {
           // This destination address is NOT PC-relative
 
           mcall->method_set((intptr_t)mcall->entry_point());
-
-          if (mcall->is_MachCallJava() && mcall->as_MachCallJava()->_method) {
-            stub_size  += CompiledStaticCall::to_interp_stub_size();
-            reloc_size += CompiledStaticCall::reloc_to_interp_stub();
-#if INCLUDE_AOT
-            stub_size  += CompiledStaticCall::to_aot_stub_size();
-            reloc_size += CompiledStaticCall::reloc_to_aot_stub();
-#endif
-          }
         } else if (mach->is_MachSafePoint()) {
           // If call/safepoint are adjacent, account for possible
           // nop to disambiguate the two safepoints.
@@ -953,7 +937,7 @@ void PhaseOutput::Process_OopMap_Node(MachNode *mach, int current_offset) {
     if (mcall->returns_pointer()) {
       return_oop = true;
     }
-    safepoint_pc_offset += mcall->ret_addr_offset();
+    safepoint_pc_offset += mcall->ret_addr_offset(C->regalloc());
     C->debug_info()->add_safepoint(safepoint_pc_offset, mcall->_oop_map);
   }
 
@@ -1343,6 +1327,8 @@ void PhaseOutput::fill_buffer(CodeBuffer* cb, uint* blk_starts) {
 
   // ------------------
   // Now fill in the code buffer
+  MacroAssembler(cb).align(CodeEntryAlignment);
+
   Node *delay_slot = NULL;
 
   for (uint i = 0; i < nblocks; i++) {
@@ -1452,7 +1438,7 @@ void PhaseOutput::fill_buffer(CodeBuffer* cb, uint* blk_starts) {
           mcall->method_set((intptr_t)mcall->entry_point());
 
           // Save the return address
-          call_returns[block->_pre_order] = current_offset + mcall->ret_addr_offset();
+          call_returns[block->_pre_order] = current_offset + mcall->ret_addr_offset(C->regalloc());
 
           if (mcall->is_MachCallLeaf()) {
             is_mcall = false;
@@ -3271,6 +3257,7 @@ void PhaseOutput::install() {
                  CompileBroker::compiler2(),
                  C->has_unsafe_access(),
                  SharedRuntime::is_wide_vector(C->max_vector_size()),
+                 C->lazy_invocations(),
                  C->rtm_state());
   }
 }
@@ -3280,6 +3267,7 @@ void PhaseOutput::install_code(ciMethod*         target,
                                AbstractCompiler* compiler,
                                bool              has_unsafe_access,
                                bool              has_wide_vectors,
+                               LazyInvocation*   lazy_invocations,
                                RTMState          rtm_state) {
   // Check if we want to skip execution of all compiled code.
   {
@@ -3292,10 +3280,10 @@ void PhaseOutput::install_code(ciMethod*         target,
     Compile::TracePhase tp("install_code", &timers[_t_registerMethod]);
 
     if (C->is_osr_compilation()) {
-      _code_offsets.set_value(CodeOffsets::Verified_Entry, 0);
+      _code_offsets.set_value(CodeOffsets::Entry, 0);
       _code_offsets.set_value(CodeOffsets::OSR_Entry, _first_block_size);
     } else {
-      _code_offsets.set_value(CodeOffsets::Verified_Entry, _first_block_size);
+      _code_offsets.set_value(CodeOffsets::Entry, _first_block_size);
       _code_offsets.set_value(CodeOffsets::OSR_Entry, 0);
     }
 
@@ -3311,6 +3299,7 @@ void PhaseOutput::install_code(ciMethod*         target,
                                      compiler,
                                      has_unsafe_access,
                                      SharedRuntime::is_wide_vector(C->max_vector_size()),
+                                     lazy_invocations,
                                      C->rtm_state());
 
     if (C->log() != NULL) { // Print code cache state into compiler log
@@ -3318,6 +3307,7 @@ void PhaseOutput::install_code(ciMethod*         target,
     }
   }
 }
+
 void PhaseOutput::install_stub(const char* stub_name,
                                bool        caller_must_gc_arguments) {
   // Entry point will be accessed using stub_entry_point();

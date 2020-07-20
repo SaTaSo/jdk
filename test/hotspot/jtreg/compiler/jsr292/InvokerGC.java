@@ -72,10 +72,7 @@ public class InvokerGC {
         WB.fullGC(); // WB.fullGC has always clear softref policy.
 
         test();
-
-        WB.clearInlineCaches(true); // Preserve static stubs.
-
-        test(); // Trigger call site re-resolution. Invoker LambdaForm should stay the same.
+        test();
 
         System.out.println("TEST PASSED");
     }

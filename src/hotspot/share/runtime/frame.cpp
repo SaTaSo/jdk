@@ -1002,6 +1002,18 @@ oop frame::retrieve_receiver(RegisterMap* reg_map) {
   return r;
 }
 
+oop frame::retrieve_appendix(RegisterMap* reg_map, Symbol* signature, bool has_receiver) {
+  ResourceMark rm;
+  int arg_size = 0;
+  VMRegPair* regs = SharedRuntime::find_callee_arguments(signature,
+                                                         has_receiver /* has_receiver */,
+                                                         true /* has_appendix */,
+                                                         &arg_size);
+  VMReg reg = regs[arg_size - 1].first();
+  oop *loc = oopmapreg_to_location(reg, reg_map);
+  return *loc;
+}
+
 
 BasicLock* frame::get_native_monitor() {
   nmethod* nm = (nmethod*)_cb;

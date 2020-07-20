@@ -215,7 +215,10 @@ void G1RootProcessor::process_code_cache_roots(CodeBlobClosure* code_closure,
                                                G1GCPhaseTimes* phase_times,
                                                uint worker_id) {
   if (_process_strong_tasks.try_claim_task(G1RP_PS_CodeCache_oops_do)) {
-    CodeCache::blobs_do(code_closure);
+    AllCompiledMethodIterator iter;
+    while (iter.next()) {
+      code_closure->do_code_blob(iter.method());
+    }
   }
 }
 

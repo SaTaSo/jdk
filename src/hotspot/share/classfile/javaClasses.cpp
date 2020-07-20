@@ -49,11 +49,11 @@
 #include "oops/method.inline.hpp"
 #include "oops/objArrayOop.inline.hpp"
 #include "oops/oop.inline.hpp"
+#include "oops/selectorMap.inline.hpp"
 #include "oops/symbol.hpp"
 #include "oops/recordComponent.hpp"
 #include "oops/typeArrayOop.inline.hpp"
 #include "prims/jvmtiExport.hpp"
-#include "prims/resolvedMethodTable.hpp"
 #include "runtime/fieldDescriptor.inline.hpp"
 #include "runtime/frame.inline.hpp"
 #include "runtime/handles.inline.hpp"
@@ -2815,7 +2815,7 @@ void java_lang_StackFrameInfo::serialize_offsets(SerializeClosure* f) {
 Method* java_lang_StackFrameInfo::get_method(Handle stackFrame, InstanceKlass* holder, TRAPS) {
   HandleMark hm(THREAD);
   Handle mname(THREAD, stackFrame->obj_field(_memberName_offset));
-  Method* method = (Method*)java_lang_invoke_MemberName::vmtarget(mname());
+  Method* method = java_lang_invoke_MemberName::vmtarget(mname());
   // we should expand MemberName::name when Throwable uses StackTrace
   // MethodHandles::expand_MemberName(mname, MethodHandles::_suppress_defc|MethodHandles::_suppress_type, CHECK_NULL);
   return method;
@@ -3739,9 +3739,6 @@ int java_lang_invoke_MemberName::_flags_offset;
 int java_lang_invoke_MemberName::_method_offset;
 int java_lang_invoke_MemberName::_vmindex_offset;
 
-int java_lang_invoke_ResolvedMethodName::_vmtarget_offset;
-int java_lang_invoke_ResolvedMethodName::_vmholder_offset;
-
 int java_lang_invoke_LambdaForm::_vmentry_offset;
 
 #define METHODHANDLE_FIELDS_DO(macro) \
@@ -3764,7 +3761,7 @@ void java_lang_invoke_MethodHandle::serialize_offsets(SerializeClosure* f) {
   macro(_name_offset,    k, vmSymbols::name_name(),    string_signature, false); \
   macro(_type_offset,    k, vmSymbols::type_name(),    object_signature, false); \
   macro(_flags_offset,   k, vmSymbols::flags_name(),   int_signature,    false); \
-  macro(_method_offset,  k, vmSymbols::method_name(),  java_lang_invoke_ResolvedMethodName_signature, false)
+  macro(_method_offset,  k, vmSymbols::method_name(),  int_signature,    false)
 
 void java_lang_invoke_MemberName::compute_offsets() {
   InstanceKlass* k = SystemDictionary::MemberName_klass();
@@ -3776,18 +3773,6 @@ void java_lang_invoke_MemberName::compute_offsets() {
 void java_lang_invoke_MemberName::serialize_offsets(SerializeClosure* f) {
   MEMBERNAME_FIELDS_DO(FIELD_SERIALIZE_OFFSET);
   MEMBERNAME_INJECTED_FIELDS(INJECTED_FIELD_SERIALIZE_OFFSET);
-}
-#endif
-
-void java_lang_invoke_ResolvedMethodName::compute_offsets() {
-  InstanceKlass* k = SystemDictionary::ResolvedMethodName_klass();
-  assert(k != NULL, "jdk mismatch");
-  RESOLVEDMETHOD_INJECTED_FIELDS(INJECTED_FIELD_COMPUTE_OFFSET);
-}
-
-#if INCLUDE_CDS
-void java_lang_invoke_ResolvedMethodName::serialize_offsets(SerializeClosure* f) {
-  RESOLVEDMETHOD_INJECTED_FIELDS(INJECTED_FIELD_SERIALIZE_OFFSET);
 }
 #endif
 
@@ -3872,11 +3857,13 @@ void java_lang_invoke_MemberName::set_flags(oop mname, int flags) {
 }
 
 
-// Return vmtarget from ResolvedMethodName method field through indirection
+// Return vmtarget from method field through indirection
 Method* java_lang_invoke_MemberName::vmtarget(oop mname) {
   assert(is_instance(mname), "wrong type");
-  oop method = mname->obj_field(_method_offset);
-  return method == NULL ? NULL : java_lang_invoke_ResolvedMethodName::vmtarget(method);
+  SelectorMap<Method*> method_map = SystemDictionary::method_selector_map();
+  uint32_t selector = (uint32_t)mname->int_field(_method_offset);
+  if (selector == 0) return NULL;
+  return method_map.get(selector);
 }
 
 bool java_lang_invoke_MemberName::is_method(oop mname) {
@@ -3884,9 +3871,9 @@ bool java_lang_invoke_MemberName::is_method(oop mname) {
   return (flags(mname) & (MN_IS_METHOD | MN_IS_CONSTRUCTOR)) > 0;
 }
 
-void java_lang_invoke_MemberName::set_method(oop mname, oop resolved_method) {
+void java_lang_invoke_MemberName::set_method(oop mname, uint32_t resolved_selector) {
   assert(is_instance(mname), "wrong type");
-  mname->obj_field_put(_method_offset, resolved_method);
+  mname->int_field_put(_method_offset, (jint)resolved_selector);
 }
 
 intptr_t java_lang_invoke_MemberName::vmindex(oop mname) {
@@ -3897,64 +3884,6 @@ intptr_t java_lang_invoke_MemberName::vmindex(oop mname) {
 void java_lang_invoke_MemberName::set_vmindex(oop mname, intptr_t index) {
   assert(is_instance(mname), "wrong type");
   mname->address_field_put(_vmindex_offset, (address) index);
-}
-
-
-Method* java_lang_invoke_ResolvedMethodName::vmtarget(oop resolved_method) {
-  assert(is_instance(resolved_method), "wrong type");
-  Method* m = (Method*)resolved_method->address_field(_vmtarget_offset);
-  assert(m->is_method(), "must be");
-  return m;
-}
-
-// Used by redefinition to change Method* to new Method* with same hash (name, signature)
-void java_lang_invoke_ResolvedMethodName::set_vmtarget(oop resolved_method, Method* m) {
-  assert(is_instance(resolved_method), "wrong type");
-  resolved_method->address_field_put(_vmtarget_offset, (address)m);
-}
-
-void java_lang_invoke_ResolvedMethodName::set_vmholder(oop resolved_method, oop holder) {
-  assert(is_instance(resolved_method), "wrong type");
-  resolved_method->obj_field_put(_vmholder_offset, holder);
-}
-
-oop java_lang_invoke_ResolvedMethodName::find_resolved_method(const methodHandle& m, TRAPS) {
-  const Method* method = m();
-
-  // lookup ResolvedMethod oop in the table, or create a new one and intern it
-  oop resolved_method = ResolvedMethodTable::find_method(method);
-  if (resolved_method != NULL) {
-    return resolved_method;
-  }
-
-  InstanceKlass* k = SystemDictionary::ResolvedMethodName_klass();
-  if (!k->is_initialized()) {
-    k->initialize(CHECK_NULL);
-  }
-
-  oop new_resolved_method = k->allocate_instance(CHECK_NULL);
-
-  NoSafepointVerifier nsv;
-
-  if (method->is_old()) {
-    method = (method->is_deleted()) ? Universe::throw_no_such_method_error() :
-                                      method->get_new_method();
-  }
-
-  InstanceKlass* holder = method->method_holder();
-
-  set_vmtarget(new_resolved_method, const_cast<Method*>(method));
-  // Add a reference to the loader (actually mirror because unsafe anonymous classes will not have
-  // distinct loaders) to ensure the metadata is kept alive.
-  // This mirror may be different than the one in clazz field.
-  set_vmholder(new_resolved_method, holder->java_mirror());
-
-  // Set flag in class to indicate this InstanceKlass has entries in the table
-  // to avoid walking table during redefinition if none of the redefined classes
-  // have any membernames in the table.
-  holder->set_has_resolved_methods();
-
-  return ResolvedMethodTable::add_method(method, Handle(THREAD, new_resolved_method));
 }
 
 oop java_lang_invoke_LambdaForm::vmentry(oop lform) {
@@ -4824,13 +4753,11 @@ bool JavaClasses::is_supported_for_archiving(oop obj) {
   if (klass == SystemDictionary::ClassLoader_klass() ||  // ClassLoader::loader_data is malloc'ed.
       klass == SystemDictionary::Module_klass() ||       // Module::module_entry is malloc'ed
       // The next 3 classes are used to implement java.lang.invoke, and are not used directly in
-      // regular Java code. The implementation of java.lang.invoke uses generated anonymoys classes
-      // (e.g., as referenced by ResolvedMethodName::vmholder) that are not yet supported by CDS.
+      // regular Java code. The implementation of java.lang.invoke uses generated anonymous classes.
       // So for now we cannot not support these classes for archiving.
       //
       // These objects typically are not referenced by static fields, but rather by resolved
       // constant pool entries, so excluding them shouldn't affect the archiving of static fields.
-      klass == SystemDictionary::ResolvedMethodName_klass() ||
       klass == SystemDictionary::MemberName_klass() ||
       klass == SystemDictionary::Context_klass()) {
     return false;

@@ -62,7 +62,7 @@
 ConstantPool* ConstantPool::allocate(ClassLoaderData* loader_data, int length, TRAPS) {
   Array<u1>* tags = MetadataFactory::new_array<u1>(loader_data, length, 0, CHECK_NULL);
   int size = ConstantPool::size(length);
-  return new (loader_data, size, MetaspaceObj::ConstantPoolType, THREAD) ConstantPool(tags);
+  return new (loader_data, size, 0, MetaspaceObj::ConstantPoolType, THREAD) ConstantPool(tags);
 }
 
 void ConstantPool::copy_fields(const ConstantPool* orig) {
@@ -98,6 +98,7 @@ static bool tag_array_is_zero_initialized(Array<u1>* tags) {
 
 ConstantPool::ConstantPool(Array<u1>* tags) :
   _tags(tags),
+  _pool_holder(NULL),
   _length(tags->length()) {
 
     assert(_tags != NULL, "invariant");

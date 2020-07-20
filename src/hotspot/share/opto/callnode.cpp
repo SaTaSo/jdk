@@ -814,7 +814,11 @@ bool CallNode::may_modify(const TypeOopPtr *t_oop, PhaseTransform *phase) {
 // Does this call have a direct reference to n other than debug information?
 bool CallNode::has_non_debug_use(Node *n) {
   const TypeTuple * d = tf()->domain();
-  for (uint i = TypeFunc::Parms; i < d->cnt(); i++) {
+  uint cnt = d->cnt();
+  if (is_CallDynamicJava()) {
+    cnt++;
+  }
+  for (uint i = TypeFunc::Parms; i < cnt; i++) {
     Node *arg = in(i);
     if (arg == n) {
       return true;

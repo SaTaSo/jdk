@@ -282,10 +282,6 @@ inline void MacroAssembler::trap_null_check(Register a, trap_to_bits cmp) {
   tdi(cmp, a/*reg a*/, 0);
 }
 
-inline void MacroAssembler::trap_ic_miss_check(Register a, Register b) {
-  td(traptoGreaterThanUnsigned | traptoLessThanUnsigned, a, b);
-}
-
 // Do an explicit null check if access to a+offset will not raise a SIGSEGV.
 // Either issue a trap instruction that raises SIGTRAP, or do a compare that
 // branches to exception_entry.

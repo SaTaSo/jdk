@@ -1244,17 +1244,18 @@ BASE(StateSplit, Instruction)
 
 LEAF(Invoke, StateSplit)
  private:
-  Bytecodes::Code _code;
-  Value           _recv;
-  Values*         _args;
-  BasicTypeList*  _signature;
-  int             _vtable_index;
-  ciMethod*       _target;
+  Bytecodes::Code  _code;
+  Value            _recv;
+  Values*          _args;
+  BasicTypeList*   _signature;
+  int              _vtable_index;
+  ciMethod*        _target;
+  ciInstanceKlass* _refc;
 
  public:
   // creation
   Invoke(Bytecodes::Code code, ValueType* result_type, Value recv, Values* args,
-         int vtable_index, ciMethod* target, ValueStack* state_before);
+         int vtable_index, ciMethod* target, ciInstanceKlass* refc, ValueStack* state_before);
 
   // accessors
   Bytecodes::Code code() const                   { return _code; }
@@ -1265,6 +1266,7 @@ LEAF(Invoke, StateSplit)
   int vtable_index() const                       { return _vtable_index; }
   BasicTypeList* signature() const               { return _signature; }
   ciMethod* target() const                       { return _target; }
+  ciInstanceKlass* refc() const                  { return _refc; }
 
   ciType* declared_type() const;
 
@@ -1532,6 +1534,7 @@ LEAF(MonitorExit, AccessMonitor)
 
 LEAF(Intrinsic, StateSplit)
  private:
+  ciMethod*        _method;
   vmIntrinsics::ID _id;
   Values*          _args;
   Value            _recv;
@@ -1546,6 +1549,7 @@ LEAF(Intrinsic, StateSplit)
   // allows load elimination and common expression elimination to be
   // performed across the Intrinsic.  The default value is false.
   Intrinsic(ValueType* type,
+            ciMethod* callee,
             vmIntrinsics::ID id,
             Values* args,
             bool has_receiver,
@@ -1553,6 +1557,7 @@ LEAF(Intrinsic, StateSplit)
             bool preserves_state,
             bool cantrap = true)
   : StateSplit(type, state_before)
+  , _method(callee)
   , _id(id)
   , _args(args)
   , _recv(NULL)
@@ -1574,6 +1579,7 @@ LEAF(Intrinsic, StateSplit)
 
   // accessors
   vmIntrinsics::ID id() const                    { return _id; }
+  ciMethod* method() const                       { return _method; }
   int number_of_arguments() const                { return _args->length(); }
   Value argument_at(int i) const                 { return _args->at(i); }
 

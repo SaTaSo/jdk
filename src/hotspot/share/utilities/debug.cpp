@@ -26,9 +26,7 @@
 #include "jvm.h"
 #include "classfile/systemDictionary.hpp"
 #include "code/codeCache.hpp"
-#include "code/icBuffer.hpp"
 #include "code/nmethod.hpp"
-#include "code/vtableStubs.hpp"
 #include "compiler/compileBroker.hpp"
 #include "compiler/disassembler.hpp"
 #include "gc/shared/collectedHeap.hpp"
@@ -38,6 +36,7 @@
 #include "memory/resourceArea.hpp"
 #include "memory/universe.hpp"
 #include "oops/oop.inline.hpp"
+#include "oops/selectorMap.inline.hpp"
 #include "runtime/arguments.hpp"
 #include "runtime/atomic.hpp"
 #include "runtime/flags/flagSetting.hpp"
@@ -587,6 +586,11 @@ extern "C" Method* findm(intptr_t pc) {
   return (nm == NULL) ? (Method*)NULL : nm->method();
 }
 
+extern "C" Method* finds(uint32_t selector) {
+  Command c("finds");
+  SelectorMap<Method*> method_map = SystemDictionary::method_selector_map();
+  return method_map.get(selector);
+}
 
 extern "C" nmethod* findnm(intptr_t addr) {
   Command c("findnm");

@@ -2547,6 +2547,13 @@ const Type* CatchNode::Value(PhaseGVN* phase) const {
       // Rethrows always throw exceptions, never return
       if (call->entry_point() == OptoRuntime::rethrow_stub()) {
         f[CatchProjNode::fall_through_index] = Type::TOP;
+      } else if( call->is_CallDynamicJava() && call->req() > TypeFunc::Parms + 1 ) {
+        const Type *arg0 = phase->type( call->in(TypeFunc::Parms) );
+        // Check for null receiver to virtual or interface calls
+        if( call->is_CallDynamicJava() &&
+            arg0->higher_equal(TypePtr::NULL_PTR) ) {
+          f[CatchProjNode::fall_through_index] = Type::TOP;
+        }
       } else if( call->req() > TypeFunc::Parms ) {
         const Type *arg0 = phase->type( call->in(TypeFunc::Parms) );
         // Check for null receiver to virtual or interface calls

@@ -581,8 +581,6 @@ class MacroAssembler: public Assembler {
   static void    set_dest_of_call_far_patchable_at(address inst_start, address target, int64_t toc_offset);
   static address get_dest_of_call_far_patchable_at(address inst_start, address toc_start);
 
-  void align_call_far_patchable(address pc);
-
   // PCrelative TOC access.
 
   // This value is independent of code position - constant for the lifetime of the VM.
@@ -671,10 +669,6 @@ class MacroAssembler: public Assembler {
   void lookup_virtual_method(Register             recv_klass,
                              RegisterOrConstant   vtable_index,
                              Register             method_result);
-
-  // Factor out code to call ic_miss_handler.
-  unsigned int call_ic_miss_handler(Label& ICM, int trapMarker, int requiredSize, Register scratch);
-  void nmethod_UEP(Label& ic_miss);
 
   // Emitters for "partial subtype" checks.
 

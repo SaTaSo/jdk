@@ -69,32 +69,6 @@ int LIR_Assembler::initial_frame_size_in_bytes() const {
   return in_bytes(frame_map()->framesize_in_bytes());
 }
 
-// Inline cache check: done before the frame is built.
-// The inline cached class is in Z_inline_cache(Z_R9).
-// We fetch the class of the receiver and compare it with the cached class.
-// If they do not match we jump to the slow case.
-int LIR_Assembler::check_icache() {
-  Register receiver = receiverOpr()->as_register();
-  int offset = __ offset();
-  __ inline_cache_check(receiver, Z_inline_cache);
-  return offset;
-}
-
-void LIR_Assembler::clinit_barrier(ciMethod* method) {
-  assert(!method->holder()->is_not_initialized(), "initialization should have been started");
-
-  Label L_skip_barrier;
-  Register klass = Z_R1_scratch;
-
-  metadata2reg(method->holder()->constant_encoding(), klass);
-  __ clinit_barrier(klass, Z_thread, &L_skip_barrier /*L_fast_path*/);
-
-  __ load_const_optimized(klass, SharedRuntime::get_handle_wrong_method_stub());
-  __ z_br(klass);
-
-  __ bind(L_skip_barrier);
-}
-
 void LIR_Assembler::osr_entry() {
   // On-stack-replacement entry sequence (interpreter frame layout described in interpreter_sparc.cpp):
   //
@@ -154,7 +128,6 @@ void LIR_Assembler::osr_entry() {
 // --------------------------------------------------------------------------------------------
 
 address LIR_Assembler::emit_call_c(address a) {
-  __ align_call_far_patchable(__ pc());
   address call_addr = __ call_c_opt(a);
   if (call_addr == NULL) {
     bailout("const section overflow");
@@ -483,53 +456,15 @@ void LIR_Assembler::emit_opConvert(LIR_OpConvert* op) {
   }
 }
 
-void LIR_Assembler::align_call(LIR_Code code) {
-  // End of call instruction must be 4 byte aligned.
-  int offset = __ offset();
-  switch (code) {
-    case lir_icvirtual_call:
-      offset += MacroAssembler::load_const_from_toc_size();
-      // no break
-    case lir_static_call:
-    case lir_optvirtual_call:
-    case lir_dynamic_call:
-      offset += NativeCall::call_far_pcrelative_displacement_offset;
-      break;
-    case lir_virtual_call:   // currently, sparc-specific for niagara
-    default: ShouldNotReachHere();
-  }
-  if ((offset & (NativeCall::call_far_pcrelative_displacement_alignment-1)) != 0) {
-    __ nop();
-  }
-}
-
 void LIR_Assembler::call(LIR_OpJavaCall* op, relocInfo::relocType rtype) {
   assert((__ offset() + NativeCall::call_far_pcrelative_displacement_offset) % NativeCall::call_far_pcrelative_displacement_alignment == 0,
          "must be aligned (offset=%d)", __ offset());
-  assert(rtype == relocInfo::none ||
-         rtype == relocInfo::opt_virtual_call_type ||
-         rtype == relocInfo::static_call_type, "unexpected rtype");
+  assert(rtype == relocInfo::none, "unexpected rtype");
   // Prepend each BRASL with a nop.
   __ relocate(rtype);
   __ z_nop();
   __ z_brasl(Z_R14, op->addr());
   add_call_info(code_offset(), op->info());
-}
-
-void LIR_Assembler::ic_call(LIR_OpJavaCall* op) {
-  address virtual_call_oop_addr = NULL;
-  AddressLiteral empty_ic((address) Universe::non_oop_word());
-  virtual_call_oop_addr = __ pc();
-  bool success = __ load_const_from_toc(Z_inline_cache, empty_ic);
-  if (!success) {
-    bailout("const section overflow");
-    return;
-  }
-
-  // CALL to fixup routine. Fixup routine uses ScopeDesc info
-  // to determine who we intended to call.
-  __ relocate(virtual_call_Relocation::spec(virtual_call_oop_addr));
-  call(op, relocInfo::none);
 }
 
 // not supported
@@ -1240,39 +1175,6 @@ int LIR_Assembler::safepoint_poll(LIR_Opr tmp, CodeEmitInfo* info) {
   __ relocate(relocInfo::poll_type);
   __ load_from_polling_page(poll_addr);
   return offset;
-}
-
-void LIR_Assembler::emit_static_call_stub() {
-
-  // Stub is fixed up when the corresponding call is converted from calling
-  // compiled code to calling interpreted code.
-
-  address call_pc = __ pc();
-  address stub = __ start_a_stub(call_stub_size());
-  if (stub == NULL) {
-    bailout("static call stub overflow");
-    return;
-  }
-
-  int start = __ offset();
-
-  __ relocate(static_stub_Relocation::spec(call_pc));
-
-  // See also Matcher::interpreter_method_oop_reg().
-  AddressLiteral meta = __ allocate_metadata_address(NULL);
-  bool success = __ load_const_from_toc(Z_method, meta);
-
-  __ set_inst_mark();
-  AddressLiteral a((address)-1);
-  success = success && __ load_const_from_toc(Z_R1, a);
-  if (!success) {
-    bailout("const section overflow");
-    return;
-  }
-
-  __ z_br(Z_R1);
-  assert(__ offset() - start <= call_stub_size(), "stub too big");
-  __ end_a_stub(); // Update current stubs pointer and restore insts_end.
 }
 
 void LIR_Assembler::comp_op(LIR_Condition condition, LIR_Opr opr1, LIR_Opr opr2, LIR_Op2* op) {

@@ -655,7 +655,7 @@ void SpeculativeTrapData::print_data_on(outputStream* st, const char* extra) con
 MethodData* MethodData::allocate(ClassLoaderData* loader_data, const methodHandle& method, TRAPS) {
   int size = MethodData::compute_allocation_size_in_words(method);
 
-  return new (loader_data, size, MetaspaceObj::MethodDataType, THREAD)
+  return new (loader_data, size, 0, MetaspaceObj::MethodDataType, THREAD)
     MethodData(method, size, THREAD);
 }
 

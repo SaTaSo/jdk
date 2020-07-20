@@ -192,7 +192,6 @@ class nmethod : public CompiledMethod {
 
   // offsets for entry points
   address _entry_point;                      // entry point with class check
-  address _verified_entry_point;             // entry point without class check
   address _osr_entry_point;                  // entry point for on stack replacement
 
   // Offsets for different nmethod parts
@@ -228,27 +227,18 @@ class nmethod : public CompiledMethod {
   bool _has_flushed_dependencies;            // Used for maintenance of dependencies (CodeCache_lock)
 
   // used by jvmti to track if an event has been posted for this nmethod.
+  jmethodID _jmethod_id;
   bool _unload_reported;
   bool _load_reported;
 
   // Protected by CompiledMethod_lock
-  volatile signed char _state;               // {not_installed, in_use, not_entrant, zombie, unloaded}
-
-#ifdef ASSERT
-  bool _oops_are_stale;  // indicates that it's no longer safe to access oops section
-#endif
+  volatile signed char _state;               // {in_use, not_entrant}
 
 #if INCLUDE_RTM_OPT
   // RTM state at compile time. Used during deoptimization to decide
   // whether to restart collecting RTM locking abort statistic again.
   RTMState _rtm_state;
 #endif
-
-  // Nmethod Flushing lock. If non-zero, then the nmethod is not removed
-  // and is not made into a zombie. However, once the nmethod is made into
-  // a zombie, it will be locked one final time if CompiledMethodUnload
-  // event processing needs to be done.
-  volatile jint _lock_count;
 
   // not_entrant method removal. Each mark_sweep pass will update
   // this mark to current sweep invocation count if it is seen on the
@@ -282,8 +272,6 @@ class nmethod : public CompiledMethod {
   ByteSize _native_receiver_sp_offset;
   ByteSize _native_basic_lock_sp_offset;
 
-  friend class nmethodLocker;
-
   // For native wrappers
   nmethod(Method* method,
           CompilerType type,
@@ -312,7 +300,8 @@ class nmethod : public CompiledMethod {
           ExceptionHandlerTable* handler_table,
           ImplicitExceptionTable* nul_chk_table,
           AbstractCompiler* compiler,
-          int comp_level
+          int comp_level,
+          LazyInvocation* lazy_invocations
 #if INCLUDE_JVMCI
           , char* speculations,
           int speculations_len,
@@ -360,7 +349,8 @@ class nmethod : public CompiledMethod {
                               ExceptionHandlerTable* handler_table,
                               ImplicitExceptionTable* nul_chk_table,
                               AbstractCompiler* compiler,
-                              int comp_level
+                              int comp_level,
+                              LazyInvocation* lazy_invocations
 #if INCLUDE_JVMCI
                               , char* speculations = NULL,
                               int speculations_len = 0,
@@ -449,15 +439,11 @@ class nmethod : public CompiledMethod {
 
   // entry points
   address entry_point() const                     { return _entry_point;             } // normal entry point
-  address verified_entry_point() const            { return _verified_entry_point;    } // if klass is correct
 
   // flag accessing and manipulation
-  bool  is_not_installed() const                  { return _state == not_installed; }
-  bool  is_in_use() const                         { return _state <= in_use; }
-  bool  is_alive() const                          { return _state < unloaded; }
-  bool  is_not_entrant() const                    { return _state == not_entrant; }
-  bool  is_zombie() const                         { return _state == zombie; }
-  bool  is_unloaded() const                       { return _state == unloaded; }
+  bool is_in_use()                                { return _state <= in_use && !is_unloading(); }
+  bool is_alive()                                 { return !is_unloading(); }
+  bool is_not_entrant()                           { return _state == not_entrant || is_unloading(); }
 
   void clear_unloading_state();
   virtual bool is_unloading();
@@ -469,29 +455,21 @@ class nmethod : public CompiledMethod {
   void set_rtm_state(RTMState state)              { _rtm_state = state; }
 #endif
 
-  bool make_in_use() {
-    return try_transition(in_use);
-  }
   // Make the nmethod non entrant. The nmethod will continue to be
   // alive.  It is used when an uncommon trap happens.  Returns true
   // if this thread changed the state of the nmethod or false if
   // another thread performed the transition.
-  bool  make_not_entrant() {
-    assert(!method()->is_method_handle_intrinsic(), "Cannot make MH intrinsic not entrant");
-    return make_not_entrant_or_zombie(not_entrant);
-  }
-  bool  make_not_used()    { return make_not_entrant(); }
-  bool  make_zombie()      { return make_not_entrant_or_zombie(zombie); }
+  void unlink();
+  bool make_not_entrant();
+  bool make_not_used()    { return make_not_entrant(); }
 
   int get_state() const {
     return _state;
   }
 
-  void  make_unloaded();
-
   bool has_dependencies()                         { return dependencies_size() != 0; }
   void print_dependencies()                       PRODUCT_RETURN;
-  void flush_dependencies(bool delete_immediately);
+  void flush_dependencies();
   bool has_flushed_dependencies()                 { return _has_flushed_dependencies; }
   void set_has_flushed_dependencies()             {
     assert(!has_flushed_dependencies(), "should only happen once");
@@ -500,7 +478,7 @@ class nmethod : public CompiledMethod {
 
   int   comp_level() const                        { return _comp_level; }
 
-  void unlink_from_method();
+  void unlink_from_method(bool acquire_lock);
 
   // Support for oops in scopes and relocs:
   // Note: index 0 is reserved for null.
@@ -509,7 +487,6 @@ class nmethod : public CompiledMethod {
   oop*  oop_addr_at(int index) const {  // for GC
     // relocation indexes are biased by 1 (because 0 is reserved)
     assert(index > 0 && index <= oops_count(), "must be a valid non-zero index");
-    assert(!_oops_are_stale, "oops are stale");
     return &oops_begin()[index - 1];
   }
 
@@ -545,25 +522,16 @@ public:
   nmethod* osr_link() const                       { return _osr_link; }
   void     set_osr_link(nmethod *n)               { _osr_link = n; }
 
-  // Verify calls to dead methods have been cleaned.
-  void verify_clean_inline_caches();
-
   // unlink and deallocate this nmethod
   // Only NMethodSweeper class is expected to use this. NMethodSweeper is not
   // expected to use any other private methods/data in this class.
 
- protected:
-  void flush();
-
  public:
-  // When true is returned, it is unsafe to remove this nmethod even if
-  // it is a zombie, since the VM or the ServiceThread might still be
-  // using it.
-  bool is_locked_by_vm() const                    { return _lock_count >0; }
+  void flush();
 
   // See comment at definition of _last_seen_on_stack
   void mark_as_seen_on_stack();
-  bool can_convert_to_zombie();
+  bool can_delete();
 
   // Evolution support. We make old (discarded) compiled methods point to new Method*s.
   void set_method(Method* method) { _method = method; }
@@ -585,8 +553,8 @@ public:
 #endif
 
  public:
-  void oops_do(OopClosure* f) { oops_do(f, false); }
-  void oops_do(OopClosure* f, bool allow_dead);
+  void oops_do(OopClosure* f);
+  LazyInvocation* lazy_invocations() { return _lazy_invocations; }
 
   // All-in-one claiming of nmethods: returns true if the caller successfully claimed that
   // nmethod.
@@ -618,9 +586,7 @@ public:
 
   address* orig_pc_addr(const frame* fr);
 
-  // used by jvmti to track if the load and unload events has been reported
-  bool  unload_reported() const                   { return _unload_reported; }
-  void  set_unload_reported()                     { _unload_reported = true; }
+  // used by jvmti to track if the load event has been reported
   bool  load_reported() const                     { return _load_reported; }
   void  set_load_reported()                       { _load_reported = true; }
 
@@ -638,7 +604,6 @@ public:
 
   // verify operations
   void verify();
-  void verify_scopes();
   void verify_interrupt_point(address interrupt_point);
 
   // Disassemble this nmethod with additional debug information, e.g. information about blocks.
@@ -726,9 +691,6 @@ public:
   // corresponds to the given method as well.
   virtual bool is_dependent_on_method(Method* dependee);
 
-  // is it ok to patch at address?
-  bool is_patchable_at(address instr_address);
-
   // UseBiasedLocking support
   ByteSize native_receiver_sp_offset() {
     return _native_receiver_sp_offset;
@@ -738,65 +700,14 @@ public:
   }
 
   // support for code generation
-  static int verified_entry_point_offset()        { return offset_of(nmethod, _verified_entry_point); }
-  static int osr_entry_point_offset()             { return offset_of(nmethod, _osr_entry_point); }
-  static int state_offset()                       { return offset_of(nmethod, _state); }
+  static int osr_entry_point_offset() { return offset_of(nmethod, _osr_entry_point); }
+  static int state_offset()           { return offset_of(nmethod, _state); }
 
   virtual void metadata_do(MetadataClosure* f);
 
   NativeCallWrapper* call_wrapper_at(address call) const;
   NativeCallWrapper* call_wrapper_before(address return_pc) const;
   address call_instruction_address(address pc) const;
-
-  virtual CompiledStaticCall* compiledStaticCall_at(Relocation* call_site) const;
-  virtual CompiledStaticCall* compiledStaticCall_at(address addr) const;
-  virtual CompiledStaticCall* compiledStaticCall_before(address addr) const;
-};
-
-// Locks an nmethod so its code will not get removed and it will not
-// be made into a zombie, even if it is a not_entrant method. After the
-// nmethod becomes a zombie, if CompiledMethodUnload event processing
-// needs to be done, then lock_nmethod() is used directly to keep the
-// generated code from being reused too early.
-class nmethodLocker : public StackObj {
-  CompiledMethod* _nm;
-
- public:
-
-  // note: nm can be NULL
-  // Only JvmtiDeferredEvent::compiled_method_unload_event()
-  // should pass zombie_ok == true.
-  static void lock_nmethod(CompiledMethod* nm, bool zombie_ok = false);
-  static void unlock_nmethod(CompiledMethod* nm); // (ditto)
-
-  nmethodLocker(address pc); // derive nm from pc
-  nmethodLocker(nmethod *nm) { _nm = nm; lock_nmethod(_nm); }
-  nmethodLocker(CompiledMethod *nm) {
-    _nm = nm;
-    lock(_nm);
-  }
-
-  static void lock(CompiledMethod* method, bool zombie_ok = false) {
-    if (method == NULL) return;
-    lock_nmethod(method, zombie_ok);
-  }
-
-  static void unlock(CompiledMethod* method) {
-    if (method == NULL) return;
-    unlock_nmethod(method);
-  }
-
-  nmethodLocker() { _nm = NULL; }
-  ~nmethodLocker() {
-    unlock(_nm);
-  }
-
-  CompiledMethod* code() { return _nm; }
-  void set_code(CompiledMethod* new_nm, bool zombie_ok = false) {
-    unlock(_nm);   // note:  This works even if _nm==new_nm.
-    _nm = new_nm;
-    lock(_nm, zombie_ok);
-  }
 };
 
 #endif // SHARE_CODE_NMETHOD_HPP

@@ -85,9 +85,6 @@ class NativeInstruction {
   // Bcrl is currently the only accepted instruction here.
   bool is_jump();
 
-  // We use an illtrap for marking a method as not_entrant or zombie.
-  bool is_sigill_zombie_not_entrant();
-
   bool is_safepoint_poll() {
     // Is the current instruction a POTENTIAL read access to the polling page?
     // The instruction's current arguments are not checked!
@@ -165,7 +162,7 @@ class NativeIllegalInstruction: public NativeInstruction {
 //-----------------------
 
 // The NativeCall is an abstraction for accessing/manipulating call
-// instructions. It is used to manipulate inline caches, primitive &
+// instructions. It is used to manipulate primitive &
 // dll calls, etc.
 
 // A native call, as defined by this abstraction layer, consists of
@@ -608,11 +605,6 @@ class NativeJump: public NativeInstruction {
 
   // Insertion of native jump instruction.
   static void insert(address code_pos, address entry);
-
-  // MT-safe insertion of native jump at verified method entry.
-  static void check_verified_entry_alignment(address entry, address verified_entry) { }
-
-  static void patch_verified_entry(address entry, address verified_entry, address dest);
 };
 
 //-------------------------------------

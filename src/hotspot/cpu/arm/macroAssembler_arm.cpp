@@ -64,12 +64,6 @@ void AddressLiteral::set_rspec(relocInfo::relocType rtype) {
   case relocInfo::internal_word_type:
     _rspec = internal_word_Relocation::spec(_target);
     break;
-  case relocInfo::opt_virtual_call_type:
-    _rspec = opt_virtual_call_Relocation::spec();
-    break;
-  case relocInfo::static_call_type:
-    _rspec = static_call_Relocation::spec();
-    break;
   case relocInfo::runtime_call_type:
     _rspec = runtime_call_Relocation::spec();
     break;
@@ -1816,29 +1810,6 @@ void MacroAssembler::call(address target, RelocationHolder rspec, AsmCondition c
   }
 }
 
-
-int MacroAssembler::patchable_call(address target, RelocationHolder const& rspec, bool c2) {
-  assert(rspec.type() == relocInfo::static_call_type ||
-         rspec.type() == relocInfo::none ||
-         rspec.type() == relocInfo::opt_virtual_call_type, "not supported");
-
-  // Always generate the relocation information, needed for patching
-  relocate(rspec); // used by NativeCall::is_call_before()
-  if (cache_fully_reachable()) {
-    // Note: this assumes that all possible targets (the initial one
-    // and the addresses patched to) are all in the code cache.
-    assert(CodeCache::contains(target), "target might be too far");
-    bl(target);
-  } else {
-    Label ret_addr;
-    InlinedAddress address_literal(target);
-    adr(LR, ret_addr);
-    ldr_literal(PC, address_literal);
-    bind_literal(address_literal);
-    bind(ret_addr);
-  }
-  return offset();
-}
 
 // ((OopHandle)result).resolve();
 void MacroAssembler::resolve_oop_handle(Register result) {

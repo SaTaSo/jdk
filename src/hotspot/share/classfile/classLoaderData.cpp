@@ -69,6 +69,7 @@
 #include "runtime/handles.inline.hpp"
 #include "runtime/mutex.hpp"
 #include "runtime/safepoint.hpp"
+#include "utilities/globalCounter.hpp"
 #include "utilities/growableArray.hpp"
 #include "utilities/macros.hpp"
 #include "utilities/ostream.hpp"
@@ -830,7 +831,8 @@ void ClassLoaderData::free_deallocate_list() {
       // There are only three types of metadata that we deallocate directly.
       // Cast them so they can be used by the template function.
       if (m->is_method()) {
-        MetadataFactory::free_metadata(this, (Method*)m);
+        Method* method = (Method*)m;
+        MetadataFactory::free_metadata(this, method);
       } else if (m->is_constantPool()) {
         MetadataFactory::free_metadata(this, (ConstantPool*)m);
       } else if (m->is_klass()) {

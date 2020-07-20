@@ -5641,7 +5641,7 @@ address generate_avx_ghash_processBlocks() {
     __ testptr(rsp, Address(rsp, 0));
 
     __ movptr(rsp, Address(rsp, 0)); // new rsp was written in the barrier
-    __ jmp(Address(rsp, -1 * wordSize)); // jmp target should be callers verified_entry_point
+    __ jmp(Address(rsp, -1 * wordSize)); // jmp target should be callers entry_point
 
     return start;
   }
@@ -6429,14 +6429,8 @@ address generate_avx_ghash_processBlocks() {
     generate_safefetch("SafeFetchN", sizeof(intptr_t), &StubRoutines::_safefetchN_entry,
                                                        &StubRoutines::_safefetchN_fault_pc,
                                                        &StubRoutines::_safefetchN_continuation_pc);
-  }
 
-  void generate_all() {
-    // Generates all stubs and initializes the entry points
 
-    // These entry points require SharedInfo::stack0 to be set up in
-    // non-core builds and need to be relocatable, so they each
-    // fabricate a RuntimeStub internally.
     StubRoutines::_throw_AbstractMethodError_entry =
       generate_throw_exception("AbstractMethodError throw_exception",
                                CAST_FROM_FN_PTR(address,
@@ -6448,6 +6442,14 @@ address generate_avx_ghash_processBlocks() {
                                CAST_FROM_FN_PTR(address,
                                                 SharedRuntime::
                                                 throw_IncompatibleClassChangeError));
+  }
+
+  void generate_all() {
+    // Generates all stubs and initializes the entry points
+
+    // These entry points require SharedInfo::stack0 to be set up in
+    // non-core builds and need to be relocatable, so they each
+    // fabricate a RuntimeStub internally.
 
     StubRoutines::_throw_NullPointerException_at_call_entry =
       generate_throw_exception("NullPointerException at call throw_exception",

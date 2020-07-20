@@ -313,19 +313,6 @@ void CodeSection::relocate(address at, relocInfo::relocType rtype, int format, j
   RelocationHolder rh;
   switch (rtype) {
     case relocInfo::none: return;
-    case relocInfo::opt_virtual_call_type: {
-      rh = opt_virtual_call_Relocation::spec(method_index);
-      break;
-    }
-    case relocInfo::static_call_type: {
-      rh = static_call_Relocation::spec(method_index);
-      break;
-    }
-    case relocInfo::virtual_call_type: {
-      assert(method_index == 0, "resolved method overriding is not supported");
-      rh = Relocation::spec_simple(rtype);
-      break;
-    }
     default: {
       rh = Relocation::spec_simple(rtype);
       break;

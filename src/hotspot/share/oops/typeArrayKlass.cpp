@@ -71,9 +71,10 @@ TypeArrayKlass* TypeArrayKlass::allocate(ClassLoaderData* loader_data, BasicType
   assert(TypeArrayKlass::header_size() <= InstanceKlass::header_size(),
       "array klasses must be same size as InstanceKlass");
 
+  int prefix_size = Universe::base_vtable_size();
   int size = ArrayKlass::static_size(TypeArrayKlass::header_size());
 
-  return new (loader_data, size, THREAD) TypeArrayKlass(type, name);
+  return new (loader_data, size, prefix_size, THREAD) TypeArrayKlass(type, name);
 }
 
 TypeArrayKlass::TypeArrayKlass(BasicType type, Symbol* name) : ArrayKlass(name, ID) {

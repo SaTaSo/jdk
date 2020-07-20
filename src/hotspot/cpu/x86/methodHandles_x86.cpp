@@ -35,6 +35,7 @@
 #include "prims/methodHandles.hpp"
 #include "runtime/flags/flagSetting.hpp"
 #include "runtime/frame.inline.hpp"
+#include "runtime/sharedRuntime.hpp"
 #include "utilities/preserveException.hpp"
 
 #define __ Disassembler::hook<MacroAssembler>(__FILE__, __LINE__, _masm)->
@@ -74,7 +75,7 @@ void MethodHandles::verify_klass(MacroAssembler* _masm,
   Klass* klass = SystemDictionary::well_known_klass(klass_id);
   Register temp = rdi;
   Register temp2 = noreg;
-  LP64_ONLY(temp2 = rscratch1);  // used by MacroAssembler::cmpptr and load_klass
+  LP64_ONLY(temp2 = rscratch2);  // used by MacroAssembler::cmpptr and load_klass
   Label L_ok, L_bad;
   BLOCK_COMMENT("verify_klass {");
   __ verify_oop(obj);
@@ -175,11 +176,11 @@ void MethodHandles::jump_to_lambda_form(MacroAssembler* _masm,
   __ verify_oop(method_temp);
   __ load_heap_oop(method_temp, Address(method_temp, NONZERO(java_lang_invoke_LambdaForm::vmentry_offset())), temp2);
   __ verify_oop(method_temp);
-  __ load_heap_oop(method_temp, Address(method_temp, NONZERO(java_lang_invoke_MemberName::method_offset())), temp2);
-  __ verify_oop(method_temp);
-  __ access_load_at(T_ADDRESS, IN_HEAP, method_temp,
-                    Address(method_temp, NONZERO(java_lang_invoke_ResolvedMethodName::vmtarget_offset())),
+  __ access_load_at(T_INT, IN_HEAP, method_temp,
+                    Address(method_temp, NONZERO(java_lang_invoke_MemberName::method_offset())),
                     noreg, noreg);
+  __ lookup_method_from_table_entry(method_temp /* rentry */, r11 /* rtmp1 */,
+                                    rax /* rtmp2 */, r10 /* rtmp3 */);
 
   if (VerifyMethodHandles && !for_compiler_entry) {
     // make sure recv is already on stack
@@ -300,9 +301,9 @@ void MethodHandles::generate_method_handle_dispatch(MacroAssembler* _masm,
   Register rbx_method = rbx;   // eventual target of this invocation
   // temps used in this code are not used in *either* compiled or interpreted calling sequences
 #ifdef _LP64
-  Register temp1 = rscratch1;
-  Register temp2 = rscratch2;
-  Register temp3 = rax;
+  Register temp1 = rscratch2;
+  Register temp2 = rax;
+  Register temp3 = rscratch1;
   if (for_compiler_entry) {
     assert(receiver_reg == (iid == vmIntrinsics::_linkToStatic ? noreg : j_rarg0), "only valid assignment");
     assert_different_registers(temp1,        j_rarg0, j_rarg1, j_rarg2, j_rarg3, j_rarg4, j_rarg5);
@@ -341,7 +342,6 @@ void MethodHandles::generate_method_handle_dispatch(MacroAssembler* _masm,
     Address member_clazz(    member_reg, NONZERO(java_lang_invoke_MemberName::clazz_offset()));
     Address member_vmindex(  member_reg, NONZERO(java_lang_invoke_MemberName::vmindex_offset()));
     Address member_vmtarget( member_reg, NONZERO(java_lang_invoke_MemberName::method_offset()));
-    Address vmtarget_method( rbx_method, NONZERO(java_lang_invoke_ResolvedMethodName::vmtarget_offset()));
 
     Register temp1_recv_klass = temp1;
     if (iid != vmIntrinsics::_linkToStatic) {
@@ -393,16 +393,18 @@ void MethodHandles::generate_method_handle_dispatch(MacroAssembler* _masm,
       if (VerifyMethodHandles) {
         verify_ref_kind(_masm, JVM_REF_invokeSpecial, member_reg, temp3);
       }
-      __ load_heap_oop(rbx_method, member_vmtarget);
-      __ access_load_at(T_ADDRESS, IN_HEAP, rbx_method, vmtarget_method, noreg, noreg);
+      __ access_load_at(T_INT, IN_HEAP, rbx_method, member_vmtarget, noreg, noreg);
+      __ lookup_method_from_table_entry(rbx_method /* rentry */, r11 /* rtmp1 */,
+                                        rax /* rtmp2 */, r10 /* rtmp3 */);
       break;
 
     case vmIntrinsics::_linkToStatic:
       if (VerifyMethodHandles) {
         verify_ref_kind(_masm, JVM_REF_invokeStatic, member_reg, temp3);
       }
-      __ load_heap_oop(rbx_method, member_vmtarget);
-      __ access_load_at(T_ADDRESS, IN_HEAP, rbx_method, vmtarget_method, noreg, noreg);
+      __ access_load_at(T_INT, IN_HEAP, rbx_method, member_vmtarget, noreg, noreg);
+      __ lookup_method_from_table_entry(rbx_method /* rentry */, r11 /* rtmp1 */,
+                                        rax /* rtmp2 */, r10 /* rtmp3 */);
       break;
 
     case vmIntrinsics::_linkToVirtual:
@@ -430,7 +432,15 @@ void MethodHandles::generate_method_handle_dispatch(MacroAssembler* _masm,
       // at this point.  And VerifyMethodHandles has already checked clazz, if needed.
 
       // get target Method* & entry point
-      __ lookup_virtual_method(temp1_recv_klass, temp2_index, rbx_method);
+      if (for_compiler_entry) {
+        __ lookup_vtable_entry(r10, temp1_recv_klass, temp2_index);
+        __ unpack_table_entry(rbx_method, r10);
+        __ Assembler::jmp(r10);
+        return;
+      } else {
+        __ movptr(rbx_method, temp2_index);
+        __ lookup_virtual_method(rbx_method, temp1_recv_klass, temp2_index, temp3);
+      }
       break;
     }
 
@@ -447,22 +457,48 @@ void MethodHandles::generate_method_handle_dispatch(MacroAssembler* _masm,
       load_klass_from_Class(_masm, temp3_intf);
       __ verify_klass_ptr(temp3_intf);
 
-      Register rbx_index = rbx_method;
-      __ access_load_at(T_ADDRESS, IN_HEAP, rbx_index, member_vmindex, noreg, noreg);
+
+      // Note that in this context, temp3_intf is actually the DEFC of the interface
+      // invocation. The proper REFC check happens on the DirectMethodHandle level.
+      // So we don't need a REFC check here.
+
+      __ access_load_at(T_ADDRESS, IN_HEAP, temp2, member_vmindex, noreg, noreg);
       if (VerifyMethodHandles) {
         Label L;
-        __ cmpl(rbx_index, 0);
+        __ cmpl(temp2, 0);
         __ jcc(Assembler::greaterEqual, L);
-        __ STOP("invalid vtable index for MH.invokeInterface");
+        __ STOP("invalid itable selector for MH.invokeInterface");
         __ bind(L);
       }
 
-      // given intf, index, and recv klass, dispatch to the implementation method
-      __ lookup_interface_method(temp1_recv_klass, temp3_intf,
-                                 // note: next two args must be the same:
-                                 rbx_index, rbx_method,
-                                 temp2,
-                                 L_incompatible_class_change_error);
+      if (for_compiler_entry) {
+        Label dispatch_to_entry;
+        __ lookup_itable_entry(temp2, temp1_recv_klass, temp3, dispatch_to_entry);
+
+        // The above lookup can spradically fail due to data races in the compiled itable.
+        // We retry with the interpreter itable which does not race upon failure.
+        __ movptr(rbx_method, temp2);
+        __ lookup_interface_method(rbx_method,
+                                   temp1_recv_klass,
+                                   temp2,
+                                   temp3_intf);
+        Label slow_dispatch;
+        __ jmp(slow_dispatch);
+
+        // Unpack and call primary bucket
+        __ bind(dispatch_to_entry);
+        __ unpack_table_entry(rbx_method, temp3);
+        __ jmp(temp3);
+
+        __ bind(slow_dispatch);
+      } else {
+        // given intf, index, and recv klass, dispatch to the implementation method
+        __ movptr(rbx_method, temp2);
+        __ lookup_interface_method(rbx_method,
+                                   temp1_recv_klass,
+                                   temp2,
+                                   temp3_intf);
+      }
       break;
     }
 
@@ -473,7 +509,7 @@ void MethodHandles::generate_method_handle_dispatch(MacroAssembler* _masm,
 
     // Live at this point:
     //   rbx_method
-    //   rsi/r13 (if interpreted)
+    //   rsi/r13
 
     // After figuring out which concrete method to call, jump into it.
     // Note that this works in the interpreter with no data motion.

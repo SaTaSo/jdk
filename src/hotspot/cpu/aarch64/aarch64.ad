@@ -1971,44 +1971,6 @@ uint BoxLockNode::size(PhaseRegAlloc *ra_) const {
   }
 }
 
-//=============================================================================
-
-#ifndef PRODUCT
-void MachUEPNode::format(PhaseRegAlloc* ra_, outputStream* st) const
-{
-  st->print_cr("# MachUEPNode");
-  if (UseCompressedClassPointers) {
-    st->print_cr("\tldrw rscratch1, j_rarg0 + oopDesc::klass_offset_in_bytes()]\t# compressed klass");
-    if (CompressedKlassPointers::shift() != 0) {
-      st->print_cr("\tdecode_klass_not_null rscratch1, rscratch1");
-    }
-  } else {
-   st->print_cr("\tldr rscratch1, j_rarg0 + oopDesc::klass_offset_in_bytes()]\t# compressed klass");
-  }
-  st->print_cr("\tcmp r0, rscratch1\t # Inline cache check");
-  st->print_cr("\tbne, SharedRuntime::_ic_miss_stub");
-}
-#endif
-
-void MachUEPNode::emit(CodeBuffer& cbuf, PhaseRegAlloc* ra_) const
-{
-  // This is the unverified entry point.
-  C2_MacroAssembler _masm(&cbuf);
-
-  __ cmp_klass(j_rarg0, rscratch2, rscratch1);
-  Label skip;
-  // TODO
-  // can we avoid this skip and still use a reloc?
-  __ br(Assembler::EQ, skip);
-  __ far_jump(RuntimeAddress(SharedRuntime::get_ic_miss_stub()));
-  __ bind(skip);
-}
-
-uint MachUEPNode::size(PhaseRegAlloc* ra_) const
-{
-  return MachNode::size(ra_);
-}
-
 // REQUIRED EMIT CODE
 
 //=============================================================================
@@ -3428,7 +3390,7 @@ encode %{
   enc_class aarch64_enc_java_dynamic_call(method meth) %{
     C2_MacroAssembler _masm(&cbuf);
     int method_index = resolved_method_index(cbuf);
-    address call = __ ic_call((address)$meth$$method, method_index);
+    // TODO: isnert call here
     if (call == NULL) {
       ciEnv::current()->record_failure("CodeCache is full");
       return;
@@ -3701,9 +3663,6 @@ frame %{
 
   // These three registers define part of the calling convention
   // between compiled code and the interpreter.
-
-  // Inline Cache Register or methodOop for I2C.
-  inline_cache_reg(R12);
 
   // Method Oop Register when calling interpreter.
   interpreter_method_oop_reg(R12);

@@ -72,7 +72,9 @@
 // existing ones, make sure to adapt the dtrace scripts (jhelper.d) for
 // Solaris and BSD.
 
+class CompiledMethod;
 class ExceptionCache;
+class JavaThread;
 class KlassDepChange;
 class OopClosure;
 class ShenandoahParallelCodeHeapIterator;
@@ -93,8 +95,11 @@ class CodeCache : AllStatic {
 
   static address _low_bound;                            // Lower bound of CodeHeap addresses
   static address _high_bound;                           // Upper bound of CodeHeap addresses
+  static int _code_pointer_shift;
+  static bool _supports_32_bit_code_pointers;
   static int _number_of_nmethods_with_dependencies;     // Total number of nmethods with dependencies
   static uint8_t _unloading_cycle;                      // Global state for recognizing old nmethods that need to be unloaded
+  static CompiledMethod* volatile _purge_head;
 
   static ExceptionCache* volatile _exception_cache_purge_list;
 
@@ -134,6 +139,9 @@ class CodeCache : AllStatic {
   static const GrowableArray<CodeHeap*>* heaps() { return _heaps; }
   static const GrowableArray<CodeHeap*>* compiled_heaps() { return _compiled_heaps; }
   static const GrowableArray<CodeHeap*>* nmethod_heaps() { return _nmethod_heaps; }
+
+  // Unloaded cm, purge it later
+  static void add_purge(CompiledMethod* cm);
 
   // Allocation/administration
   static CodeBlob* allocate(int size, int code_blob_type, int orig_code_blob_type = CodeBlobType::All); // allocates a new CodeBlob
@@ -178,6 +186,7 @@ class CodeCache : AllStatic {
   };
 
   static void do_unloading(BoolObjectClosure* is_alive, bool unloading_occurred);
+  static void purge_unloading();
   static uint8_t unloading_cycle() { return _unloading_cycle; }
   static void increment_unloading_cycle();
   static void release_exception_cache(ExceptionCache* entry);
@@ -204,6 +213,12 @@ class CodeCache : AllStatic {
   static address high_bound()                         { return _high_bound; }
   static address high_bound(int code_blob_type);
 
+  // Can we encode code heap pointers with 32 bits?
+  static bool supports_32_bit_code_pointers() { return _supports_32_bit_code_pointers; }
+  // Steal some bits from selector IDs and use them for slightly larger code pointers
+  // for itables and vtables
+  static int code_pointer_shift() { vmassert(_code_pointer_shift != -1, "sanity"); return _code_pointer_shift; }
+
   // Have to use far call instructions to call this pc.
   static bool is_far_target(address pc);
 
@@ -214,9 +229,6 @@ class CodeCache : AllStatic {
   static size_t max_capacity();
 
   static double reverse_free_ratio(int code_blob_type);
-
-  static void clear_inline_caches();                  // clear all inline caches
-  static void cleanup_inline_caches();                // clean unloaded/zombie nmethods from inline caches
 
   // Returns true if an own CodeHeap for the given CodeBlobType is available
   static bool heap_available(int code_blob_type);
@@ -256,9 +268,6 @@ class CodeCache : AllStatic {
     ShouldNotReachHere();
     return 0;
   }
-
-  static void verify_clean_inline_caches();
-  static void verify_icholder_relocations();
 
   // Deoptimization
  private:
@@ -307,21 +316,13 @@ class CodeCache : AllStatic {
 
 // Iterator to iterate over nmethods in the CodeCache.
 template <class T, class Filter> class CodeBlobIterator : public StackObj {
- public:
-  enum LivenessFilter { all_blobs, only_alive, only_alive_and_not_unloading };
-
  private:
   CodeBlob* _code_blob;   // Current CodeBlob
   GrowableArrayIterator<CodeHeap*> _heap;
   GrowableArrayIterator<CodeHeap*> _end;
-  bool _only_alive;
-  bool _only_not_unloading;
 
  public:
-  CodeBlobIterator(LivenessFilter filter, T* nm = NULL)
-    : _only_alive(filter == only_alive || filter == only_alive_and_not_unloading),
-      _only_not_unloading(filter == only_alive_and_not_unloading)
-  {
+  CodeBlobIterator(T* nm = NULL) {
     if (Filter::heaps() == NULL) {
       return;
     }
@@ -349,19 +350,6 @@ template <class T, class Filter> class CodeBlobIterator : public StackObj {
         }
         ++_heap;
         continue;
-      }
-
-      // Filter is_alive as required
-      if (_only_alive && !_code_blob->is_alive()) {
-        continue;
-      }
-
-      // Filter is_unloading as required
-      if (_only_not_unloading) {
-        CompiledMethod* cm = _code_blob->as_compiled_method_or_null();
-        if (cm != NULL && cm->is_unloading()) {
-          continue;
-        }
       }
 
       return true;
@@ -397,19 +385,36 @@ private:
   }
 };
 
-
 struct CompiledMethodFilter {
-  static bool apply(CodeBlob* cb) { return cb->is_compiled(); }
+  static bool apply(CodeBlob* cb) { return cb->is_compiled() && !cb->as_compiled_method()->is_unloading(); }
   static const GrowableArray<CodeHeap*>* heaps() { return CodeCache::compiled_heaps(); }
 };
 
+struct AllCompiledMethodFilter {
+  static void verify();
+  static bool apply(CodeBlob* cb) {
+    DEBUG_ONLY(verify());
+    return cb->is_compiled();
+  }
+  static const GrowableArray<CodeHeap*>* heaps() { return CodeCache::compiled_heaps(); }
+};
 
 struct NMethodFilter {
-  static bool apply(CodeBlob* cb) { return cb->is_nmethod(); }
-  static const GrowableArray<CodeHeap*>* heaps() { return CodeCache::nmethod_heaps(); }
+  static bool apply(CodeBlob* cb) { return cb->is_nmethod() && !cb->as_nmethod()->is_unloading(); }
+  static const GrowableArray<CodeHeap*>* heaps() { return CodeCache::compiled_heaps(); }
 };
 
 typedef CodeBlobIterator<CompiledMethod, CompiledMethodFilter> CompiledMethodIterator;
 typedef CodeBlobIterator<nmethod, NMethodFilter> NMethodIterator;
+typedef CodeBlobIterator<CompiledMethod, AllCompiledMethodFilter> AllCompiledMethodIterator;
+
+class CompiledMethodMarker: public StackObj {
+private:
+  JavaThread* _thread;
+  bool        _active;
+public:
+  CompiledMethodMarker(CompiledMethod* cm);
+  ~CompiledMethodMarker();
+};
 
 #endif // SHARE_CODE_CODECACHE_HPP

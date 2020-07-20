@@ -34,10 +34,8 @@
 #include "classfile/systemDictionary.hpp"
 #include "classfile/vmSymbols.hpp"
 #include "code/codeBlob.hpp"
-#include "code/compiledIC.hpp"
 #include "code/pcDesc.hpp"
 #include "code/scopeDesc.hpp"
-#include "code/vtableStubs.hpp"
 #include "compiler/compilationPolicy.hpp"
 #include "compiler/disassembler.hpp"
 #include "gc/shared/barrierSet.hpp"
@@ -1443,11 +1441,6 @@ JRT_END
 #ifndef PRODUCT
 void Runtime1::print_statistics() {
   tty->print_cr("C1 Runtime statistics:");
-  tty->print_cr(" _resolve_invoke_virtual_cnt:     %d", SharedRuntime::_resolve_virtual_ctr);
-  tty->print_cr(" _resolve_invoke_opt_virtual_cnt: %d", SharedRuntime::_resolve_opt_virtual_ctr);
-  tty->print_cr(" _resolve_invoke_static_cnt:      %d", SharedRuntime::_resolve_static_ctr);
-  tty->print_cr(" _handle_wrong_method_cnt:        %d", SharedRuntime::_wrong_method_ctr);
-  tty->print_cr(" _ic_miss_cnt:                    %d", SharedRuntime::_ic_miss_ctr);
   tty->print_cr(" _generic_arraycopy_cnt:          %d", _generic_arraycopy_cnt);
   tty->print_cr(" _generic_arraycopystub_cnt:      %d", _generic_arraycopystub_cnt);
   tty->print_cr(" _byte_arraycopy_cnt:             %d", _byte_arraycopy_stub_cnt);
@@ -1476,7 +1469,6 @@ void Runtime1::print_statistics() {
   tty->print_cr(" _throw_array_store_exception_count:            %d:", _throw_array_store_exception_count);
   tty->print_cr(" _throw_count:                                  %d:", _throw_count);
 
-  SharedRuntime::print_ic_miss_histogram();
   tty->cr();
 }
 #endif // PRODUCT

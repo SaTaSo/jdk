@@ -211,7 +211,6 @@ private:
   void pd_patch_MetaspaceConstant(int pc_offset, JVMCIObject constant, JVMCI_TRAPS);
   void pd_patch_DataSectionReference(int pc_offset, int data_offset, JVMCI_TRAPS);
   void pd_relocate_ForeignCall(NativeInstruction* inst, jlong foreign_call_destination, JVMCI_TRAPS);
-  void pd_relocate_JavaMethod(CodeBuffer &cbuf, JVMCIObject method, jint pc_offset, JVMCI_TRAPS);
   void pd_relocate_poll(address pc, jint mark, JVMCI_TRAPS);
 
   JVMCIObjectArray sites()                { return _sites_handle; }

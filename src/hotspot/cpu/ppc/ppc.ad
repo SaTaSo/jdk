@@ -721,9 +721,8 @@ reg_class bits64_reg_leaf_call(
   R31_H, R31
 );
 
-// Used to hold the TOC to avoid collisions with expanded DynamicCall
-// which uses r19 as inline cache internally and expanded LeafCall which uses
-// r2, r11 and r12 internally.
+// Used to hold the TOC to avoid collisions with expanded LeafCall
+// which uses r2, r11 and r12 internally.
 reg_class bits64_constant_table_base(
 /*R0_H,  R0*/     // R0
 /*R1_H,  R1*/     // SP
@@ -1095,25 +1094,10 @@ bool followed_by_acquire(const Node *load) {
 // PPC port: Removed use of lazy constant construct.
 
 int MachCallStaticJavaNode::ret_addr_offset() {
-  // It's only a single branch-and-link instruction.
-  return 4;
+// TODO: measure these dynamically like x86
 }
 
 int MachCallDynamicJavaNode::ret_addr_offset() {
-  // Offset is 4 with postalloc expanded calls (bl is one instruction). We use
-  // postalloc expanded calls if we use inline caches and do not update method data.
-  if (UseInlineCaches)
-    return 4;
-
-  int vtable_index = this->_vtable_index;
-  if (vtable_index < 0) {
-    // Must be invalid_vtable_index, not nonvirtual_vtable_index.
-    assert(vtable_index == Method::invalid_vtable_index, "correct sentinel value");
-    return 12;
-  } else {
-    assert(!UseInlineCaches, "expect vtable calls only if not using ICs");
-    return 24;
-  }
 }
 
 int MachCallRuntimeNode::ret_addr_offset() {
@@ -2091,68 +2075,6 @@ void BoxLockNode::emit(CodeBuffer &cbuf, PhaseRegAlloc *ra_) const {
 uint BoxLockNode::size(PhaseRegAlloc *ra_) const {
   // BoxLockNode is not a MachNode, so we can't just call MachNode::size(ra_).
   return 4;
-}
-
-#ifndef PRODUCT
-void MachUEPNode::format(PhaseRegAlloc *ra_, outputStream *st) const {
-  st->print_cr("---- MachUEPNode ----");
-  st->print_cr("...");
-}
-#endif
-
-void MachUEPNode::emit(CodeBuffer &cbuf, PhaseRegAlloc *ra_) const {
-  // This is the unverified entry point.
-  C2_MacroAssembler _masm(&cbuf);
-
-  // Inline_cache contains a klass.
-  Register ic_klass       = as_Register(Matcher::inline_cache_reg_encode());
-  Register receiver_klass = R12_scratch2;  // tmp
-
-  assert_different_registers(ic_klass, receiver_klass, R11_scratch1, R3_ARG1);
-  assert(R11_scratch1 == R11, "need prologue scratch register");
-
-  // Check for NULL argument if we don't have implicit null checks.
-  if (!ImplicitNullChecks || !os::zero_page_read_protected()) {
-    if (TrapBasedNullChecks) {
-      __ trap_null_check(R3_ARG1);
-    } else {
-      Label valid;
-      __ cmpdi(CCR0, R3_ARG1, 0);
-      __ bne_predict_taken(CCR0, valid);
-      // We have a null argument, branch to ic_miss_stub.
-      __ b64_patchable((address)SharedRuntime::get_ic_miss_stub(),
-                           relocInfo::runtime_call_type);
-      __ bind(valid);
-    }
-  }
-  // Assume argument is not NULL, load klass from receiver.
-  __ load_klass(receiver_klass, R3_ARG1);
-
-  if (TrapBasedICMissChecks) {
-    __ trap_ic_miss_check(receiver_klass, ic_klass);
-  } else {
-    Label valid;
-    __ cmpd(CCR0, receiver_klass, ic_klass);
-    __ beq_predict_taken(CCR0, valid);
-    // We have an unexpected klass, branch to ic_miss_stub.
-    __ b64_patchable((address)SharedRuntime::get_ic_miss_stub(),
-                         relocInfo::runtime_call_type);
-    __ bind(valid);
-  }
-
-  // Argument is valid and klass is as expected, continue.
-}
-
-#if 0 // TODO: PPC port
-// Optimize UEP code on z (save a load_const() call in main path).
-int MachUEPNode::ep_offset() {
-  return 0;
-}
-#endif
-
-uint MachUEPNode::size(PhaseRegAlloc *ra_) const {
-  // Variable size. Determine dynamically.
-  return MachNode::size(ra_);
 }
 
 //=============================================================================
@@ -3706,7 +3628,7 @@ encode %{
   // Branch-and-link relative to a trampoline.
   // The trampoline loads the target address and does a long branch to there.
   // In case we call java, the trampoline branches to a interpreter_stub
-  // which loads the inline cache and the real call target from the constant pool.
+  // which loads the method and the real call target from the constant pool.
   //
   // This basically looks like this:
   //
@@ -3881,20 +3803,9 @@ encode %{
       call->add_prec(in(i));
     }
 
-    // Remember nodes loading the inline cache into r19.
-    call->_load_ic_hi_node = loadConLNodes_IC._large_hi;
-    call->_load_ic_node    = loadConLNodes_IC._small;
-
     // Operands for new nodes.
     call->_opnds[0] = _opnds[0];
     call->_opnds[1] = _opnds[1];
-
-    // Only the inline cache is associated with a register.
-    assert(Matcher::inline_cache_reg() == OptoReg::Name(R19_num), "ic reg should be R19");
-
-    // Push new nodes.
-    if (loadConLNodes_IC._large_hi) nodes->push(loadConLNodes_IC._large_hi);
-    if (loadConLNodes_IC._last)     nodes->push(loadConLNodes_IC._last);
     nodes->push(call);
   %}
 
@@ -4115,9 +4026,6 @@ frame %{
 
   // These two registers define part of the calling convention between
   // compiled code and the interpreter.
-
-  // Inline Cache Register or method for I2C.
-  inline_cache_reg(R19); // R19_method
 
   // Method Oop Register when calling interpreter.
   interpreter_method_oop_reg(R19); // R19_method

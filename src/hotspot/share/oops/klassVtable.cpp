@@ -28,29 +28,145 @@
 #include "classfile/javaClasses.hpp"
 #include "classfile/systemDictionary.hpp"
 #include "classfile/vmSymbols.hpp"
+#include "code/nmethod.hpp"
+#include "code/codeCache.hpp"
 #include "interpreter/linkResolver.hpp"
 #include "logging/log.hpp"
 #include "logging/logStream.hpp"
+#include "memory/metadataFactory.hpp"
 #include "memory/metaspaceShared.hpp"
 #include "memory/resourceArea.hpp"
 #include "memory/universe.hpp"
 #include "oops/instanceKlass.hpp"
 #include "oops/klassVtable.hpp"
-#include "oops/method.hpp"
+#include "oops/method.inline.hpp"
 #include "oops/objArrayOop.hpp"
 #include "oops/oop.inline.hpp"
+#include "oops/selectorMap.inline.hpp"
 #include "runtime/arguments.hpp"
 #include "runtime/flags/flagSetting.hpp"
 #include "runtime/handles.inline.hpp"
 #include "runtime/safepointVerifiers.hpp"
+#include "runtime/sharedRuntime.hpp"
 #include "utilities/copy.hpp"
+
+static inline tableEntry make_entry(uint32_t selector, address code_addr) {
+  tableEntry entry;
+  uintptr_t code_intptr = reinterpret_cast<uintptr_t>(code_addr);
+  if (code_addr != NULL) {
+    if (CodeCache::supports_32_bit_code_pointers()) {
+      code_intptr <<= (32 - CodeCache::code_pointer_shift());
+    } else {
+      uintptr_t code_base = (uintptr_t)CodeCache::low_bound();
+      code_intptr = (code_intptr - code_base) << 32;
+    }
+  }
+  entry._entry = code_intptr | selector;
+  assert(selector == 0 || entry.method() != NULL, "sanity");
+  return entry;
+}
+
+address tableEntry::table_entry_code(Method* method, bool is_itable) {
+  assert_lock_strong(CompiledMethod_lock);
+  CompiledMethod* cm = method->code();
+  if (method->is_overpass() || cm == NULL || cm->is_unloading()) {
+    if (method->adapter() == NULL) {
+      // during bootstrapping; adapter not yet initialized
+      return SharedRuntime::get_bad_call_stub();
+    }
+    // interpreter calls
+    if (is_itable) {
+      return method->get_c2i_itable_entry();
+    } else {
+      return method->get_c2i_vtable_entry();
+    }
+  } else {
+    // to compiled calls
+    return cm->entry_point();
+  }
+}
+
+static inline tableEntry make_table_entry(uint32_t selector, Method* method, bool is_itable) {
+  if (method == NULL) {
+    return make_entry(0, SharedRuntime::get_bad_call_stub());
+  }
+  return make_entry(selector, tableEntry::table_entry_code(method, is_itable));
+}
+
+static inline tableEntry make_vtable_entry(Method* method) {
+  return make_table_entry(method == NULL ? 0 : method->selector(), method, false /* is_itable */);
+}
+
+static inline tableEntry make_itable_entry(uint32_t selector, Method* method) {
+  return make_table_entry(selector, method, true /* is_itable */);
+}
+
+void klassVtable::link_table_code() {
+  MutexLocker ml(CompiledMethod_lock, Mutex::_no_safepoint_check_flag);
+  SelectorMap<Method*> method_selector_map = SystemDictionary::method_selector_map();
+  for (int vtable_index = 0; vtable_index < length(); ++vtable_index) {
+    tableEntry vtable_entry = _table[-vtable_index];
+    Method* method = method_selector_map.get(vtable_entry.selector());
+    _table[-vtable_index] = make_vtable_entry(method);
+  }
+}
+
+void klassVtable::link_code(int vtable_index, Method* method) {
+  assert_lock_strong(CompiledMethod_lock);
+  assert(method_at(vtable_index) == method, "methods must match");
+  assert(vtable_index >= 0 && vtable_index < length(), "out of bounds");
+  _table[-vtable_index] = make_vtable_entry(method);
+}
+
+Method** klassVtable::scratch_table() {
+  if (_scratch_table == NULL) {
+    // TODO adjust address for 32 bit.
+    _scratch_table = reinterpret_cast<Method**>(_table);
+  }
+  return _scratch_table;
+}
+
+void klassVtable::link_code(bool bootstrapping) {
+  MutexLocker ml(CompiledMethod_lock, Mutex::_no_safepoint_check_flag);
+  Method** st = scratch_table();
+  for (int32_t vtable_index = 0; vtable_index < (int32_t)length(); ++vtable_index) {
+    Method* vtable_method = st[-vtable_index];
+    if (vtable_method == NULL) {
+      _table[-vtable_index] = make_entry(0, SharedRuntime::get_bad_call_stub());
+    } else {
+      _table[-vtable_index] = make_vtable_entry(vtable_method);
+    }
+  }
+}
+
+int klassVtable::length() const {
+  return _length;
+}
+
+tableEntry klassVtable::entry_at(int i) const {
+  assert(i >= 0 && i < (int)length(), "index out of bounds");
+  return _table[-i];
+}
+
+Method* klassVtable::unchecked_method_at(int i) const {
+  return entry_at(i).method();
+}
+
+Method* klassVtable::method_at(int i) const {
+  Method* method = unchecked_method_at(i);
+  assert(method != NULL, "should not be null");
+  assert((Metadata*)method->is_method(), "should be method");
+  return method;
+}
 
 inline InstanceKlass* klassVtable::ik() const {
   return InstanceKlass::cast(_klass);
 }
 
 bool klassVtable::is_preinitialized_vtable() {
-  return _klass->is_shared() && !MetaspaceShared::remapped_readwrite();
+  return false;
+  // TODO: Should support preinitialized vtables
+  //return _klass->is_shared() && !MetaspaceShared::remapped_readwrite();
 }
 
 
@@ -75,7 +191,7 @@ void klassVtable::compute_vtable_size_and_num_mirandas(
   int vtable_length = 0;
 
   // start off with super's vtable length
-  vtable_length = super == NULL ? 0 : super->vtable_length();
+  vtable_length = super == NULL ? 1 : super->vtable_length();
 
   // go thru each method in the methods table to see if it needs a new entry
   int len = methods->length();
@@ -85,7 +201,7 @@ void klassVtable::compute_vtable_size_and_num_mirandas(
 
     if (needs_new_vtable_entry(mh, super, classloader, classname, class_flags, major_version, THREAD)) {
       assert(!methods->at(i)->is_private(), "private methods should not need a vtable entry");
-      vtable_length += vtableEntry::size(); // we need a new entry
+      vtable_length++; // we need a new entry
     }
   }
 
@@ -98,10 +214,10 @@ void klassVtable::compute_vtable_size_and_num_mirandas(
   // Interfaces do not need interface methods in their vtables
   // This includes miranda methods and during later processing, default methods
   if (!class_flags.is_interface()) {
-     vtable_length += *num_new_mirandas * vtableEntry::size();
+     vtable_length += *num_new_mirandas;
   }
 
-  if (Universe::is_bootstrapping() && vtable_length == 0) {
+  if (Universe::is_bootstrapping() && vtable_length == 1) {
     // array classes don't have their superclass set correctly during
     // bootstrapping
     vtable_length = Universe::base_vtable_size();
@@ -122,10 +238,13 @@ void klassVtable::compute_vtable_size_and_num_mirandas(
       vtable_length = Universe::base_vtable_size();
     }
   }
-  assert(vtable_length % vtableEntry::size() == 0, "bad vtable length");
   assert(vtable_length >= Universe::base_vtable_size(), "vtable too small");
 
-  *vtable_length_ret = vtable_length;
+  *vtable_length_ret = (int)blob_size_words(vtable_length);
+}
+
+size_t klassVtable::blob_size_words(uint32_t length) {
+  return length * sizeof(tableEntry) / wordSize;
 }
 
 // Copy super class's vtable to the first part (prefix) of this class's vtable,
@@ -143,16 +262,16 @@ int klassVtable::initialize_from_super(Klass* super) {
   } else {
     // copy methods from superKlass
     klassVtable superVtable = super->vtable();
-    assert(superVtable.length() <= _length, "vtable too short");
+    assert(superVtable.length() <= length(), "vtable too short");
 #ifdef ASSERT
     superVtable.verify(tty, true);
 #endif
-    superVtable.copy_vtable_to(table());
+    superVtable.copy_vtable_to(this);
     if (log_develop_is_enabled(Trace, vtables)) {
       ResourceMark rm;
       log_develop_trace(vtables)("copy vtable from %s to %s size %d",
                                  super->internal_name(), klass()->internal_name(),
-                                 _length);
+                                 length());
     }
     return superVtable.length();
   }
@@ -161,7 +280,6 @@ int klassVtable::initialize_from_super(Klass* super) {
 //
 // Revised lookup semantics   introduced 1.3 (Kestrel beta)
 void klassVtable::initialize_vtable(bool checkconstraints, TRAPS) {
-
   // Note:  Arrays can have intermediate array supers.  Use java_super to skip them.
   InstanceKlass* super = _klass->java_super();
 
@@ -172,22 +290,16 @@ void klassVtable::initialize_vtable(bool checkconstraints, TRAPS) {
     log_develop_debug(vtables)("Initializing: %s", _klass->name()->as_C_string());
   }
 
-#ifdef ASSERT
-  oop* end_of_obj = (oop*)_klass + _klass->size();
-  oop* end_of_vtable = (oop*)&table()[_length];
-  assert(end_of_vtable <= end_of_obj, "vtable extends beyond end");
-#endif
-
   if (Universe::is_bootstrapping()) {
     assert(!is_shared, "sanity");
     // just clear everything
-    for (int i = 0; i < _length; i++) table()[i].clear();
+    for (int i = 0; i < length(); i++) scratch_table()[-i] = NULL;
     return;
   }
 
   int super_vtable_len = initialize_from_super(super);
   if (_klass->is_array_klass()) {
-    assert(super_vtable_len == _length, "arrays shouldn't introduce new methods");
+    assert(super_vtable_len == length(), "arrays shouldn't introduce new methods");
   } else {
     assert(_klass->is_instance_klass(), "must be InstanceKlass");
 
@@ -214,12 +326,13 @@ void klassVtable::initialize_vtable(bool checkconstraints, TRAPS) {
 
     // update vtable with default_methods
     Array<Method*>* default_methods = ik()->default_methods();
+
     if (default_methods != NULL) {
       len = default_methods->length();
       if (len > 0) {
         Array<int>* def_vtable_indices = NULL;
         if ((def_vtable_indices = ik()->default_vtable_indices()) == NULL) {
-          assert(!is_shared, "shared class def_vtable_indices does not exist");
+          //assert(!is_shared, "shared class def_vtable_indices does not exist"); // TODO: Reenable assert when CDS support is done
           def_vtable_indices = ik()->create_new_default_vtable_indices(len, CHECK);
         } else {
           assert(def_vtable_indices->length() == len, "reinit vtable len?");
@@ -228,6 +341,7 @@ void klassVtable::initialize_vtable(bool checkconstraints, TRAPS) {
           HandleMark hm(THREAD);
           assert(default_methods->at(i)->is_method(), "must be a Method*");
           methodHandle mh(THREAD, default_methods->at(i));
+
           assert(!mh->is_private(), "private interface method in the default method list");
           bool needs_new_entry = update_inherited_vtable(ik(), mh, super_vtable_len, i, checkconstraints, CHECK);
 
@@ -261,15 +375,19 @@ void klassVtable::initialize_vtable(bool checkconstraints, TRAPS) {
     // calculation, for classfile versions for which we do not do transitive override
     // calculations.
     if (ik()->major_version() >= VTABLE_TRANSITIVE_OVERRIDE_VERSION) {
-      assert(initialized == _length, "vtable initialization failed");
+      assert(initialized == length(), "vtable initialization failed");
     } else {
-      assert(initialized <= _length, "vtable initialization failed");
-      for(;initialized < _length; initialized++) {
-        table()[initialized].clear();
+      assert(initialized <= length(), "vtable initialization failed");
+      for(;initialized < length(); initialized++) {
+        scratch_table()[-initialized] = NULL;
       }
     }
-    NOT_PRODUCT(verify(tty, true));
   }
+
+  link_code(!checkconstraints);
+  _table[1] = make_entry(0, SharedRuntime::get_bad_call_stub());
+
+  NOT_PRODUCT(verify(tty, true));
 }
 
 // Called for cases where a method does not override its superclass' vtable entry
@@ -410,8 +528,8 @@ bool klassVtable::update_inherited_vtable(InstanceKlass* klass, const methodHand
     // valid itable index, if so, don't change it.
     // Overpass methods in an interface will be assigned an itable index later
     // by an inheriting class.
-    if ((!is_default || !target_method()->has_itable_index())) {
-      target_method()->set_vtable_index(Method::pending_itable_index);
+    if (!is_default || !target_method()->has_itable_index()) {
+      target_method()->set_vtable_index(Method::itable_index_max);
     }
   }
 
@@ -445,7 +563,7 @@ bool klassVtable::update_inherited_vtable(InstanceKlass* klass, const methodHand
       klassVtable superVtable = super->vtable();
       super_method = superVtable.method_at(i);
     } else {
-      super_method = method_at(i);
+      super_method = scratch_table()[-i];
     }
     // Check if method name matches.  Ignore match if klass is an interface and the
     // matching method is a non-public java.lang.Object method.  (See JVMS 5.4.3.4)
@@ -549,7 +667,7 @@ void klassVtable::put_method_at(Method* m, int index) {
     // for shared class loaded by the non-boot loader to obtain the loader
     // constraints based on the runtime classloaders' context. The dumptime
     // method at the vtable index should be the same as the runtime method.
-    assert(table()[index].method() == m,
+    assert(unchecked_method_at(index) == m,
            "archived method is different from the runtime method");
   } else {
     if (log_develop_is_enabled(Trace, vtables)) {
@@ -563,7 +681,8 @@ void klassVtable::put_method_at(Method* m, int index) {
       }
       ls.cr();
     }
-    table()[index].set(m);
+    // Lazily initialize the code pointers as they get used by compiled calls.
+    scratch_table()[-index] = m;
   }
 }
 
@@ -633,8 +752,6 @@ bool klassVtable::needs_new_vtable_entry(const methodHandle& target_method,
   Symbol* signature = target_method()->signature();
   const Klass* k = super;
   Method* super_method = NULL;
-  InstanceKlass *holder = NULL;
-  Method* recheck_method =  NULL;
   bool found_pkg_prvt_method = false;
   while (k != NULL) {
     // lookup through the hierarchy for a method with matching name and sign.
@@ -705,7 +822,7 @@ bool klassVtable::needs_new_vtable_entry(const methodHandle& target_method,
 int klassVtable::index_of_miranda(Symbol* name, Symbol* signature) {
   // search from the bottom, might be faster
   for (int i = (length() - 1); i >= 0; i--) {
-    Method* m = table()[i].method();
+    Method* m = unchecked_method_at(i);
     if (is_miranda_entry_at(i) &&
         m->name() == name && m->signature() == signature) {
       return i;
@@ -932,297 +1049,594 @@ int klassVtable::fill_in_mirandas(int initialized, TRAPS) {
 
 // Copy this class's vtable to the vtable beginning at start.
 // Used to copy superclass vtable to prefix of subclass's vtable.
-void klassVtable::copy_vtable_to(vtableEntry* start) {
-  Copy::disjoint_words((HeapWord*)table(), (HeapWord*)start, _length * vtableEntry::size());
-}
-
-#if INCLUDE_JVMTI
-bool klassVtable::adjust_default_method(int vtable_index, Method* old_method, Method* new_method) {
-  // If old_method is default, find this vtable index in default_vtable_indices
-  // and replace that method in the _default_methods list
-  bool updated = false;
-
-  Array<Method*>* default_methods = ik()->default_methods();
-  if (default_methods != NULL) {
-    int len = default_methods->length();
-    for (int idx = 0; idx < len; idx++) {
-      if (vtable_index == ik()->default_vtable_indices()->at(idx)) {
-        if (default_methods->at(idx) == old_method) {
-          default_methods->at_put(idx, new_method);
-          updated = true;
-        }
-        break;
-      }
-    }
-  }
-  return updated;
-}
-
-// search the vtable for uses of either obsolete or EMCP methods
-void klassVtable::adjust_method_entries(bool * trace_name_printed) {
-  int prn_enabled = 0;
-  ResourceMark rm;
-
-  for (int index = 0; index < length(); index++) {
-    Method* old_method = unchecked_method_at(index);
-    if (old_method == NULL || !old_method->is_old()) {
-      continue; // skip uninteresting entries
-    }
-    assert(!old_method->is_deleted(), "vtable methods may not be deleted");
-
-    Method* new_method = old_method->get_new_method();
-    put_method_at(new_method, index);
-
-    // For default methods, need to update the _default_methods array
-    // which can only have one method entry for a given signature
-    bool updated_default = false;
-    if (old_method->is_default_method()) {
-      updated_default = adjust_default_method(index, old_method, new_method);
-    }
-
-    if (!(*trace_name_printed)) {
-      log_info(redefine, class, update)
-        ("adjust: klassname=%s for methods from name=%s",
-         _klass->external_name(), old_method->method_holder()->external_name());
-      *trace_name_printed = true;
-    }
-    log_trace(redefine, class, update, vtables)
-      ("vtable method update: class: %s method: %s, updated default = %s",
-       _klass->external_name(), new_method->external_name(), updated_default ? "true" : "false");
+void klassVtable::copy_vtable_to(klassVtable* target) {
+  SelectorMap<Method*> method_map = SystemDictionary::method_selector_map();
+  size_t size_words = length();
+  for (size_t i = 0; i < size_words; ++i) {
+    tableEntry* src = _table - i;
+    Method** dst = target->scratch_table() - i;
+    Method* method = src->selector() == 0 ? NULL : method_map.get(src->selector());
+    *dst = method;
   }
 }
-
-// a vtable should never contain old or obsolete methods
-bool klassVtable::check_no_old_or_obsolete_entries() {
-  ResourceMark rm;
-
-  for (int i = 0; i < length(); i++) {
-    Method* m = unchecked_method_at(i);
-    if (m != NULL &&
-        (NOT_PRODUCT(!m->is_valid() ||) m->is_old() || m->is_obsolete())) {
-      log_trace(redefine, class, update, vtables)
-        ("vtable check found old method entry: class: %s old: %d obsolete: %d, method: %s",
-         _klass->external_name(), m->is_old(), m->is_obsolete(), m->external_name());
-      return false;
-    }
-  }
-  return true;
-}
-
-void klassVtable::dump_vtable() {
-  tty->print_cr("vtable dump --");
-  for (int i = 0; i < length(); i++) {
-    Method* m = unchecked_method_at(i);
-    if (m != NULL) {
-      tty->print("      (%5d)  ", i);
-      m->access_flags().print_on(tty);
-      if (m->is_default_method()) {
-        tty->print("default ");
-      }
-      if (m->is_overpass()) {
-        tty->print("overpass");
-      }
-      tty->print(" --  ");
-      m->print_name(tty);
-      tty->cr();
-    }
-  }
-}
-#endif // INCLUDE_JVMTI
 
 //-----------------------------------------------------------------------------------------
 // Itable code
 
-// Initialize a itableMethodEntry
-void itableMethodEntry::initialize(Method* m) {
-  if (m == NULL) return;
+class itableHashTableBuilder : public StackObj {
+  friend class ClassFileParser;
+  friend class klassItable;
+  struct Entry {
+    uint32_t _selector;
+    Method* _target;
+  };
 
-#ifdef ASSERT
-  if (MetaspaceShared::is_in_shared_metaspace((void*)&_method) &&
-     !MetaspaceShared::remapped_readwrite()) {
-    // At runtime initialize_itable is rerun as part of link_class_impl()
-    // for a shared class loaded by the non-boot loader.
-    // The dumptime itable method entry should be the same as the runtime entry.
-    assert(_method == m, "sanity");
+  const static uint32_t  _initial_capacity = 8;
+  const static uint32_t  _max_reshuffling_iterations = 8;
+  const static uint32_t  _max_refinement_iterations = 2;
+  InstanceKlass*         _ik;
+  int                    _random;
+  int                    _seed;
+  Array<InstanceKlass*>* _transitive_interfaces;
+  bool                   _resolve_methods;
+  Entry*                 _table;
+  uint32_t               _capacity;
+  uint32_t               _size;
+  uint32_t               _collisions;
+  uint8_t*               _itable_blob;
+
+  void put_code(uint32_t index, tableEntry entry);
+
+  int random();
+
+  uint32_t mask() const {
+    return _capacity - 1;
   }
-#endif
-  _method = m;
+
+  uint64_t primary_bucket(uint32_t selector) {
+    return selector & mask();
+  }
+
+  uint64_t secondary_bucket(uint32_t selector) {
+    return (selector >> 16) & mask();
+  }
+
+  void resize(uint32_t capacity);
+  bool set(uint32_t selector, Method* m);
+
+  bool has_many_collisions();
+  static CompiledMethod* cm(address code);
+  void refine_precision();
+  void populate_table();
+
+  static uint32_t itable_capacity(uint8_t* blob) { return reinterpret_cast<uint32_t*>(blob)[0] + 1; }
+  static uint32_t itable_size_bytes(uint8_t* blob) { return itable_capacity(blob) * sizeof(uint64_t) + klassItable::itable_header_size_bytes(); }
+  static tableEntry* itable_table(uint8_t* blob) { return (tableEntry*)(blob + klassItable::itable_header_size_bytes()); }
+
+public:
+  itableHashTableBuilder(InstanceKlass* ik);
+  itableHashTableBuilder(uint32_t seed, Array<InstanceKlass*>* transitive_interfaces);
+  ~itableHashTableBuilder();
+  void attach_itable(uint8_t* itable_blob);
+  void create_itable();
+  uint8_t* selector_map_blob();
+  void link_code(uint32_t selector, address method_code);
+  Method* get(uint32_t selector);
+  size_t compute_itable_size_words() {
+    size_t itable_size =_capacity * sizeof(tableEntry) / wordSize;
+    itable_size += itable_size == 0 ? 0 : klassItable::itable_header_size_words();
+    // Statistics
+    klassItable::update_stats((int)itable_size * wordSize);
+    return itable_size;
+  }
+
+  static ByteSize itable_mask_offset()  { return in_ByteSize(0); }
+};
+
+bool itableHashTableBuilder::has_many_collisions() {
+  return _collisions > (_size >> 3);
+}
+
+void itableHashTableBuilder::refine_precision() {
+  if (_resolve_methods) {
+    // Too late to refine the precision when resolving methods.
+    return;
+  }
+  for (uint32_t i = 0; i < _max_refinement_iterations && has_many_collisions(); i++) {
+    resize(_capacity << 1);
+    populate_table();
+  }
+}
+
+itableHashTableBuilder::itableHashTableBuilder(InstanceKlass* ik)
+  : _ik(ik),
+    _random(_ik->itable_seed()),
+    _seed(_ik->itable_seed()),
+    _transitive_interfaces(ik->transitive_interfaces()),
+    _resolve_methods(true),
+    _table(NULL),
+    _capacity(0),
+    _size(0),
+    _collisions(0),
+    _itable_blob(NULL)
+{
+  log_debug(itables)("Re-populating itable");
+  int itable_size_words = _ik->itable_length() - (int)klassItable::itable_header_size_words();
+  uint32_t new_capacity = itable_size_words * wordSize / sizeof(tableEntry);
+  assert(is_power_of_2(new_capacity), "sanity");
+  resize(new_capacity);
+  populate_table();
+}
+
+itableHashTableBuilder::itableHashTableBuilder(uint32_t seed, Array<InstanceKlass*>* transitive_interfaces)
+  : _ik(NULL),
+    _random(seed),
+    _seed(seed),
+    _transitive_interfaces(transitive_interfaces),
+    _resolve_methods(false),
+    _table(NULL),
+    _capacity(0),
+    _size(0),
+    _collisions(0),
+    _itable_blob(NULL)
+{
+  log_debug(itables)("Populating itable");
+  populate_table();
+  refine_precision();
+}
+
+itableHashTableBuilder::~itableHashTableBuilder() {
+  FREE_C_HEAP_ARRAY(Entry, _table);
+}
+
+void itableHashTableBuilder::attach_itable(uint8_t* itable_blob) {
+  _itable_blob = itable_blob;
+}
+
+void itableHashTableBuilder::create_itable() {
+  uint32_t* blob_int32 = (uint32_t*)_ik->start_of_itable();
+  tableEntry* blob_table = _ik->itable_table();
+  assert (_ik->has_itable(), "Don't create itable if there is no itable");
+
+  for (uint32_t i = 0; i < _capacity; i++) {
+    Entry entry = _table[i];
+    blob_table[i] = make_itable_entry(entry._selector, entry._target);
+  }
+  blob_table[0] = make_itable_entry(0, NULL);
+  blob_int32[0] = _capacity - 1; // mask
+}
+
+void itableHashTableBuilder::resize(uint32_t size) {
+  Entry* old_table = _table;
+
+  assert(!_resolve_methods || old_table == NULL, "sanity");
+
+  _capacity = size;
+  _table = NEW_C_HEAP_ARRAY(Entry, size, mtInternal);
+  _size = 0;
+  _collisions = 0;
+  Copy::zero_to_bytes(_table, sizeof(Entry) * size);
+
+  if (old_table != NULL) {
+    FREE_C_HEAP_ARRAY(CacheEntry, old_table);
+  }
+}
+
+Method* itableHashTableBuilder::get(uint32_t selector) {
+  assert(selector != 0, "sanity");
+
+  if (_size == 0) {
+    return NULL;
+  }
+
+  uint32_t pb = primary_bucket(selector);
+  Entry primary_entry = _table[pb];
+  if (primary_entry._selector == selector) {
+    return primary_entry._target;
+  }
+
+  uint sb = secondary_bucket(selector);
+  Entry secondary_entry = _table[sb];
+  if (secondary_entry._selector == selector) {
+    return secondary_entry._target;
+  }
+
+  return NULL;
+}
+
+int itableHashTableBuilder::random() {
+  int next = random_helper(_random);
+  _random = next;
+  return next;
+}
+
+CompiledMethod* itableHashTableBuilder::cm(address code) {
+  CodeBlob* cb = CodeCache::find_blob(code);
+  if (cb == NULL) {
+    return NULL;
+  }
+  return cb->as_compiled_method_or_null();
+}
+
+void itableHashTableBuilder::put_code(uint32_t index, tableEntry entry) {
+  itable_table(_itable_blob)[index] = entry;
+}
+
+void itableHashTableBuilder::link_code(uint32_t selector, address method_code) {
+  assert(CompiledMethod_lock->owned_by_self(), "sanity");
+  for (;;) {
+    bool is_important = cm(method_code) != NULL;
+    uint32_t pb = primary_bucket(selector);
+    tableEntry itable_primary = itable_table(_itable_blob)[pb];
+    Entry primary_entry = _table[pb];
+
+    uint32_t sb = secondary_bucket(selector);
+    tableEntry itable_secondary = itable_table(_itable_blob)[sb];
+    Entry secondary_entry = _table[sb];
+
+    if (itable_primary.selector() == 0 || itable_primary.selector() == selector) {
+      put_code(pb, make_entry(selector, method_code));
+      return;
+    }
+
+    if (itable_primary.selector() != primary_entry._selector && is_important) {
+      // Victimize primary code if we have priority. We want compiled code here.
+      put_code(pb, make_entry(selector, method_code));
+      selector = itable_primary.selector();
+      method_code = itable_primary.code();
+      continue;
+    }
+
+    if (itable_secondary.selector() == 0 || itable_secondary.selector() == selector) {
+      // Grab secondary bucket if available
+      put_code(sb, make_entry(selector, method_code));
+      return;
+    }
+
+    if (itable_primary.selector() != primary_entry._selector) {
+      // Victimize primary code that violates canonical order.
+      put_code(pb, make_entry(selector, method_code));
+      selector = itable_primary.selector();
+      method_code = itable_primary.code();
+      continue;
+    }
+
+    // Victimize secondary bucket which is guaranteed offender of canonical order.
+    assert(itable_secondary.selector() != secondary_entry._selector, "invariant");
+    put_code(sb, make_entry(selector, method_code));
+    selector = itable_secondary.selector();
+    method_code = itable_secondary.code();
+  }
+}
+
+bool itableHashTableBuilder::set(uint32_t selector, Method* method) {
+  if (_table == NULL) {
+    resize(_initial_capacity);
+  }
+
+  if (_size + 1 > MAX2(_capacity - (_capacity >> 3), _initial_capacity)) {
+    return false;
+  }
+
+  for (;;) {
+    for (uint i = 0; i < _max_reshuffling_iterations; ++i) {
+      uint32_t pb = primary_bucket(selector);
+      Entry primary_entry = _table[pb];
+      uint sb = secondary_bucket(selector);
+      Entry secondary_entry = _table[sb];
+
+      if (primary_entry._selector == selector || secondary_entry._selector == selector) {
+        // Re-insert... ignore.
+        return true;
+      }
+
+      if (primary_entry._selector == 0) {
+        _table[pb]._selector = selector;
+        _table[pb]._target = method;
+        ++_size;
+        return true;
+      }
+
+      if (secondary_entry._selector == 0) {
+        _table[sb]._selector = selector;
+        _table[sb]._target = method;
+        ++_size;
+        ++_collisions;
+        return true;
+      }
+
+      // Pick a non-trivial victim bucket and re-insert it.
+      if ((random() & 1) == 0) {
+        // Victimize first bucket
+        _table[pb]._selector = selector;
+        _table[pb]._target = method;
+        selector = primary_entry._selector;
+        method = primary_entry._target;
+      } else {
+        // Victimize second bucket
+        _table[sb]._selector = selector;
+        _table[sb]._target = method;
+        selector = secondary_entry._selector;
+        method = secondary_entry._target;
+      }
+    }
+
+    // Resize if out of reshuffling budget for a given size
+    return false;
+  }
 }
 
 klassItable::klassItable(InstanceKlass* klass) {
   _klass = klass;
+}
 
-  if (klass->itable_length() > 0) {
-    itableOffsetEntry* offset_entry = (itableOffsetEntry*)klass->start_of_itable();
-    if (offset_entry  != NULL && offset_entry->interface_klass() != NULL) { // Check that itable is initialized
-      // First offset entry points to the first method_entry
-      intptr_t* method_entry  = (intptr_t *)(((address)klass) + offset_entry->offset());
-      intptr_t* end         = klass->end_of_itable();
+uint32_t klassItable::target_selector_for_selector(uint32_t selector) {
+  SelectorMap<uint32_t> itable_map(_klass->interpreter_itable_selector_addr());
+  if (!itable_map.contains(selector)) {
+    return 0;
+  }
+  return itable_map.get(selector);
+}
 
-      _table_offset      = (intptr_t*)offset_entry - (intptr_t*)klass;
-      _size_offset_table = (method_entry - ((intptr_t*)offset_entry)) / itableOffsetEntry::size();
-      _size_method_table = (end - method_entry)                  / itableMethodEntry::size();
-      assert(_table_offset >= 0 && _size_offset_table >= 0 && _size_method_table >= 0, "wrong computation");
-      return;
+Method* klassItable::target_method_for_selector(uint32_t selector) {
+  uint32_t target_selector = target_selector_for_selector(selector);
+  if (target_selector == 0) {
+    return NULL;
+  }
+  SelectorMap<Method*> method_map = SystemDictionary::method_selector_map();
+  return method_map.get(target_selector);
+}
+
+void klassItable::link_code(Method* method) {
+  if (!_klass->has_itable()) {
+    return;
+  }
+
+  assert(_klass->is_linked(), "itable has been created");
+
+  SelectorMap<uint32_t> itable_selector_map(_klass->interpreter_itable_selector_addr());
+  uint32_t target_selector = method->selector();
+
+  uint32_t* blob_int32 = (uint32_t*)_klass->start_of_itable();
+  tableEntry* blob_table = _klass->itable_table();
+  uint32_t mask = *blob_int32;
+
+  bool suboptimal_linking = false;
+
+  for (uint32_t i = 0; !suboptimal_linking && i < itable_selector_map.capacity(); ++i) {
+    uint32_t selector = itable_selector_map.selector_table()[i];
+    if (selector == 0) {
+      continue;
+    }
+    if (itable_selector_map.get(selector) == target_selector) {
+      uint32_t pb = selector & mask;
+      uint32_t sb = (selector >> 16) & mask;
+      if (blob_table[pb].selector() == selector) {
+        blob_table[pb] = make_itable_entry(selector, method);
+      }
+      if (blob_table[sb].selector() == selector) {
+        blob_table[sb] = make_itable_entry(selector, method);
+        CompiledMethod* cm = method->code();
+        suboptimal_linking = cm != NULL && (cm->is_compiled_by_c2() || cm->is_compiled_by_jvmci());
+      }
     }
   }
 
-  // The length of the itable was either zero, or it has not yet been initialized.
-  _table_offset      = 0;
-  _size_offset_table = 0;
-  _size_method_table = 0;
+  if (suboptimal_linking) {
+    itableHashTableBuilder builder(_klass);
+    builder.attach_itable((uint8_t*)_klass->start_of_itable());
+
+    for (uint32_t i = 0; i < itable_selector_map.capacity(); ++i) {
+      uint32_t selector = itable_selector_map.selector_table()[i];
+      if (selector == 0) {
+        continue;
+      }
+      if (itable_selector_map.get(selector) == target_selector) {
+        address method_code = tableEntry::table_entry_code(method, true /* is_itable */);
+        builder.link_code(selector, method_code);
+      }
+    }
+  }
+}
+
+void klassItable::link_table_code() {
+  if (!_klass->has_itable() || !_klass->is_linked()) {
+    return;
+  }
+
+  MutexLocker ml(CompiledMethod_lock, Mutex::_no_safepoint_check_flag);
+  SelectorMap<Method*> method_selector_map = SystemDictionary::method_selector_map();
+  SelectorMap<uint32_t> itable_selector_map(_klass->interpreter_itable_selector_addr());
+
+  uint32_t* blob_int32 = (uint32_t*)_klass->start_of_itable();
+  tableEntry* blob_table = _klass->itable_table();
+  uint32_t mask = *blob_int32;
+  uint32_t size = mask + 1;
+  if (mask == 0) {
+    return;
+  }
+
+  for (uint32_t i = 0; i < size; ++i) {
+    tableEntry entry = blob_table[i];
+    if (entry.selector() == 0) {
+      continue;
+    }
+    // Get Method* associated with selected method in the itable (so use both tables)
+    Method* method = method_selector_map.get(itable_selector_map.get(entry.selector()));
+    blob_table[i] = make_itable_entry(entry.selector(), method);
+  }
+}
+
+// Copy the selector map into metadata
+void klassItable::allocate_interpreter_itable(uint8_t** _itable_selector_map_blob, TRAPS) {
+
+  SelectorMap<uint32_t> selector_map(_itable_selector_map_blob);
+
+  int length = 2 + selector_map.capacity() * 2;  // capacity, mask, refc[capacity], selc[capacity]
+  Array<uint32_t>* interpreter_itable =
+      MetadataFactory::new_array<uint32_t>(_klass->class_loader_data(), length, CHECK);
+  memcpy((void*)interpreter_itable->adr_at(0), (void*)selector_map.size_addr(), length * sizeof(uint32_t));
+  _klass->set_interpreter_itable(interpreter_itable);
+
+#ifdef ASSERT
+  int j = 2; // the size and mask field are first, but private, so don't verify them.
+  int interpreter_itable_length = selector_map.capacity();
+  for (int i = 0; i < interpreter_itable_length; i++, j++) {
+    uint32_t selector = selector_map.selector_table()[i];
+    assert(selector == interpreter_itable->at(j), "must match");
+  }
+  for (int i = 0; i < interpreter_itable_length; i++, j++) {
+    uint32_t value = selector_map.value_table()[i];
+    assert(value == interpreter_itable->at(j), "must match");
+  }
+#endif
+  selector_map.free_blob();
 }
 
 static int initialize_count = 0;
 
 // Initialization
 void klassItable::initialize_itable(bool checkconstraints, TRAPS) {
-  if (_klass->is_interface()) {
-    // This needs to go after vtable indices are assigned but
-    // before implementors need to know the number of itable indices.
-    assign_itable_indices_for_interface(InstanceKlass::cast(_klass), THREAD);
-  }
-
+  ResourceMark rm;
   // Cannot be setup doing bootstrapping, interfaces don't have
   // itables, and klass with only ones entry have empty itables
   if (Universe::is_bootstrapping() ||
       _klass->is_interface() ||
-      _klass->itable_length() == itableOffsetEntry::size()) return;
+      _klass->is_abstract() ||
+      !_klass->has_itable()) {
+    return;
+  }
 
-  // There's alway an extra itable entry so we can null-terminate it.
-  guarantee(size_offset_table() >= 1, "too small");
-  int num_interfaces = size_offset_table() - 1;
-  if (num_interfaces > 0) {
-    ResourceMark rm(THREAD);
-    log_develop_debug(itables)("%3d: Initializing itables for %s", ++initialize_count,
-                       _klass->name()->as_C_string());
+  Array<uint32_t>* interpreter_itable = _klass->interpreter_itable();
 
+  // Some classes initialize the itable twice, and shared classes have already initialized
+  // the interpreter itable, as it is read-only.
+  if (interpreter_itable == NULL) {
 
-    // Iterate through all interfaces
-    int i;
-    for(i = 0; i < num_interfaces; i++) {
-      itableOffsetEntry* ioe = offset_entry(i);
-      HandleMark hm(THREAD);
-      Klass* interf = ioe->interface_klass();
-      assert(interf != NULL && ioe->offset() != 0, "bad offset entry in itable");
-      initialize_itable_for_interface(ioe->offset(), InstanceKlass::cast(interf), checkconstraints, CHECK);
+    // This creates the interpreter itable, and initializes it into a temporary blob.
+    uint8_t* _itable_selector_map_blob = NULL;
+    SelectorMap<uint32_t> selector_map(&_itable_selector_map_blob);
+
+    Array<InstanceKlass*>* transitive_interfaces = _klass->transitive_interfaces();
+    int num_interfaces = transitive_interfaces->length();
+    if (num_interfaces > 0) {
+      ResourceMark rm(THREAD);
+      log_develop_debug(itables)("%3d: Initializing itables for %s", ++initialize_count,
+                         _klass->name()->as_C_string());
+
+      // Iterate through all interfaces
+      for (int i = 0; i < num_interfaces; i++) {
+        HandleMark hm(THREAD);
+        InstanceKlass *interf = transitive_interfaces->at(i);
+        initialize_itable_for_interface(interf, &_itable_selector_map_blob, checkconstraints, CHECK);
+      }
     }
 
+    // Copy the blob into metadata and free
+    allocate_interpreter_itable(&_itable_selector_map_blob, CHECK);
   }
-  // Check that the last entry is empty
-  itableOffsetEntry* ioe = offset_entry(size_offset_table() - 1);
-  guarantee(ioe->interface_klass() == NULL && ioe->offset() == 0, "terminator entry missing");
+
+  // This fills in the compiled code itable, whose size is already calculated.
+  uint32_t* blob_int32 = (uint32_t*)_klass->start_of_itable();
+  tableEntry* blob_table = _klass->itable_table();
+  // Still add a sentinel entry for catching incorrect calls.
+  blob_int32[0] = 0; // mask
+  blob_int32[1] = 0; // padding
+  blob_table[0] = make_itable_entry(0, NULL);
+
+  itableHashTableBuilder builder(_klass);
+  MutexLocker pl(CompiledMethod_lock, Mutex::_no_safepoint_check_flag);
+  builder.create_itable();
 }
 
 
-inline bool interface_method_needs_itable_index(Method* m) {
+bool klassItable::interface_method_needs_itable_index(Method* m) {
   if (m->is_static())           return false;   // e.g., Stream.empty
   if (m->is_initializer())      return false;   // <init> or <clinit>
   if (m->is_private())          return false;   // uses direct call
+  if (m->is_final())            return false;   // uses direct call
   // If an interface redeclares a method from java.lang.Object,
   // it should already have a vtable index, don't touch it.
   // e.g., CharSequence.toString (from initialize_vtable)
-  // if (m->has_vtable_index())  return false; // NO!
+  //if (m->has_vtable_index())  return false; // NO!...?
   return true;
 }
 
-int klassItable::assign_itable_indices_for_interface(InstanceKlass* klass, TRAPS) {
-  // an interface does not have an itable, but its methods need to be numbered
-  ResourceMark rm(THREAD);
-  log_develop_debug(itables)("%3d: Initializing itable indices for interface %s",
-                             ++initialize_count, klass->name()->as_C_string());
-  Array<Method*>* methods = klass->methods();
-  int nof_methods = methods->length();
-  int ime_num = 0;
-  for (int i = 0; i < nof_methods; i++) {
-    Method* m = methods->at(i);
-    if (interface_method_needs_itable_index(m)) {
-      assert(!m->is_final_method(), "no final interface methods");
-      // If m is already assigned a vtable index, do not disturb it.
-      if (log_develop_is_enabled(Trace, itables)) {
-        LogTarget(Trace, itables) lt;
-        LogStream ls(lt);
-        assert(m != NULL, "methods can never be null");
-        const char* sig = m->name_and_sig_as_C_string();
-        if (m->has_vtable_index()) {
-          ls.print("vtable index %d for method: %s, flags: ", m->vtable_index(), sig);
-        } else {
-          ls.print("itable index %d for method: %s, flags: ", ime_num, sig);
+void itableHashTableBuilder::populate_table() {
+  for (;;) {
+    _random = _seed;
+    bool success = true;
+    int num_ifs = _transitive_interfaces->length();
+    for (int j = 0; success && j < num_ifs; j++) {
+      InstanceKlass *interf = _transitive_interfaces->at(j);
+
+      assert(interf->is_interface(), "must be");
+      Array<Method*>* methods = interf->methods();
+      int nof_methods = methods->length();
+
+      for (int i = 0; success && i < nof_methods; i++) {
+        Method* m = methods->at(i);
+        if (klassItable::interface_method_needs_itable_index(m)) {
+          bool inserted;
+          if (_resolve_methods) {
+            Method* target = _ik->itable().target_method_for_selector(m->selector());
+            inserted = set(m->selector(), target);
+          } else {
+            // Just self-loop the method to denote something will happen here
+            inserted = set(m->selector(), m);
+          }
+          if (!inserted) {
+            resize(_capacity << 1);
+            success = false;
+          }
         }
-        m->print_linkage_flags(&ls);
-        ls.cr();
-      }
-      if (!m->has_vtable_index()) {
-        // A shared method could have an initialized itable_index that
-        // is < 0.
-        assert(m->vtable_index() == Method::pending_itable_index ||
-               m->is_shared(),
-               "set by initialize_vtable");
-        m->set_itable_index(ime_num);
-        // Progress to next itable entry
-        ime_num++;
       }
     }
-  }
-  assert(ime_num == method_count_for_interface(klass), "proper sizing");
-  return ime_num;
-}
-
-int klassItable::method_count_for_interface(InstanceKlass* interf) {
-  assert(interf->is_interface(), "must be");
-  Array<Method*>* methods = interf->methods();
-  int nof_methods = methods->length();
-  int length = 0;
-  while (nof_methods > 0) {
-    Method* m = methods->at(nof_methods-1);
-    if (m->has_itable_index()) {
-      length = m->itable_index() + 1;
-      break;
+    if (success) {
+      return;
     }
-    nof_methods -= 1;
   }
-#ifdef ASSERT
-  int nof_methods_copy = nof_methods;
-  while (nof_methods_copy > 0) {
-    Method* mm = methods->at(--nof_methods_copy);
-    assert(!mm->has_itable_index() || mm->itable_index() < length, "");
-  }
-#endif //ASSERT
-  // return the rightmost itable index, plus one; or 0 if no methods have
-  // itable indices
-  return length;
 }
 
-
-void klassItable::initialize_itable_for_interface(int method_table_offset, InstanceKlass* interf, bool checkconstraints, TRAPS) {
+void klassItable::initialize_itable_for_interface(InstanceKlass* interf,
+                                                  uint8_t** _itable_selector_map_blob,
+                                                  bool checkconstraints, TRAPS) {
   assert(interf->is_interface(), "must be");
   Array<Method*>* methods = interf->methods();
   int nof_methods = methods->length();
   HandleMark hm;
   Handle interface_loader (THREAD, interf->class_loader());
 
-  int ime_count = method_count_for_interface(interf);
+  SelectorMap<uint32_t> selector_map(_itable_selector_map_blob);
+
   for (int i = 0; i < nof_methods; i++) {
     Method* m = methods->at(i);
     Method* target = NULL;
-    if (m->has_itable_index()) {
-      // This search must match the runtime resolution, i.e. selection search for invokeinterface
-      // to correctly enforce loader constraints for interface method inheritance.
-      // Private methods are skipped as a private class method can never be the implementation
-      // of an interface method.
-      // Invokespecial does not perform selection based on the receiver, so it does not use
-      // the cached itable.
-      target = LinkResolver::lookup_instance_method_in_klasses(_klass, m->name(), m->signature(),
-                                                               Klass::skip_private, CHECK);
+    if (!klassItable::interface_method_needs_itable_index(m)) {
+      continue;
     }
-    if (target == NULL || !target->is_public() || target->is_abstract() || target->is_overpass()) {
-      assert(target == NULL || !target->is_overpass() || target->is_public(),
+    // This search must match the runtime resolution, i.e. selection search for invokeinterface
+    // to correctly enforce loader constraints for interface method inheritance.
+    // Private methods are skipped as a private class method can never be the implementation
+    // of an interface method.
+    // Invokespecial does not perform selection based on the receiver, so it does not use
+    // the cached itable.
+    target = LinkResolver::lookup_instance_method_in_klasses(_klass, m->name(), m->signature(),
+                                                             Klass::skip_private, CHECK);
+    if (target == NULL) {
+      continue;
+    }
+    if (!target->is_public() || target->is_abstract() || target->is_overpass()) {
+      assert(!target->is_overpass() || target->is_public(),
              "Non-public overpass method!");
-      // Entry does not resolve. Leave it empty for AbstractMethodError or other error.
-      if (!(target == NULL) && !target->is_public()) {
+      // Entry does not resolve.
+      if (!target->is_public()) {
         // Stuff an IllegalAccessError throwing method in there instead.
-        itableOffsetEntry::method_entry(_klass, method_table_offset)[m->itable_index()].
-            initialize(Universe::throw_illegal_access_error());
+        selector_map.set(m->selector(), Universe::throw_illegal_access_error()->selector());
+      } else if (target->is_abstract()) {
+        selector_map.set(m->selector(), Universe::throw_abstract_method_error()->selector());
+      } else {
+        selector_map.set(m->selector(), target->selector());
       }
     } else {
       // Entry did resolve, check loader constraints before initializing
@@ -1260,18 +1674,15 @@ void klassItable::initialize_itable_for_interface(int method_table_offset, Insta
         }
       }
 
-      // ime may have moved during GC so recalculate address
-      int ime_num = m->itable_index();
-      assert(ime_num < ime_count, "oob");
-      itableOffsetEntry::method_entry(_klass, method_table_offset)[ime_num].initialize(target);
+      selector_map.set(m->selector(), target->selector());
       if (log_develop_is_enabled(Trace, itables)) {
         ResourceMark rm(THREAD);
         if (target != NULL) {
           LogTarget(Trace, itables) lt;
           LogStream ls(lt);
           char* sig = target->name_and_sig_as_C_string();
-          ls.print("interface: %s, ime_num: %d, target: %s, method_holder: %s ",
-                       interf->internal_name(), ime_num, sig,
+          ls.print("interface: %s, target: %s, method_holder: %s ",
+                       interf->internal_name(), sig,
                        target->method_holder()->internal_name());
           ls.print("target_method flags: ");
           target->print_linkage_flags(&ls);
@@ -1282,187 +1693,10 @@ void klassItable::initialize_itable_for_interface(int method_table_offset, Insta
   }
 }
 
-#if INCLUDE_JVMTI
-// search the itable for uses of either obsolete or EMCP methods
-void klassItable::adjust_method_entries(bool * trace_name_printed) {
-  ResourceMark rm;
-  itableMethodEntry* ime = method_entry(0);
-
-  for (int i = 0; i < _size_method_table; i++, ime++) {
-    Method* old_method = ime->method();
-    if (old_method == NULL || !old_method->is_old()) {
-      continue; // skip uninteresting entries
-    }
-    assert(!old_method->is_deleted(), "itable methods may not be deleted");
-    Method* new_method = old_method->get_new_method();
-    ime->initialize(new_method);
-
-    if (!(*trace_name_printed)) {
-      log_info(redefine, class, update)("adjust: name=%s", old_method->method_holder()->external_name());
-      *trace_name_printed = true;
-    }
-    log_trace(redefine, class, update, itables)
-      ("itable method update: class: %s method: %s", _klass->external_name(), new_method->external_name());
-  }
-}
-
-// an itable should never contain old or obsolete methods
-bool klassItable::check_no_old_or_obsolete_entries() {
-  ResourceMark rm;
-  itableMethodEntry* ime = method_entry(0);
-
-  for (int i = 0; i < _size_method_table; i++) {
-    Method* m = ime->method();
-    if (m != NULL &&
-        (NOT_PRODUCT(!m->is_valid() ||) m->is_old() || m->is_obsolete())) {
-      log_trace(redefine, class, update, itables)
-        ("itable check found old method entry: class: %s old: %d obsolete: %d, method: %s",
-         _klass->external_name(), m->is_old(), m->is_obsolete(), m->external_name());
-      return false;
-    }
-    ime++;
-  }
-  return true;
-}
-
-void klassItable::dump_itable() {
-  itableMethodEntry* ime = method_entry(0);
-  tty->print_cr("itable dump --");
-  for (int i = 0; i < _size_method_table; i++) {
-    Method* m = ime->method();
-    if (m != NULL) {
-      tty->print("      (%5d)  ", i);
-      m->access_flags().print_on(tty);
-      if (m->is_default_method()) {
-        tty->print("default ");
-      }
-      tty->print(" --  ");
-      m->print_name(tty);
-      tty->cr();
-    }
-    ime++;
-  }
-}
-#endif // INCLUDE_JVMTI
-
-// Setup
-class InterfaceVisiterClosure : public StackObj {
- public:
-  virtual void doit(InstanceKlass* intf, int method_count) = 0;
-};
-
-// Visit all interfaces with at least one itable method
-void visit_all_interfaces(Array<InstanceKlass*>* transitive_intf, InterfaceVisiterClosure *blk) {
-  // Handle array argument
-  for(int i = 0; i < transitive_intf->length(); i++) {
-    InstanceKlass* intf = transitive_intf->at(i);
-    assert(intf->is_interface(), "sanity check");
-
-    // Find no. of itable methods
-    int method_count = 0;
-    // method_count = klassItable::method_count_for_interface(intf);
-    Array<Method*>* methods = intf->methods();
-    if (methods->length() > 0) {
-      for (int i = methods->length(); --i >= 0; ) {
-        if (interface_method_needs_itable_index(methods->at(i))) {
-          method_count++;
-        }
-      }
-    }
-
-    // Visit all interfaces which either have any methods or can participate in receiver type check.
-    // We do not bother to count methods in transitive interfaces, although that would allow us to skip
-    // this step in the rare case of a zero-method interface extending another zero-method interface.
-    if (method_count > 0 || intf->transitive_interfaces()->length() > 0) {
-      blk->doit(intf, method_count);
-    }
-  }
-}
-
-class CountInterfacesClosure : public InterfaceVisiterClosure {
- private:
-  int _nof_methods;
-  int _nof_interfaces;
- public:
-   CountInterfacesClosure() { _nof_methods = 0; _nof_interfaces = 0; }
-
-   int nof_methods() const    { return _nof_methods; }
-   int nof_interfaces() const { return _nof_interfaces; }
-
-   void doit(InstanceKlass* intf, int method_count) { _nof_methods += method_count; _nof_interfaces++; }
-};
-
-class SetupItableClosure : public InterfaceVisiterClosure  {
- private:
-  itableOffsetEntry* _offset_entry;
-  itableMethodEntry* _method_entry;
-  address            _klass_begin;
- public:
-  SetupItableClosure(address klass_begin, itableOffsetEntry* offset_entry, itableMethodEntry* method_entry) {
-    _klass_begin  = klass_begin;
-    _offset_entry = offset_entry;
-    _method_entry = method_entry;
-  }
-
-  itableMethodEntry* method_entry() const { return _method_entry; }
-
-  void doit(InstanceKlass* intf, int method_count) {
-    int offset = ((address)_method_entry) - _klass_begin;
-    _offset_entry->initialize(intf, offset);
-    _offset_entry++;
-    _method_entry += method_count;
-  }
-};
-
-int klassItable::compute_itable_size(Array<InstanceKlass*>* transitive_interfaces) {
-  // Count no of interfaces and total number of interface methods
-  CountInterfacesClosure cic;
-  visit_all_interfaces(transitive_interfaces, &cic);
-
-  // There's alway an extra itable entry so we can null-terminate it.
-  int itable_size = calc_itable_size(cic.nof_interfaces() + 1, cic.nof_methods());
-
-  // Statistics
-  update_stats(itable_size * wordSize);
-
-  return itable_size;
-}
-
-
-// Fill out offset table and interface klasses into the itable space
-void klassItable::setup_itable_offset_table(InstanceKlass* klass) {
-  if (klass->itable_length() == 0) return;
-  assert(!klass->is_interface(), "Should have zero length itable");
-
-  // Count no of interfaces and total number of interface methods
-  CountInterfacesClosure cic;
-  visit_all_interfaces(klass->transitive_interfaces(), &cic);
-  int nof_methods    = cic.nof_methods();
-  int nof_interfaces = cic.nof_interfaces();
-
-  // Add one extra entry so we can null-terminate the table
-  nof_interfaces++;
-
-  assert(compute_itable_size(klass->transitive_interfaces()) ==
-         calc_itable_size(nof_interfaces, nof_methods),
-         "mismatch calculation of itable size");
-
-  // Fill-out offset table
-  itableOffsetEntry* ioe = (itableOffsetEntry*)klass->start_of_itable();
-  itableMethodEntry* ime = (itableMethodEntry*)(ioe + nof_interfaces);
-  intptr_t* end               = klass->end_of_itable();
-  assert((oop*)(ime + nof_methods) <= (oop*)klass->start_of_nonstatic_oop_maps(), "wrong offset calculation (1)");
-  assert((oop*)(end) == (oop*)(ime + nof_methods),                      "wrong offset calculation (2)");
-
-  // Visit all interfaces and initialize itable offset table
-  SetupItableClosure sic((address)klass, ioe, ime);
-  visit_all_interfaces(klass->transitive_interfaces(), &sic);
-
-#ifdef ASSERT
-  ime  = sic.method_entry();
-  oop* v = (oop*) klass->end_of_itable();
-  assert( (oop*)(ime) == v, "wrong offset calculation (2)");
-#endif
+int klassItable::compute_itable_size_words(uint32_t seed, Array<InstanceKlass*>* transitive_interfaces) {
+  // This stinks that we have to compute this twice
+  itableHashTableBuilder itable(seed, transitive_interfaces);
+  return (int)itable.compute_itable_size_words();
 }
 
 void klassVtable::verify(outputStream* st, bool forced) {
@@ -1473,20 +1707,12 @@ void klassVtable::verify(outputStream* st, bool forced) {
   if (!forced && _verify_count == Universe::verify_count()) return;
   _verify_count = Universe::verify_count();
 #endif
-  oop* end_of_obj = (oop*)_klass + _klass->size();
-  oop* end_of_vtable = (oop *)&table()[_length];
-  if (end_of_vtable > end_of_obj) {
-    ResourceMark rm;
-    fatal("klass %s: klass object too short (vtable extends beyond end)",
-          _klass->internal_name());
-  }
 
-  for (int i = 0; i < _length; i++) table()[i].verify(this, st);
+  for (int i = 0; i < _length; i++) _table[-i].verify(this, st);
   // verify consistency with superKlass vtable
   Klass* super = _klass->super();
   if (super != NULL) {
-    InstanceKlass* sk = InstanceKlass::cast(super);
-    klassVtable vt = sk->vtable();
+    klassVtable vt = super->vtable();
     for (int i = 0; i < vt.length(); i++) {
       verify_against(st, &vt, i);
     }
@@ -1494,50 +1720,108 @@ void klassVtable::verify(outputStream* st, bool forced) {
 }
 
 void klassVtable::verify_against(outputStream* st, klassVtable* vt, int index) {
-  vtableEntry* vte = &vt->table()[index];
-  if (vte->method()->name()      != table()[index].method()->name() ||
-      vte->method()->signature() != table()[index].method()->signature()) {
+  tableEntry* vte = &vt->_table[-index];
+  if (vte->method()->name()      != _table[-index].method()->name() ||
+      vte->method()->signature() != _table[-index].method()->signature()) {
     fatal("mismatched name/signature of vtable entries");
   }
 }
 
 #ifndef PRODUCT
-void klassVtable::print() {
-  ResourceMark rm;
-  tty->print("klassVtable for klass %s (length %d):\n", _klass->internal_name(), length());
+void klassVtable::print() const { print_on(tty); }
+
+void klassVtable::print_on(outputStream* st) const {
+  st->print("klassVtable for klass %s (length %d):\n", _klass->internal_name(), length());
   for (int i = 0; i < length(); i++) {
-    table()[i].print();
-    tty->cr();
+    _table[-i].print_on(st);
+    st->cr();
+  }
+}
+
+
+void klassItable::print() const { print_on(tty); }
+
+void klassItable::print_on(outputStream* st) const {
+  // itable_length() includes the header
+  int itable_entry_words = _klass->itable_length() - (int)itable_header_size_words();
+
+  st->print_cr("klassItable for klass %s (length %d):", _klass->internal_name(), itable_entry_words);
+
+  SelectorMap<uint32_t> itable_selector_map(_klass->interpreter_itable_selector_addr());
+  SelectorMap<Method*> method_map = SystemDictionary::method_selector_map();
+
+  st->print_cr(" - interpreter itable:");
+  int interpreter_itable_length = itable_selector_map.capacity();
+  for (int i = 0; i < interpreter_itable_length; i++) {
+    int32_t selector = itable_selector_map.selector_table()[i];
+    Method* method = method_map.get(selector);
+    st->print_cr("DEFC method %d %s", selector, method == NULL ? "NULL" : method->external_name());
+  }
+  for (int i = 0; i < interpreter_itable_length; i++) {
+    int32_t value = itable_selector_map.value_table()[i];
+    Method* method = method_map.get(value);
+    st->print_cr("SELC method %d %s", value, method == NULL ? "NULL" : method->external_name());
+  }
+
+  st->print_cr(" - compiler itable:");
+  // Print the itable appended to the InstanceKlass
+  tableEntry* blob_table = _klass->itable_table();
+
+  for (int i = 0; i < itable_entry_words; i++) {
+    blob_table[i].print_on(st);
+    st->cr();
   }
 }
 #endif
 
-void vtableEntry::verify(klassVtable* vt, outputStream* st) {
+uint32_t tableEntry::selector() const {
+  uint64_t selector_mask = ~uint64_t(0u) >> 32;
+  return uint32_t(_entry & selector_mask);
+}
+
+address tableEntry::code() const {
+  uint64_t code_64 = _entry >> (32 - CodeCache::code_pointer_shift());
+  uintptr_t code_intptr = static_cast<uintptr_t>(code_64);
+
+  if (!CodeCache::supports_32_bit_code_pointers()) {
+    uintptr_t code_base = (uintptr_t)CodeCache::low_bound();
+    code_intptr += code_base;
+  }
+
+  return reinterpret_cast<address>(code_intptr);
+}
+
+Method* tableEntry::method() const {
+  SelectorMap<Method*> method_map = SystemDictionary::method_selector_map();
+  return method_map.get(selector());
+}
+
+void tableEntry::verify(klassVtable* vt, outputStream* st) {
   Klass* vtklass = vt->klass();
+  Method* m = method();
   if (vtklass->is_instance_klass() &&
      (InstanceKlass::cast(vtklass)->major_version() >= klassVtable::VTABLE_TRANSITIVE_OVERRIDE_VERSION)) {
-    assert(method() != NULL, "must have set method");
+    assert(m != NULL, "must have set method");
   }
-  if (method() != NULL) {
-    method()->verify();
+  if (m != NULL) {
+    m->verify();
     // we sub_type, because it could be a miranda method
-    if (!vtklass->is_subtype_of(method()->method_holder())) {
+    if (!vtklass->is_subtype_of(m->method_holder())) {
 #ifndef PRODUCT
-      print();
+      ResourceMark rm;
+      print_on(st);
 #endif
-      fatal("vtableEntry " PTR_FORMAT ": method is from subclass", p2i(this));
+      fatal("tableEntry " PTR_FORMAT ": method is from subclass", p2i(this));
     }
- }
+  }
 }
 
 #ifndef PRODUCT
 
-void vtableEntry::print() {
-  ResourceMark rm;
-  tty->print("vtableEntry %s: ", method()->name()->as_C_string());
-  if (Verbose) {
-    tty->print("m " PTR_FORMAT " ", p2i(method()));
-  }
+void tableEntry::print() const { print_on(tty); }
+
+void tableEntry::print_on(outputStream* st) const {
+  st->print("tableEntry %s:    " PTR_FORMAT, method() == NULL ? "NULL" : method()->external_name(), p2i(code()));
 }
 
 class VtableStats : AllStatic {
@@ -1573,8 +1857,8 @@ class VtableStats : AllStatic {
     fixed  = no_klasses * oopSize;      // vtable length
     // filler size is a conservative approximation
     filler = oopSize * (no_klasses - no_instance_klasses) * (sizeof(InstanceKlass) - sizeof(ArrayKlass) - 1);
-    entries = sizeof(vtableEntry) * sum_of_vtable_len;
-    array_entries = sizeof(vtableEntry) * sum_of_array_vtable_len;
+    entries = sizeof(tableEntry) * sum_of_vtable_len;
+    array_entries = sizeof(tableEntry) * sum_of_array_vtable_len;
   }
 };
 

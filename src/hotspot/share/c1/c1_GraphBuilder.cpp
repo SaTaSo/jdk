@@ -1462,7 +1462,7 @@ void GraphBuilder::call_register_finalizer() {
     // Perform the registration of finalizable objects.
     ValueStack* state_before = copy_state_for_exception();
     load_local(objectType, 0);
-    append_split(new Intrinsic(voidType, vmIntrinsics::_Object_init,
+    append_split(new Intrinsic(voidType, NULL, vmIntrinsics::_Object_init,
                                state()->pop_arguments(1),
                                true, state_before, true));
   }
@@ -2024,6 +2024,7 @@ void GraphBuilder::invoke(Bytecodes::Code code) {
       dependency_recorder()->assert_unique_concrete_method(actual_recv, cha_monomorphic_target);
     }
     code = Bytecodes::_invokespecial;
+    target = cha_monomorphic_target;
   }
 
   // check if we could do inlining
@@ -2035,7 +2036,7 @@ void GraphBuilder::invoke(Bytecodes::Code code) {
         code == Bytecodes::_invokespecial ||
         (code == Bytecodes::_invokevirtual && target->is_final_method()) ||
         code == Bytecodes::_invokedynamic) {
-      ciMethod* inline_target = (cha_monomorphic_target != NULL) ? cha_monomorphic_target : target;
+      ciMethod* inline_target = target;
       // static binding => check if callee is ok
       bool success = try_inline(inline_target, (cha_monomorphic_target != NULL) || (exact_target != NULL), false, code, better_receiver);
 
@@ -2082,6 +2083,17 @@ void GraphBuilder::invoke(Bytecodes::Code code) {
   Value recv = has_receiver ? apop() : NULL;
   int vtable_index = Method::invalid_vtable_index;
 
+  if (target->is_loaded() && code == Bytecodes::_invokevirtual) {
+    // Find a vtable index if one is available
+    // For arrays, callee_holder is Object. Resolving the call with
+    // Object would allow an illegal call to finalize() on an
+    // array. We use holder instead: illegal calls to finalize() won't
+    // be compiled as vtable calls (IC call resolution will catch the
+    // illegal call) and the few legal calls on array types won't be
+    // either.
+    vtable_index = target->resolve_vtable_index(calling_klass, holder);
+  }
+
   // A null check is required here (when there is a receiver) for any of the following cases
   // - invokespecial, always need a null check.
   // - invokevirtual, when the target is final and loaded. Calls to final targets will become optimized
@@ -2120,7 +2132,16 @@ void GraphBuilder::invoke(Bytecodes::Code code) {
     }
   }
 
-  Invoke* result = new Invoke(code, result_type, recv, args, vtable_index, target, state_before);
+  if (code == Bytecodes::_invokespecial) {
+    assert(!target->is_loaded() || !target->is_abstract(), "sanity");
+  }
+
+  ciInstanceKlass* refc = NULL;
+  if (code == Bytecodes::_invokeinterface) {
+    refc = holder->as_instance_klass();
+  }
+
+  Invoke* result = new Invoke(code, result_type, recv, args, vtable_index, target, refc, state_before);
   // push result
   append_split(result);
 
@@ -3557,7 +3578,7 @@ void GraphBuilder::build_graph_for_intrinsic(ciMethod* callee, bool ignore_retur
     }
   }
 
-  Intrinsic* result = new Intrinsic(result_type, callee->intrinsic_id(),
+  Intrinsic* result = new Intrinsic(result_type, callee, callee->intrinsic_id(),
                                     args, has_receiver, state_before,
                                     vmIntrinsics::preserves_state(id),
                                     vmIntrinsics::can_trap(id));
@@ -4290,7 +4311,7 @@ void GraphBuilder::append_unsafe_CAS(ciMethod* callee) {
   // know which ones so mark the state as no preserved.  This will
   // cause CSE to invalidate memory across it.
   bool preserves_state = false;
-  Intrinsic* result = new Intrinsic(result_type, callee->intrinsic_id(), args, false, state_before, preserves_state);
+  Intrinsic* result = new Intrinsic(result_type, NULL, callee->intrinsic_id(), args, false, state_before, preserves_state);
   append_split(result);
   push(result_type, result);
   compilation()->set_has_unsafe_access(true);

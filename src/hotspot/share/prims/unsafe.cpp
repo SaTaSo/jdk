@@ -870,6 +870,9 @@ Unsafe_DefineAnonymousClass_impl(JNIEnv *env,
     return NULL;
   }
 
+  JavaThread* jt = (JavaThread*)THREAD;
+  jt->set_unsafe_anonymous_def(NULL);
+
   return InstanceKlass::cast(anonk);
 }
 

@@ -24,6 +24,8 @@
 
 #include "precompiled.hpp"
 #include "asm/macroAssembler.inline.hpp"
+#include "asm/register.hpp"
+#include "code/vmreg.inline.hpp"
 #include "memory/allocation.inline.hpp"
 #include "oops/compressedOops.hpp"
 #include "opto/ad.hpp"

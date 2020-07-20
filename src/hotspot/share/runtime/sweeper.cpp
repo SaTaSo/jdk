@@ -24,8 +24,6 @@
 
 #include "precompiled.hpp"
 #include "code/codeCache.hpp"
-#include "code/compiledIC.hpp"
-#include "code/icBuffer.hpp"
 #include "code/nmethod.hpp"
 #include "compiler/compileBroker.hpp"
 #include "gc/shared/collectedHeap.hpp"
@@ -47,7 +45,47 @@
 #include "runtime/vmOperations.hpp"
 #include "runtime/vmThread.hpp"
 #include "utilities/events.hpp"
+#include "utilities/stack.inline.hpp"
 #include "utilities/xmlstream.hpp"
+
+// Walk the code pointers in the class hierarchy, and remove stale entries.
+static void clean_code_tables() {
+  Klass* root = SystemDictionary::Object_klass();
+  Stack<Klass*, mtCompiler> stack;
+
+  stack.push(root);
+  while (!stack.is_empty()) {
+    Klass* current = stack.pop();
+
+    // Find and set the first subklass
+    Klass* sub = current->subklass(false);
+    if (sub != NULL) {
+      stack.push(sub);
+    }
+
+    Klass* sibling = current->next_sibling(false);
+    if (sibling != NULL) {
+      stack.push(sibling);
+    }
+
+    if (current->is_instance_klass()) {
+      InstanceKlass* ik = InstanceKlass::cast(current);
+      if (!ik->is_linked_acquire()) {
+        // Before linking, the tables are garbage.
+        continue;
+      }
+      do {
+        ik->vtable().link_table_code();
+        ik->itable().link_table_code();
+
+        // JVMTI RedefineClasses creates previous versions that are not in
+        // the class hierarchy, so process them here.
+      } while((ik = ik->previous_versions()) != NULL);
+    } else {
+      current->vtable().link_table_code();
+    }
+  }
+}
 
 #ifdef ASSERT
 
@@ -60,18 +98,16 @@ class SweeperRecord {
   long traversal_mark;
   int state;
   const char* kind;
-  address vep;
-  address uep;
+  address ep;
   int line;
 
   void print() {
-      tty->print_cr("traversal = %d compile_id = %d %s uep = " PTR_FORMAT " vep = "
+      tty->print_cr("traversal = %d compile_id = %d %s ep = "
                     PTR_FORMAT " state = %d traversal_mark %ld line = %d",
                     traversal,
                     compile_id,
                     kind == NULL ? "" : kind,
-                    p2i(uep),
-                    p2i(vep),
+                    p2i(ep),
                     state,
                     traversal_mark,
                     line);
@@ -88,8 +124,7 @@ void NMethodSweeper::record_sweep(CompiledMethod* nm, int line) {
     _records[_sweep_index].compile_id = nm->compile_id();
     _records[_sweep_index].kind = nm->compile_kind();
     _records[_sweep_index].state = nm->get_state();
-    _records[_sweep_index].vep = nm->verified_entry_point();
-    _records[_sweep_index].uep = nm->entry_point();
+    _records[_sweep_index].ep = nm->entry_point();
     _records[_sweep_index].line = line;
     _sweep_index = (_sweep_index + 1) % SweeperLogEntries;
   }
@@ -106,7 +141,7 @@ void NMethodSweeper::init_sweeper_log() {
 #define SWEEP(nm)
 #endif
 
-CompiledMethodIterator NMethodSweeper::_current(CompiledMethodIterator::all_blobs); // Current compiled method
+CompiledMethodIterator NMethodSweeper::_current;               // Current compiled method
 long     NMethodSweeper::_traversals                   = 0;    // Stack scan count, also sweep ID.
 long     NMethodSweeper::_total_nof_code_cache_sweeps  = 0;    // Total number of full sweeps of the code cache
 int      NMethodSweeper::_seen                         = 0;    // Nof. nmethod we have currently processed in current pass of CodeCache
@@ -134,9 +169,7 @@ public:
     nmethod* nm = (nmethod*)cb;
     nm->set_hotness_counter(NMethodSweeper::hotness_counter_reset_val());
     // If we see an activation belonging to a non_entrant nmethod, we mark it.
-    if (nm->is_not_entrant()) {
-      nm->mark_as_seen_on_stack();
-    }
+    nm->mark_as_seen_on_stack();
   }
 };
 static MarkActivationClosure mark_activation_closure;
@@ -181,7 +214,7 @@ CodeBlobClosure* NMethodSweeper::prepare_mark_active_nmethods() {
   assert(wait_for_stack_scanning(), "should only happen between sweeper cycles");
 
   _seen = 0;
-  _current = CompiledMethodIterator(CompiledMethodIterator::all_blobs);
+  _current = CompiledMethodIterator();
   // Initialize to first nmethod
   _current.next();
   _traversals += 1;
@@ -209,6 +242,7 @@ void NMethodSweeper::do_stack_scanning() {
       NMethodMarkingClosure nm_cl(code_cl);
       Handshake::execute(&nm_cl);
     }
+    clean_code_tables();
   }
 }
 
@@ -321,6 +355,7 @@ static void post_sweep_event(EventSweepCodeCache* event,
   event->commit();
 }
 
+
 void NMethodSweeper::sweep_code_cache() {
   ResourceMark rm;
   Ticks sweep_start_counter = Ticks::now();
@@ -373,10 +408,6 @@ void NMethodSweeper::sweep_code_cache() {
             if (is_c2_method) {
               ++flushed_c2_count;
             }
-            break;
-          case MadeZombie:
-            state_after = "made zombie";
-            ++zombified_count;
             break;
           case None:
             break;
@@ -455,91 +486,37 @@ void NMethodSweeper::report_state_change(nmethod* nm) {
   }
 }
 
-class CompiledMethodMarker: public StackObj {
- private:
-  CodeCacheSweeperThread* _thread;
- public:
-  CompiledMethodMarker(CompiledMethod* cm) {
-    JavaThread* current = JavaThread::current();
-    assert (current->is_Code_cache_sweeper_thread(), "Must be");
-    _thread = (CodeCacheSweeperThread*)current;
-    if (!cm->is_zombie() && !cm->is_unloading()) {
-      // Only expose live nmethods for scanning
-      _thread->set_scanned_compiled_method(cm);
-    }
-  }
-  ~CompiledMethodMarker() {
-    _thread->set_scanned_compiled_method(NULL);
-  }
-};
-
 NMethodSweeper::MethodStateChange NMethodSweeper::process_compiled_method(CompiledMethod* cm) {
   assert(cm != NULL, "sanity");
   assert(!CodeCache_lock->owned_by_self(), "just checking");
-
-  MethodStateChange result = None;
   // Make sure this nmethod doesn't get unloaded during the scan,
   // since safepoints may happen during acquired below locks.
   CompiledMethodMarker nmm(cm);
   SWEEP(cm);
 
-  // Skip methods that are currently referenced by the VM
-  if (cm->is_locked_by_vm()) {
-    // But still remember to clean-up inline caches for alive nmethods
-    if (cm->is_alive()) {
-      // Clean inline caches that point to zombie/non-entrant/unloaded nmethods
-      cm->cleanup_inline_caches(false);
-      SWEEP(cm);
-    }
-    return result;
-  }
-
-  if (cm->is_zombie()) {
-    // All inline caches that referred to this nmethod were cleaned in the
-    // previous sweeper cycle. Now flush the nmethod from the code cache.
-    assert(!cm->is_locked_by_vm(), "must not flush locked Compiled Methods");
-    cm->flush();
-    assert(result == None, "sanity");
-    result = Flushed;
-  } else if (cm->is_not_entrant()) {
+  if (cm->is_not_entrant()) {
     // If there are no current activations of this method on the
     // stack we can safely convert it to a zombie method
     OrderAccess::loadload(); // _stack_traversal_mark and _state
-    if (cm->can_convert_to_zombie()) {
-      // Code cache state change is tracked in make_zombie()
-      cm->make_zombie();
+    if (cm->can_delete()) {
+      // If a JVMTI agent has enabled the CompiledMethodUnload
+      // event and it hasn't already been reported for this nmethod then
+      // report it now. The event might safepoint.
+      cm->as_nmethod()->post_compiled_method_unload();
+      cm->flush();
       SWEEP(cm);
-      assert(result == None, "sanity");
-      result = MadeZombie;
-      assert(cm->is_zombie(), "nmethod must be zombie");
-    } else {
-      // Still alive, clean up its inline caches
-      cm->cleanup_inline_caches(false);
-      SWEEP(cm);
+      return Flushed;
     }
-  } else if (cm->is_unloaded()) {
-    // Code is unloaded, so there are no activations on the stack.
-    // Convert the nmethod to zombie.
-    // Code cache state change is tracked in make_zombie()
-    cm->make_zombie();
-    SWEEP(cm);
-    assert(result == None, "sanity");
-    result = MadeZombie;
-  } else {
-    if (cm->is_nmethod()) {
-      possibly_flush((nmethod*)cm);
-    }
-    // Clean inline caches that point to zombie/non-entrant/unloaded nmethods
-    cm->cleanup_inline_caches(false);
-    SWEEP(cm);
+  } else if (cm->is_nmethod()) {
+    possibly_flush((nmethod*)cm);
   }
-  return result;
+  return None;
 }
 
 
 void NMethodSweeper::possibly_flush(nmethod* nm) {
   if (UseCodeCacheFlushing) {
-    if (!nm->is_locked_by_vm() && !nm->is_native_method() && !nm->is_not_installed() && !nm->is_unloading()) {
+    if (!nm->is_native_method()) {
       bool make_not_entrant = false;
 
       // Do not make native methods not-entrant

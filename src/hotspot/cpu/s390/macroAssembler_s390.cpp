@@ -2590,10 +2590,6 @@ address MacroAssembler::get_dest_of_call_far_patchable_at(address instruction_ad
   }
 }
 
-void MacroAssembler::align_call_far_patchable(address pc) {
-  if (call_far_patchable_requires_alignment_nop(pc)) { z_nop(); }
-}
-
 void MacroAssembler::check_and_handle_earlyret(Register java_thread) {
 }
 
@@ -2866,70 +2862,6 @@ void MacroAssembler::lookup_virtual_method(Register           recv_klass,
     z_lg(method_result, vtable_entry_addr);
   }
   BLOCK_COMMENT("} lookup_virtual_method");
-}
-
-// Factor out code to call ic_miss_handler.
-// Generate code to call the inline cache miss handler.
-//
-// In most cases, this code will be generated out-of-line.
-// The method parameters are intended to provide some variability.
-//   ICM          - Label which has to be bound to the start of useful code (past any traps).
-//   trapMarker   - Marking byte for the generated illtrap instructions (if any).
-//                  Any value except 0x00 is supported.
-//                  = 0x00 - do not generate illtrap instructions.
-//                         use nops to fill ununsed space.
-//   requiredSize - required size of the generated code. If the actually
-//                  generated code is smaller, use padding instructions to fill up.
-//                  = 0 - no size requirement, no padding.
-//   scratch      - scratch register to hold branch target address.
-//
-//  The method returns the code offset of the bound label.
-unsigned int MacroAssembler::call_ic_miss_handler(Label& ICM, int trapMarker, int requiredSize, Register scratch) {
-  intptr_t startOffset = offset();
-
-  // Prevent entry at content_begin().
-  if (trapMarker != 0) {
-    z_illtrap(trapMarker);
-  }
-
-  // Load address of inline cache miss code into scratch register
-  // and branch to cache miss handler.
-  BLOCK_COMMENT("IC miss handler {");
-  BIND(ICM);
-  unsigned int   labelOffset = offset();
-  AddressLiteral icmiss(SharedRuntime::get_ic_miss_stub());
-
-  load_const_optimized(scratch, icmiss);
-  z_br(scratch);
-
-  // Fill unused space.
-  if (requiredSize > 0) {
-    while ((offset() - startOffset) < requiredSize) {
-      if (trapMarker == 0) {
-        z_nop();
-      } else {
-        z_illtrap(trapMarker);
-      }
-    }
-  }
-  BLOCK_COMMENT("} IC miss handler");
-  return labelOffset;
-}
-
-void MacroAssembler::nmethod_UEP(Label& ic_miss) {
-  Register ic_reg       = Z_inline_cache;
-  int      klass_offset = oopDesc::klass_offset_in_bytes();
-  if (!ImplicitNullChecks || MacroAssembler::needs_explicit_null_check(klass_offset)) {
-    if (VM_Version::has_CompareBranch()) {
-      z_cgij(Z_ARG1, 0, Assembler::bcondEqual, ic_miss);
-    } else {
-      z_ltgr(Z_ARG1, Z_ARG1);
-      z_bre(ic_miss);
-    }
-  }
-  // Compare cached class against klass from receiver.
-  compare_klass_ptr(ic_reg, klass_offset, Z_ARG1, false);
-  z_brne(ic_miss);
 }
 
 void MacroAssembler::check_klass_subtype_fast_path(Register   sub_klass,

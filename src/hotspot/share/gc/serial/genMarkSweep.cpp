@@ -30,7 +30,7 @@
 #include "classfile/systemDictionary.hpp"
 #include "classfile/vmSymbols.hpp"
 #include "code/codeCache.hpp"
-#include "code/icBuffer.hpp"
+
 #include "gc/serial/genMarkSweep.hpp"
 #include "gc/shared/collectedHeap.inline.hpp"
 #include "gc/shared/gcHeapSummary.hpp"
@@ -233,6 +233,7 @@ void GenMarkSweep::mark_sweep_phase1(bool clear_all_softrefs) {
 
     // Unload nmethods.
     CodeCache::do_unloading(&is_alive, purged_class);
+    CodeCache::purge_unloading();
 
     // Prune dead klasses from subklass/sibling/implementor lists.
     Klass::clean_weak_klass_links(purged_class);

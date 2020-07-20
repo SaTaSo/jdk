@@ -251,8 +251,7 @@ class ConstantPoolCacheEntry {
   void set_itable_call(
     Bytecodes::Code invoke_code,                 // the bytecode used; must be invokeinterface
     Klass* referenced_klass,                     // the referenced klass in the InterfaceMethodref
-    const methodHandle& method,                  // the resolved interface method
-    int itable_index                             // index into itable for the method
+    const methodHandle& method                   // the resolved interface method
   );
 
   void set_method_handle(

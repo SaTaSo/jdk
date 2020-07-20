@@ -27,7 +27,6 @@
 #include "classfile/metadataOnStackMark.hpp"
 #include "classfile/stringTable.hpp"
 #include "code/codeCache.hpp"
-#include "code/icBuffer.hpp"
 #include "gc/g1/g1Allocator.inline.hpp"
 #include "gc/g1/g1Arguments.hpp"
 #include "gc/g1/g1BarrierSet.hpp"
@@ -2607,8 +2606,6 @@ void G1CollectedHeap::trace_heap(GCWhen::Type when, const GCTracer* gc_tracer) {
 }
 
 void G1CollectedHeap::gc_prologue(bool full) {
-  assert(InlineCacheBuffer::is_empty(), "should have cleaned up ICBuffer");
-
   // This summary needs to be printed before incrementing total collections.
   rem_set()->print_periodic_summary_info("Before GC RS summary", total_collections());
 
@@ -4869,7 +4866,7 @@ void G1CollectedHeap::register_nmethod(nmethod* nm) {
 void G1CollectedHeap::unregister_nmethod(nmethod* nm) {
   guarantee(nm != NULL, "sanity");
   UnregisterNMethodOopClosure reg_cl(this, nm);
-  nm->oops_do(&reg_cl, true);
+  nm->oops_do(&reg_cl);
 }
 
 void G1CollectedHeap::purge_code_root_memory() {
@@ -4879,26 +4876,12 @@ void G1CollectedHeap::purge_code_root_memory() {
   phase_times()->record_strong_code_root_purge_time(purge_time_ms);
 }
 
-class RebuildStrongCodeRootClosure: public CodeBlobClosure {
-  G1CollectedHeap* _g1h;
-
-public:
-  RebuildStrongCodeRootClosure(G1CollectedHeap* g1h) :
-    _g1h(g1h) {}
-
-  void do_code_blob(CodeBlob* cb) {
-    nmethod* nm = (cb != NULL) ? cb->as_nmethod_or_null() : NULL;
-    if (nm == NULL) {
-      return;
-    }
-
-    _g1h->register_nmethod(nm);
-  }
-};
-
 void G1CollectedHeap::rebuild_strong_code_roots() {
-  RebuildStrongCodeRootClosure blob_cl(this);
-  CodeCache::blobs_do(&blob_cl);
+  G1CollectedHeap* g1h = heap();
+  NMethodIterator iter;
+  while (iter.next()) {
+    g1h->register_nmethod(iter.method());
+  }
 }
 
 void G1CollectedHeap::initialize_serviceability() {

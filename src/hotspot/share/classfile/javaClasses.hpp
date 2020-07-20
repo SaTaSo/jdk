@@ -51,7 +51,6 @@ class RecordComponent;
   f(java_lang_invoke_MethodHandle) \
   f(java_lang_invoke_DirectMethodHandle) \
   f(java_lang_invoke_MemberName) \
-  f(java_lang_invoke_ResolvedMethodName) \
   f(java_lang_invoke_LambdaForm) \
   f(java_lang_invoke_MethodType) \
   f(java_lang_invoke_CallSite) \
@@ -1035,34 +1034,6 @@ class java_lang_invoke_LambdaForm: AllStatic {
 // Interface to java.lang.invoke.MemberName objects
 // (These are a private interface for Java code to query the class hierarchy.)
 
-#define RESOLVEDMETHOD_INJECTED_FIELDS(macro)                                   \
-  macro(java_lang_invoke_ResolvedMethodName, vmholder, object_signature, false) \
-  macro(java_lang_invoke_ResolvedMethodName, vmtarget, intptr_signature, false)
-
-class java_lang_invoke_ResolvedMethodName : AllStatic {
-  friend class JavaClasses;
-
-  static int _vmtarget_offset;
-  static int _vmholder_offset;
-
-  static void compute_offsets();
- public:
-  static void serialize_offsets(SerializeClosure* f) NOT_CDS_RETURN;
-
-  static int vmtarget_offset() { CHECK_INIT(_vmtarget_offset); }
-
-  static Method* vmtarget(oop resolved_method);
-  static void set_vmtarget(oop resolved_method, Method* method);
-
-  static void set_vmholder(oop resolved_method, oop holder);
-
-  // find or create resolved member name
-  static oop find_resolved_method(const methodHandle& m, TRAPS);
-
-  static bool is_instance(oop resolved_method);
-};
-
-
 #define MEMBERNAME_INJECTED_FIELDS(macro)                               \
   macro(java_lang_invoke_MemberName, vmindex,  intptr_signature, false)
 
@@ -1076,7 +1047,7 @@ class java_lang_invoke_MemberName: AllStatic {
   //    private String     name;        // may be null if not yet materialized
   //    private Object     type;        // may be null if not yet materialized
   //    private int        flags;       // modifier bits; see reflect.Modifier
-  //    private ResolvedMethodName method;    // holds VM-specific target value
+  //    private int        method;      // holds VM-specific selector for target value
   //    private intptr_t   vmindex;     // member index within class or interface
   static int _clazz_offset;
   static int _name_offset;
@@ -1102,9 +1073,8 @@ class java_lang_invoke_MemberName: AllStatic {
   static int            flags(oop mname);
   static void       set_flags(oop mname, int flags);
 
-  // Link through ResolvedMethodName field to get Method*
   static Method*        vmtarget(oop mname);
-  static void       set_method(oop mname, oop method);
+  static void       set_method(oop mname, uint32_t resolved_selector);
 
   static intptr_t       vmindex(oop mname);
   static void       set_vmindex(oop mname, intptr_t index);
@@ -1680,7 +1650,6 @@ class InjectedField {
 #define ALL_INJECTED_FIELDS(macro)          \
   CLASS_INJECTED_FIELDS(macro)              \
   CLASSLOADER_INJECTED_FIELDS(macro)        \
-  RESOLVEDMETHOD_INJECTED_FIELDS(macro)     \
   MEMBERNAME_INJECTED_FIELDS(macro)         \
   CALLSITECONTEXT_INJECTED_FIELDS(macro)    \
   STACKFRAMEINFO_INJECTED_FIELDS(macro)     \

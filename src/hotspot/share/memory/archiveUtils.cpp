@@ -24,7 +24,9 @@
 
 #include "precompiled.hpp"
 #include "memory/archiveUtils.hpp"
+#include "memory/dynamicArchive.hpp"
 #include "memory/metaspace.hpp"
+#include "memory/metaspaceShared.hpp"
 #include "utilities/bitMap.inline.hpp"
 
 #if INCLUDE_CDS
@@ -72,7 +74,7 @@ void ArchivePtrMarker::mark_pointer(address* ptr_loc) {
       }
       assert(idx < _ptrmap->size(), "must be");
       _ptrmap->set_bit(idx);
-      //tty->print_cr("Marking pointer [%p] -> %p @ " SIZE_FORMAT_W(9), ptr_loc, *ptr_loc, idx);
+      // tty->print_cr("Marking pointer [%p] -> %p @ " SIZE_FORMAT_W(9), ptr_loc, *ptr_loc, idx);
     }
   }
 }
@@ -93,6 +95,9 @@ public:
     address* ptr_loc = _ptr_base + offset;
     address  ptr_value = *ptr_loc;
     if (ptr_value != NULL) {
+      if (!(_relocatable_base <= ptr_value && ptr_value < _relocatable_end)) {
+        tty->print_cr(SIZE_FORMAT, offset);
+      }
       assert(_relocatable_base <= ptr_value && ptr_value < _relocatable_end, "do not point to arbitrary locations!");
       if (_max_non_null_offset < offset) {
         _max_non_null_offset = offset;

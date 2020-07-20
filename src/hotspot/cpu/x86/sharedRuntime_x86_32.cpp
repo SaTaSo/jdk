@@ -26,16 +26,13 @@
 #include "asm/macroAssembler.hpp"
 #include "asm/macroAssembler.inline.hpp"
 #include "code/debugInfoRec.hpp"
-#include "code/icBuffer.hpp"
 #include "code/nativeInst.hpp"
-#include "code/vtableStubs.hpp"
 #include "gc/shared/gcLocker.hpp"
 #include "gc/shared/barrierSet.hpp"
 #include "gc/shared/barrierSetAssembler.hpp"
 #include "interpreter/interpreter.hpp"
 #include "logging/log.hpp"
 #include "memory/resourceArea.hpp"
-#include "oops/compiledICHolder.hpp"
 #include "oops/klass.inline.hpp"
 #include "runtime/safepointMechanism.hpp"
 #include "runtime/sharedRuntime.hpp"
@@ -516,61 +513,6 @@ int SharedRuntime::java_calling_convention(const BasicType *sig_bt,
   return align_up(stack, 2);
 }
 
-// Patch the callers callsite with entry to compiled code if it exists.
-static void patch_callers_callsite(MacroAssembler *masm) {
-  Label L;
-  __ cmpptr(Address(rbx, in_bytes(Method::code_offset())), (int32_t)NULL_WORD);
-  __ jcc(Assembler::equal, L);
-  // Schedule the branch target address early.
-  // Call into the VM to patch the caller, then jump to compiled callee
-  // rax, isn't live so capture return address while we easily can
-  __ movptr(rax, Address(rsp, 0));
-  __ pusha();
-  __ pushf();
-
-  if (UseSSE == 1) {
-    __ subptr(rsp, 2*wordSize);
-    __ movflt(Address(rsp, 0), xmm0);
-    __ movflt(Address(rsp, wordSize), xmm1);
-  }
-  if (UseSSE >= 2) {
-    __ subptr(rsp, 4*wordSize);
-    __ movdbl(Address(rsp, 0), xmm0);
-    __ movdbl(Address(rsp, 2*wordSize), xmm1);
-  }
-#ifdef COMPILER2
-  // C2 may leave the stack dirty if not in SSE2+ mode
-  if (UseSSE >= 2) {
-    __ verify_FPU(0, "c2i transition should have clean FPU stack");
-  } else {
-    __ empty_FPU_stack();
-  }
-#endif /* COMPILER2 */
-
-  // VM needs caller's callsite
-  __ push(rax);
-  // VM needs target method
-  __ push(rbx);
-  __ call(RuntimeAddress(CAST_FROM_FN_PTR(address, SharedRuntime::fixup_callers_callsite)));
-  __ addptr(rsp, 2*wordSize);
-
-  if (UseSSE == 1) {
-    __ movflt(xmm0, Address(rsp, 0));
-    __ movflt(xmm1, Address(rsp, wordSize));
-    __ addptr(rsp, 2*wordSize);
-  }
-  if (UseSSE >= 2) {
-    __ movdbl(xmm0, Address(rsp, 0));
-    __ movdbl(xmm1, Address(rsp, 2*wordSize));
-    __ addptr(rsp, 4*wordSize);
-  }
-
-  __ popf();
-  __ popa();
-  __ bind(L);
-}
-
-
 static void move_c2i_double(MacroAssembler *masm, XMMRegister r, int st_off) {
   int next_off = st_off - Interpreter::stackElementSize;
   __ movdbl(Address(rsp, next_off), r);
@@ -582,14 +524,6 @@ static void gen_c2i_adapter(MacroAssembler *masm,
                             const BasicType *sig_bt,
                             const VMRegPair *regs,
                             Label& skip_fixup) {
-  // Before we get into the guts of the C2I adapter, see if we should be here
-  // at all.  We've come from compiled code and are attempting to jump to the
-  // interpreter, which means the caller made a static call to get here
-  // (vcalls always get a compiled target if there is one).  Check for a
-  // compiled target.  If there is one, we need to patch the caller's call.
-  patch_callers_callsite(masm);
-
-  __ bind(skip_fixup);
 
 #ifdef COMPILER2
   // C2 may leave the stack dirty if not in SSE2+ mode
@@ -952,28 +886,10 @@ AdapterHandlerEntry* SharedRuntime::generate_i2c2i_adapters(MacroAssembler *masm
   // compiled code, which relys solely on SP and not EBP, get sick).
 
   address c2i_unverified_entry = __ pc();
-  Label skip_fixup;
 
-  Register holder = rax;
-  Register receiver = rcx;
-  Register temp = rbx;
-
-  {
-
-    Label missed;
-    __ movptr(temp, Address(receiver, oopDesc::klass_offset_in_bytes()));
-    __ cmpptr(temp, Address(holder, CompiledICHolder::holder_klass_offset()));
-    __ movptr(rbx, Address(holder, CompiledICHolder::holder_metadata_offset()));
-    __ jcc(Assembler::notEqual, missed);
-    // Method might have been compiled since the call site was patched to
-    // interpreted if that is the case treat it as a miss so we can get
-    // the call site corrected.
-    __ cmpptr(Address(rbx, in_bytes(Method::code_offset())), (int32_t)NULL_WORD);
-    __ jcc(Assembler::equal, skip_fixup);
-
-    __ bind(missed);
-    __ jump(RuntimeAddress(SharedRuntime::get_ic_miss_stub()));
-  }
+  // TODO: track entries
+  __ c2i_itable_entry();
+  __ c2i_vtable_entry();
 
   address c2i_entry = __ pc();
 
@@ -1825,30 +1741,9 @@ nmethod* SharedRuntime::generate_native_wrapper(MacroAssembler* masm,
 
   int stack_size = stack_slots * VMRegImpl::stack_slot_size;
 
+  __ align(CodeEntryAlignment);
+
   intptr_t start = (intptr_t)__ pc();
-
-  // First thing make an ic check to see if we should even be here
-
-  // We are free to use all registers as temps without saving them and
-  // restoring them except rbp. rbp is the only callee save register
-  // as far as the interpreter and the compiler(s) are concerned.
-
-
-  const Register ic_reg = rax;
-  const Register receiver = rcx;
-  Label hit;
-  Label exception_pending;
-
-  __ verify_oop(receiver);
-  __ cmpptr(ic_reg, Address(receiver, oopDesc::klass_offset_in_bytes()));
-  __ jcc(Assembler::equal, hit);
-
-  __ jump(RuntimeAddress(SharedRuntime::get_ic_miss_stub()));
-
-  // verified entry must be aligned for code patching.
-  // and the first 5 bytes must be in the same cache line
-  // if we align at 8 then we will be sure 5 bytes are in the same line
-  __ align(8);
 
   __ bind(hit);
 

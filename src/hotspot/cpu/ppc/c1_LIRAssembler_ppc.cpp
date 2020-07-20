@@ -69,15 +69,7 @@ int LIR_Assembler::initial_frame_size_in_bytes() const {
 }
 
 
-// Inline cache check: the inline cached class is in inline_cache_reg;
-// we fetch the class of the receiver and compare it with the cached class.
-// If they do not match we jump to slow case.
-int LIR_Assembler::check_icache() {
-  int offset = __ offset();
-  __ inline_cache_check(R3_ARG1, R19_inline_cache_reg);
-  return offset;
-}
-
+// TODO: eliminate this, don't need it any more
 void LIR_Assembler::clinit_barrier(ciMethod* method) {
   assert(!method->holder()->is_not_initialized(), "initialization should have been started");
 
@@ -637,11 +629,6 @@ void LIR_Assembler::emit_opConvert(LIR_OpConvert* op) {
 }
 
 
-void LIR_Assembler::align_call(LIR_Code) {
-  // do nothing since all instructions are word aligned on ppc
-}
-
-
 bool LIR_Assembler::emit_trampoline_stub_for_call(address target, Register Rtoc) {
   int start_offset = __ offset();
   // Put the entry point as a constant into the constant pool.
@@ -663,45 +650,7 @@ bool LIR_Assembler::emit_trampoline_stub_for_call(address target, Register Rtoc)
 
 
 void LIR_Assembler::call(LIR_OpJavaCall* op, relocInfo::relocType rtype) {
-  assert(rtype==relocInfo::opt_virtual_call_type || rtype==relocInfo::static_call_type, "unexpected rtype");
-
-  bool success = emit_trampoline_stub_for_call(op->addr());
-  if (!success) { return; }
-
-  __ relocate(rtype);
-  // Note: At this point we do not have the address of the trampoline
-  // stub, and the entry point might be too far away for bl, so __ pc()
-  // serves as dummy and the bl will be patched later.
-  __ code()->set_insts_mark();
-  __ bl(__ pc());
-  add_call_info(code_offset(), op->info());
-}
-
-
-void LIR_Assembler::ic_call(LIR_OpJavaCall* op) {
-  __ calculate_address_from_global_toc(R2_TOC, __ method_toc());
-
-  // Virtual call relocation will point to ic load.
-  address virtual_call_meta_addr = __ pc();
-  // Load a clear inline cache.
-  AddressLiteral empty_ic((address) Universe::non_oop_word());
-  bool success = __ load_const_from_method_toc(R19_inline_cache_reg, empty_ic, R2_TOC);
-  if (!success) {
-    bailout("const section overflow");
-    return;
-  }
-  // Call to fixup routine. Fixup routine uses ScopeDesc info
-  // to determine who we intended to call.
-  __ relocate(virtual_call_Relocation::spec(virtual_call_meta_addr));
-
-  success = emit_trampoline_stub_for_call(op->addr(), R2_TOC);
-  if (!success) { return; }
-
-  // Note: At this point we do not have the address of the trampoline
-  // stub, and the entry point might be too far away for bl, so __ pc()
-  // serves as dummy and the bl will be patched later.
-  __ bl(__ pc());
-  add_call_info(code_offset(), op->info());
+  // TODO: insert new code here
 }
 
 
@@ -1367,52 +1316,6 @@ int LIR_Assembler::safepoint_poll(LIR_Opr tmp, CodeEmitInfo* info) {
   __ load_from_polling_page(poll_addr);
 
   return offset;
-}
-
-
-void LIR_Assembler::emit_static_call_stub() {
-  address call_pc = __ pc();
-  address stub = __ start_a_stub(static_call_stub_size());
-  if (stub == NULL) {
-    bailout("static call stub overflow");
-    return;
-  }
-
-  // For java_to_interp stubs we use R11_scratch1 as scratch register
-  // and in call trampoline stubs we use R12_scratch2. This way we
-  // can distinguish them (see is_NativeCallTrampolineStub_at()).
-  const Register reg_scratch = R11_scratch1;
-
-  // Create a static stub relocation which relates this stub
-  // with the call instruction at insts_call_instruction_offset in the
-  // instructions code-section.
-  int start = __ offset();
-  __ relocate(static_stub_Relocation::spec(call_pc));
-
-  // Now, create the stub's code:
-  // - load the TOC
-  // - load the inline cache oop from the constant pool
-  // - load the call target from the constant pool
-  // - call
-  __ calculate_address_from_global_toc(reg_scratch, __ method_toc());
-  AddressLiteral ic = __ allocate_metadata_address((Metadata *)NULL);
-  bool success = __ load_const_from_method_toc(R19_inline_cache_reg, ic, reg_scratch, /*fixed_size*/ true);
-
-  if (ReoptimizeCallSequences) {
-    __ b64_patchable((address)-1, relocInfo::none);
-  } else {
-    AddressLiteral a((address)-1);
-    success = success && __ load_const_from_method_toc(reg_scratch, a, reg_scratch, /*fixed_size*/ true);
-    __ mtctr(reg_scratch);
-    __ bctr();
-  }
-  if (!success) {
-    bailout("const section overflow");
-    return;
-  }
-
-  assert(__ offset() - start <= static_call_stub_size(), "stub too big");
-  __ end_a_stub();
 }
 
 

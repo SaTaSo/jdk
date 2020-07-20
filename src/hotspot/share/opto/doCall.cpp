@@ -26,6 +26,7 @@
 #include "ci/ciCallSite.hpp"
 #include "ci/ciMethodHandle.hpp"
 #include "classfile/vmSymbols.hpp"
+#include "classfile/verifier.hpp"
 #include "compiler/compileBroker.hpp"
 #include "compiler/compileLog.hpp"
 #include "interpreter/linkResolver.hpp"
@@ -561,7 +562,7 @@ void Parse::do_call() {
     if (sender_klass->is_interface()) {
       receiver_constraint = sender_klass;
     }
-  } else if (iter().cur_bc_raw() == Bytecodes::_invokeinterface && orig_callee->is_private()) {
+  } else if (iter().cur_bc_raw() == Bytecodes::_invokeinterface && !Verifier::interfaces_are_sane()) {
     assert(holder->is_interface(), "How did we get a non-interface method here!");
     receiver_constraint = holder;
   }
@@ -1076,7 +1077,7 @@ ciMethod* Compile::optimize_virtual_call(ciMethod* caller, int bci, ciInstanceKl
   if (optimized_virtual_method != NULL) {
     callee             = optimized_virtual_method;
     call_does_dispatch = false;
-  } else if (!UseInlineCaches && is_virtual && callee->is_loaded()) {
+  } else if (is_virtual && callee->is_loaded()) {
     // We can make a vtable call at this site
     vtable_index = callee->resolve_vtable_index(caller->holder(), holder);
   }

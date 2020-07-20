@@ -30,6 +30,7 @@
 #include "logging/log.hpp"
 #include "oops/klass.inline.hpp"
 #include "runtime/handles.inline.hpp"
+#include "memory/resourceArea.inline.hpp"
 
 VerificationType VerificationType::from_tag(u1 tag) {
   switch (tag) {
@@ -45,21 +46,49 @@ VerificationType VerificationType::from_tag(u1 tag) {
   }
 }
 
-bool VerificationType::resolve_and_check_assignability(InstanceKlass* klass, Symbol* name,
-         Symbol* from_name, bool from_field_is_protected, bool from_is_array, bool from_is_object, TRAPS) {
-  HandleMark hm(THREAD);
-  Klass* this_class;
-  if (klass->is_hidden() && klass->name() == name) {
-    this_class = klass;
-  } else {
-    this_class = SystemDictionary::resolve_or_fail(
-      name, Handle(THREAD, klass->class_loader()),
-      Handle(THREAD, klass->protection_domain()), true, CHECK_false);
-    if (log_is_enabled(Debug, class, resolve)) {
-      Verifier::trace_class_resolution(this_class, klass);
+// Check if interfaces are still sane
+bool VerificationType::resolve_and_check_assignability_sane(Klass* this_class, InstanceKlass* klass,
+                                                            Symbol* name, Symbol* from_name,
+                                                            bool from_field_is_protected, bool from_is_array,
+                                                            bool from_is_object, TRAPS) {
+  if (this_class->is_interface() &&
+      (!from_field_is_protected || from_name != vmSymbols::java_lang_Object()) &&
+      from_is_array) {
+    // For arrays, we only allow assignability to interfaces
+    // java.lang.Cloneable and java.io.Serializable.
+    return this_class == SystemDictionary::Cloneable_klass() ||
+           this_class == SystemDictionary::Serializable_klass();
+  } else if (from_is_object) {
+    Klass* from_class = SystemDictionary::resolve_or_fail(from_name, Handle(THREAD, klass->class_loader()),
+                                                          Handle(THREAD, klass->protection_domain()), true, THREAD);
+    if (HAS_PENDING_EXCEPTION) {
+      JavaThread* jt = (JavaThread*)THREAD;
+      InstanceKlass* unsafe_def = jt->unsafe_anonymous_def();
+
+      // When defining an unsafe anonymous class, the resolution fails
+      // to find references back to the class being defined. Therefore,
+      // we explicitly track the unsafe anonymous class being defined.
+      if (unsafe_def != NULL && unsafe_def->name() == from_name) {
+        CLEAR_PENDING_EXCEPTION;
+        from_class = unsafe_def;
+      } else {
+        return false;
+      }
     }
+    if (log_is_enabled(Debug, class, resolve)) {
+      Verifier::trace_class_resolution(from_class, klass);
+    }
+    return InstanceKlass::cast(from_class)->is_subtype_of(this_class);
   }
 
+  return false;
+}
+
+// Degraded check when interfaces are not sane.
+bool VerificationType::resolve_and_check_assignability_insane(Klass* this_class, InstanceKlass* klass,
+                                                              Symbol* name, Symbol* from_name,
+                                                              bool from_field_is_protected, bool from_is_array,
+                                                              bool from_is_object, TRAPS) {
   if (this_class->is_interface() && (!from_field_is_protected ||
       from_name != vmSymbols::java_lang_Object())) {
     // If we are not trying to access a protected field or method in
@@ -85,6 +114,36 @@ bool VerificationType::resolve_and_check_assignability(InstanceKlass* klass, Sym
   }
 
   return false;
+}
+
+bool VerificationType::resolve_and_check_assignability(InstanceKlass* klass, Symbol* name,
+                                                       Symbol* from_name, bool from_field_is_protected,
+                                                       bool from_is_array, bool from_is_object, TRAPS) {
+  HandleMark hm(THREAD);
+  ResourceMark rm;
+  Klass* this_class = SystemDictionary::resolve_or_fail(
+      name, Handle(THREAD, klass->class_loader()),
+      Handle(THREAD, klass->protection_domain()), true, CHECK_false);
+  if (log_is_enabled(Debug, class, resolve)) {
+    Verifier::trace_class_resolution(this_class, klass);
+  }
+
+  if (Verifier::interfaces_are_sane()) {
+    bool success = resolve_and_check_assignability_sane(this_class, klass, name, from_name, from_field_is_protected, from_is_array, from_is_object, CHECK_false);
+    if (success) {
+      return true;
+    }
+    success = resolve_and_check_assignability_insane(this_class, klass, name, from_name, from_field_is_protected, from_is_array, from_is_object, CHECK_false);
+    if (success) {
+      Verifier::set_interfaces_are_insane();
+      return true;
+    } else {
+      return false;
+    }
+  } else {
+    bool success = resolve_and_check_assignability_insane(this_class, klass, name, from_name, from_field_is_protected, from_is_array, from_is_object, CHECK_false);
+    return success;
+  }
 }
 
 bool VerificationType::is_reference_assignable_from(

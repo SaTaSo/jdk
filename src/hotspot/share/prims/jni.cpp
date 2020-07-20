@@ -993,7 +993,6 @@ static void jni_invoke_nonstatic(JNIEnv *env, JavaValue* result, jobject receive
   {
     Method* m = Method::resolve_jmethod_id(method_id);
     number_of_parameters = m->size_of_parameters();
-    Klass* holder = m->method_holder();
     if (call_type != JNI_VIRTUAL) {
         selected_method = m;
     } else if (!m->has_itable_index()) {
@@ -1011,9 +1010,9 @@ static void jni_invoke_nonstatic(JNIEnv *env, JavaValue* result, jobject receive
       }
     } else {
       // interface call
-      int itbl_index = m->itable_index();
       Klass* k = h_recv->klass();
-      selected_method = InstanceKlass::cast(k)->method_at_itable(holder, itbl_index, CHECK);
+      // TODO: NULL check for compliance; might need to throw exception
+      selected_method = InstanceKlass::cast(k)->itable().target_method_for_selector(m->selector());
     }
   }
 

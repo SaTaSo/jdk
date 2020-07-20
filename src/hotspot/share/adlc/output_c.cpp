@@ -4188,13 +4188,6 @@ void ArchDesc::buildFrameMethods(FILE *fp_cpp) {
   fprintf(fp_cpp,"%s\n", _frame->_c_return_value);
   fprintf(fp_cpp,"}\n\n");
 
-  // Inline Cache Register, mask definition, and encoding
-  fprintf(fp_cpp,"OptoReg::Name Matcher::inline_cache_reg() {");
-  fprintf(fp_cpp," return OptoReg::Name(%s_num); }\n\n",
-          _frame->_inline_cache_reg);
-  fprintf(fp_cpp,"int Matcher::inline_cache_reg_encode() {");
-  fprintf(fp_cpp," return _regEncode[inline_cache_reg()]; }\n\n");
-
   // Interpreter's Method Oop Register, mask definition, and encoding
   fprintf(fp_cpp,"OptoReg::Name Matcher::interpreter_method_oop_reg() {");
   fprintf(fp_cpp," return OptoReg::Name(%s_num); }\n\n",

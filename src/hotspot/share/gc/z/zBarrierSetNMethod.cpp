@@ -31,34 +31,13 @@
 #include "gc/z/zThreadLocalData.hpp"
 #include "logging/log.hpp"
 
-bool ZBarrierSetNMethod::nmethod_entry_barrier(nmethod* nm) {
-  ZLocker<ZReentrantLock> locker(ZNMethod::lock_for_nmethod(nm));
+void ZBarrierSetNMethod::nmethod_entry_barrier(nmethod* nm) {
   log_trace(nmethod, barrier)("Entered critical zone for %p", nm);
 
-  if (!is_armed(nm)) {
-    // Some other thread got here first and healed the oops
-    // and disarmed the nmethod.
-    return true;
-  }
-
-  if (nm->is_unloading()) {
-    // We don't need to take the lock when unlinking nmethods from
-    // the Method, because it is only concurrently unlinked by
-    // the entry barrier, which acquires the per nmethod lock.
-    nm->unlink_from_method();
-
-    // We can end up calling nmethods that are unloading
-    // since we clear compiled ICs lazily. Returning false
-    // will re-resovle the call and update the compiled IC.
-    return false;
-  }
-
   // Heal oops and disarm
+  ZLocker<ZReentrantLock> locker(ZNMethod::lock_for_nmethod(nm));
   ZNMethodOopClosure cl;
   ZNMethod::nmethod_oops_do(nm, &cl);
-  disarm(nm);
-
-  return true;
 }
 
 int* ZBarrierSetNMethod::disarmed_value_address() const {

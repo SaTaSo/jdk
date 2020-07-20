@@ -2816,12 +2816,14 @@ void LIRGenerator::do_Invoke(Invoke* x) {
   }
 
   CodeEmitInfo* info = state_for(x, x->state());
+  CodeEmitInfo* info_for_exception = NULL;
 
   invoke_load_arguments(x, args, arg_list);
 
   if (x->has_receiver()) {
     args->at(0)->load_item_force(LIR_Assembler::receiverOpr());
     receiver = args->at(0)->result();
+    info_for_exception = state_for(x, x->state());
   }
 
   // emit invoke code
@@ -2842,33 +2844,21 @@ void LIRGenerator::do_Invoke(Invoke* x) {
 
   switch (x->code()) {
     case Bytecodes::_invokestatic:
-      __ call_static(target, result_register,
-                     SharedRuntime::get_resolve_static_call_stub(),
-                     arg_list, info);
+      __ call_direct(target, LIR_OprFact::illegalOpr, result_register, arg_list, info, NULL);
       break;
     case Bytecodes::_invokespecial:
     case Bytecodes::_invokevirtual:
     case Bytecodes::_invokeinterface:
-      // for loaded and final (method or class) target we still produce an inline cache,
-      // in order to be able to call mixed mode
-      if (x->code() == Bytecodes::_invokespecial || x->target_is_final()) {
-        __ call_opt_virtual(target, receiver, result_register,
-                            SharedRuntime::get_resolve_opt_virtual_call_stub(),
-                            arg_list, info);
-      } else if (x->vtable_index() < 0) {
-        __ call_icvirtual(target, receiver, result_register,
-                          SharedRuntime::get_resolve_virtual_call_stub(),
-                          arg_list, info);
+      if (x->code() == Bytecodes::_invokespecial || (x->code() == Bytecodes::_invokevirtual && x->target_is_final())) {
+        __ call_direct(target, receiver, result_register, arg_list, info, info_for_exception);
+      } else if (x->code() == Bytecodes::_invokevirtual) {
+        __ call_virtual(target, receiver, result_register, x->vtable_index(), arg_list, info, info_for_exception);
       } else {
-        int entry_offset = in_bytes(Klass::vtable_start_offset()) + x->vtable_index() * vtableEntry::size_in_bytes();
-        int vtable_offset = entry_offset + vtableEntry::method_offset_in_bytes();
-        __ call_virtual(target, receiver, result_register, vtable_offset, arg_list, info);
+        __ call_interface(target, x->refc(), receiver, result_register, arg_list, info, info_for_exception);
       }
       break;
     case Bytecodes::_invokedynamic: {
-      __ call_dynamic(target, receiver, result_register,
-                      SharedRuntime::get_resolve_static_call_stub(),
-                      arg_list, info);
+      __ call_direct(target, receiver, result_register, arg_list, info, info_for_exception);
       break;
     }
     default:

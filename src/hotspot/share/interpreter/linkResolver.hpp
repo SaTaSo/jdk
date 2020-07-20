@@ -55,13 +55,12 @@ class CallInfo : public StackObj {
                                         //               others inferred), vtable, itable)
   int          _call_index;             // vtable or itable index of selected class method (if any)
   Handle       _resolved_appendix;      // extra argument in constant pool (if CPCE::has_appendix)
-  Handle       _resolved_method_name;   // Object holding the ResolvedMethodName
 
   void set_static(Klass* resolved_klass, const methodHandle& resolved_method, TRAPS);
   void set_interface(Klass* resolved_klass,
                      const methodHandle& resolved_method,
                      const methodHandle& selected_method,
-                     int itable_index, TRAPS);
+                     uint32_t itable_selector, TRAPS);
   void set_virtual(Klass* resolved_klass,
                    const methodHandle& resolved_method,
                    const methodHandle& selected_method,
@@ -89,17 +88,13 @@ class CallInfo : public StackObj {
   }
 
   // utility to extract an effective CallInfo from a method and an optional receiver limit
-  // does not queue the method for compilation.  This also creates a ResolvedMethodName
-  // object for the resolved_method.
+  // does not queue the method for compilation.
   CallInfo(Method* resolved_method, Klass* resolved_klass, TRAPS);
 
   Klass*  resolved_klass() const                 { return _resolved_klass; }
   Method* resolved_method() const                { return _resolved_method(); }
   Method* selected_method() const                { return _selected_method(); }
   Handle       resolved_appendix() const         { return _resolved_appendix; }
-  Handle       resolved_method_name() const      { return _resolved_method_name; }
-  // Materialize a java.lang.invoke.ResolvedMethodName for this resolved_method
-  void     set_resolved_method_name(TRAPS);
 
   BasicType    result_type() const               { return selected_method()->result_type(); }
   CallKind     call_kind() const                 { return _call_kind; }
@@ -113,10 +108,10 @@ class CallInfo : public StackObj {
     // It is up to the caller to decide which way to go.
     return _call_index;
   }
-  int          itable_index() const {
+  uint32_t     itable_selector() const {
     assert(call_kind() == itable_call, "");
     // The returned value is always >= 0, a valid itable index.
-    return _call_index;
+    return static_cast<uint32_t>(_call_index);
   }
 
   // debugging

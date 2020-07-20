@@ -1354,6 +1354,7 @@ private:
   // but it may be bound only once.
 
   void jcc(Condition cc, Label& L, bool maybe_short = true);
+  void jcc(Condition cc, ExternalAddress addr);
 
   // Conditional jump to a 8-bit offset to L.
   // WARNING: be very careful using this for forward jumps.  If the label is

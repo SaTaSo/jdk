@@ -142,22 +142,6 @@ void ShenandoahCodeRoots::unregister_nmethod(nmethod* nm) {
   }
 }
 
-void ShenandoahCodeRoots::flush_nmethod(nmethod* nm) {
-  switch (ShenandoahCodeRootsStyle) {
-    case 0:
-    case 1: {
-      break;
-    }
-    case 2: {
-      assert_locked_or_safepoint(CodeCache_lock);
-      _nmethod_table->flush_nmethod(nm);
-      break;
-    }
-    default:
-      ShouldNotReachHere();
-  }
-}
-
 void ShenandoahCodeRoots::arm_nmethods() {
   assert(SafepointSynchronize::is_at_safepoint(), "Must be at a safepoint");
   _disarmed_value ++;

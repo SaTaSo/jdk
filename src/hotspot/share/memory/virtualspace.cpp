@@ -23,6 +23,7 @@
  */
 
 #include "precompiled.hpp"
+#include "code/codeCache.hpp"
 #include "logging/log.hpp"
 #include "memory/resourceArea.hpp"
 #include "memory/virtualspace.hpp"
@@ -64,6 +65,18 @@ ReservedSpace::ReservedSpace(size_t size, size_t alignment,
                              bool large,
                              char* requested_address) : _fd_for_heap(-1) {
   initialize(size, alignment, large, requested_address, false);
+}
+
+ReservedSpace::ReservedSpace(size_t size, size_t alignment,
+                             bool large,
+                             bool executable) : _fd_for_heap(-1) {
+  initialize(size, alignment, large, NULL, executable);
+}
+
+ReservedSpace::ReservedSpace(size_t size, size_t alignment,
+                             bool large,
+                             bool executable, char* addr) : _fd_for_heap(-1) {
+  initialize(size, alignment, large, addr, executable);
 }
 
 ReservedSpace::ReservedSpace(char* base, size_t size, size_t alignment,
@@ -639,8 +652,8 @@ MemRegion ReservedHeapSpace::region() const {
 // executable.
 ReservedCodeSpace::ReservedCodeSpace(size_t r_size,
                                      size_t rs_align,
-                                     bool large) : ReservedSpace() {
-  initialize(r_size, rs_align, large, /*requested address*/ NULL, /*executable*/ true);
+                                     bool large) :
+  ReservedSpace(r_size, rs_align, large, /*executable*/ true, (char*)(intptr_t(1) << (CodeCache::code_pointer_shift() + 32)) - 0x10000000) {
   MemTracker::record_virtual_memory_type((address)base(), mtCode);
 }
 

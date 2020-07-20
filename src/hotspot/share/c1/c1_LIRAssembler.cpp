@@ -158,10 +158,6 @@ void LIR_Assembler::emit_slow_case_stubs() {
 }
 
 
-bool LIR_Assembler::needs_icache(ciMethod* method) const {
-  return !method->is_static();
-}
-
 bool LIR_Assembler::needs_clinit_barrier_on_entry(ciMethod* method) const {
   return VM_Version::supports_fast_class_init_checks() && method->needs_clinit_barrier();
 }
@@ -449,26 +445,19 @@ void LIR_Assembler::emit_rtcall(LIR_OpRTCall* op) {
 void LIR_Assembler::emit_call(LIR_OpJavaCall* op) {
   verify_oop_map(op->info());
 
-  // must align calls sites, otherwise they can't be updated atomically
-  align_call(op->code());
-
-  // emit the static call stub stuff out of line
-  emit_static_call_stub();
   CHECK_BAILOUT();
 
   switch (op->code()) {
-  case lir_static_call:
   case lir_dynamic_call:
-    call(op, relocInfo::static_call_type);
-    break;
-  case lir_optvirtual_call:
-    call(op, relocInfo::opt_virtual_call_type);
-    break;
-  case lir_icvirtual_call:
-    ic_call(op);
+  case lir_static_call:
+  case lir_direct_call:
+    direct_call(op);
     break;
   case lir_virtual_call:
     vtable_call(op);
+    break;
+  case lir_interface_call:
+    itable_call(op);
     break;
   default:
     fatal("unexpected op code: %s", op->name());
@@ -596,12 +585,9 @@ void LIR_Assembler::emit_op0(LIR_Op0* op) {
 
     case lir_std_entry:
       // init offsets
-      offsets()->set_value(CodeOffsets::OSR_Entry, _masm->offset());
       _masm->align(CodeEntryAlignment);
-      if (needs_icache(compilation()->method())) {
-        check_icache();
-      }
-      offsets()->set_value(CodeOffsets::Verified_Entry, _masm->offset());
+      offsets()->set_value(CodeOffsets::OSR_Entry, _masm->offset());
+      offsets()->set_value(CodeOffsets::Entry, _masm->offset());
       _masm->verified_entry();
       if (needs_clinit_barrier_on_entry(compilation()->method())) {
         clinit_barrier(compilation()->method());

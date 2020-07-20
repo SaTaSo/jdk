@@ -61,10 +61,6 @@ class RawNativeInstruction {
     instr_fld_fst    = 0xd0
   };
 
-  // illegal instruction used by NativeJump::patch_verified_entry
-  // permanently undefined (UDF): 0xe << 28 | 0b1111111 << 20 | 0b1111 << 4
-  static const int zombie_illegal_instruction = 0xe7f000f0;
-
   static int decode_rotated_imm12(int encoding) {
     int base = encoding & 0xff;
     int right_rotation = (encoding & 0xf00) >> 7;
@@ -270,11 +266,6 @@ class RawNativeJump: public NativeInstruction {
       OrderAccess::storeload(); // overkill if caller holds lock?
     }
   }
-
-  static void check_verified_entry_alignment(address entry, address verified_entry);
-
-  static void patch_verified_entry(address entry, address verified_entry, address dest);
-
 };
 
 inline RawNativeJump* rawNativeJump_at(address address) {

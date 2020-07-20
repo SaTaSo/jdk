@@ -347,7 +347,7 @@ public class Method extends Metadata {
       NMethod nm = getNativeMethod();
       int code_size = 0;
       if (nm != null) {
-        code_size = (int)nm.codeEnd().minus(nm.getVerifiedEntryPoint());
+        code_size = (int)nm.codeEnd().minus(nm.getEntryPoint());
       }
       Klass holder = getMethodHolder();
       out.println("ciMethod " +

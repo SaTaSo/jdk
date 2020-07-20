@@ -1508,7 +1508,7 @@ void JVMCIRuntime::compile_method(JVMCIEnv* JVMCIENV, JVMCICompiler* compiler, c
         bool retryable = JVMCIENV->get_HotSpotCompilationRequestResult_retry(result_object) != 0;
         compile_state->set_failure(retryable, failure_reason, true);
       } else {
-        if (compile_state->task()->code() == NULL) {
+        if (!compile_state->task()->is_success()) {
           compile_state->set_failure(true, "no nmethod produced");
         } else {
           compile_state->task()->set_num_inlined_bytecodes(JVMCIENV->get_HotSpotCompilationRequestResult_inlinedBytecodes(result_object));
@@ -1618,7 +1618,7 @@ JVMCI::CodeInstallResult JVMCIRuntime::register_method(JVMCIEnv* JVMCIENV,
                                  debug_info, dependencies, code_buffer,
                                  frame_words, oop_map_set,
                                  handler_table, implicit_exception_table,
-                                 compiler, comp_level,
+                                 compiler, comp_level, NULL /* lazy_invocations */,
                                  speculations, speculations_len,
                                  nmethod_mirror_index, nmethod_mirror_name, failed_speculations);
 
@@ -1636,9 +1636,8 @@ JVMCI::CodeInstallResult JVMCIRuntime::register_method(JVMCIEnv* JVMCIENV,
         nm->set_has_wide_vectors(has_wide_vector);
 
         // Record successful registration.
-        // (Put nm into the task handle *before* publishing to the Java heap.)
         if (JVMCIENV->compile_state() != NULL) {
-          JVMCIENV->compile_state()->task()->set_code(nm);
+          JVMCIENV->compile_state()->task()->mark_success();
         }
 
         JVMCINMethodData* data = nm->jvmci_nmethod_data();
@@ -1668,7 +1667,7 @@ JVMCI::CodeInstallResult JVMCIRuntime::register_method(JVMCIEnv* JVMCIENV,
             }
             // Allow the code to be executed
             MutexLocker ml(CompiledMethod_lock, Mutex::_no_safepoint_check_flag);
-            if (nm->make_in_use()) {
+            if (nm->is_in_use()) {
               method->set_code(method, nm);
             }
           } else {
@@ -1680,7 +1679,7 @@ JVMCI::CodeInstallResult JVMCIRuntime::register_method(JVMCIEnv* JVMCIENV,
                         comp_level, method_name, entry_bci);
             }
             MutexLocker ml(CompiledMethod_lock, Mutex::_no_safepoint_check_flag);
-            if (nm->make_in_use()) {
+            if (nm->is_in_use()) {
               InstanceKlass::cast(method->method_holder())->add_osr_nmethod(nm);
             }
           }

@@ -188,10 +188,6 @@ inline bool java_lang_invoke_MemberName::is_instance(oop obj) {
   return obj != NULL && obj->klass() == SystemDictionary::MemberName_klass();
 }
 
-inline bool java_lang_invoke_ResolvedMethodName::is_instance(oop obj) {
-  return obj != NULL && obj->klass() == SystemDictionary::ResolvedMethodName_klass();
-}
-
 inline bool java_lang_invoke_MethodType::is_instance(oop obj) {
   return obj != NULL && obj->klass() == SystemDictionary::MethodType_klass();
 }

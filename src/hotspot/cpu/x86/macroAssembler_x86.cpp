@@ -26,7 +26,10 @@
 #include "jvm.h"
 #include "asm/assembler.hpp"
 #include "asm/assembler.inline.hpp"
+#include "ci/ciMethod.hpp"
+#include "classfile/verifier.hpp"
 #include "compiler/disassembler.hpp"
+#include "code/lazyInvocation.hpp"
 #include "gc/shared/barrierSet.hpp"
 #include "gc/shared/barrierSetAssembler.hpp"
 #include "gc/shared/collectedHeap.inline.hpp"
@@ -36,6 +39,7 @@
 #include "oops/accessDecorators.hpp"
 #include "oops/compressedOops.inline.hpp"
 #include "oops/klass.inline.hpp"
+#include "oops/klassVtable.hpp"
 #include "prims/methodHandles.hpp"
 #include "runtime/biasedLocking.hpp"
 #include "runtime/flags/flagSetting.hpp"
@@ -1309,12 +1313,6 @@ void MacroAssembler::call(AddressLiteral entry) {
   }
 }
 
-void MacroAssembler::ic_call(address entry, jint method_index) {
-  RelocationHolder rh = virtual_call_Relocation::spec(pc(), method_index);
-  movptr(rax, (intptr_t)Universe::non_oop_word());
-  call(AddressLiteral(entry, rh));
-}
-
 // Implementation of call_VM versions
 
 void MacroAssembler::call_VM(Register oop_result,
@@ -1960,19 +1958,6 @@ void MacroAssembler::divss(XMMRegister dst, AddressLiteral src) {
 void MacroAssembler::enter() {
   push(rbp);
   mov(rbp, rsp);
-}
-
-// A 5 byte nop that is safe for patching (see patch_verified_entry)
-void MacroAssembler::fat_nop() {
-  if (UseAddressNop) {
-    addr_nop_5();
-  } else {
-    emit_int8(0x26); // es:
-    emit_int8(0x2e); // cs:
-    emit_int8(0x64); // fs:
-    emit_int8(0x65); // gs:
-    emit_int8((unsigned char)0x90);
-  }
 }
 
 #ifndef _LP64
@@ -3383,95 +3368,239 @@ void MacroAssembler::zero_memory(Register address, Register length_in_bytes, int
   bind(done);
 }
 
+void MacroAssembler::lookup_vtable_entry(Register dst, Register rklass, int32_t vtable_index) {
+  int32_t vtable_offset = -vtable_index * sizeof(uint64_t) + Klass::vtable_start_offset();
+  Address vtable_entry(rklass, vtable_offset);
+  movq(dst, vtable_entry);
+}
+
+void MacroAssembler::lookup_vtable_entry(Register dst, Register rklass, Register vtable_index) {
+  negptr(vtable_index);
+  Address vtable_entry(rklass, vtable_index, Address::times_8, Klass::vtable_start_offset());
+  movq(dst, vtable_entry);
+}
+
+void MacroAssembler::lookup_bucket_from_table_entry(Register result, Register rselector,
+                                                    Register rtmp_table, Register rtmp) {
+  Label resolve_value_table;
+  Label retry;
+  Address mask_addr(rtmp_table, -4);
+
+  movl(result, rselector);
+  andl(result, mask_addr);
+  movl(rtmp, result); // initial index
+
+  // Find bucket index
+  bind(retry);
+  cmpl(rselector, Address(rtmp_table, result, Address::times_4, 0));
+  jccb(Assembler::equal, resolve_value_table);
+  addl(result, 1);
+  andl(result, mask_addr);
+  cmpl(result, rtmp);
+  jccb(Assembler::notEqual, retry);
+
+  bind(resolve_value_table);
+  movl(rtmp, mask_addr);
+  lea(rtmp_table, Address(rtmp_table, rtmp, Address::times_4, 4)); // resolve value table
+}
+
+void MacroAssembler::lookup_method_from_table_entry(Register rentry, Register rtmp1,
+                                                    Register rtmp2, Register rtmp3) {
+  movptr(rtmp1, ExternalAddress(SystemDictionary::method_selector_map_blob()));
+  // Find bucket index
+  lookup_bucket_from_table_entry(rtmp2, rentry, rtmp1, rtmp3);
+  // Find value for that bucket
+  movptr(rentry, Address(rtmp1, rtmp2, Address::times_ptr, 0)); // Load method
+}
+
+void MacroAssembler::lookup_itable_selector(Register rselector, Register rtmp_klass, Register rtmp1, Register rtmp2) {
+  Label found;
+  // Find bucket index in interpreter itable
+  movptr(rtmp_klass, Address(rtmp_klass, in_bytes(InstanceKlass::itable_selector_map_offset())));
+  addptr(rtmp_klass, Array<uint32_t>::base_offset_in_bytes() + in_bytes(klassItable::itable_table_offset()));
+  lookup_bucket_from_table_entry(rtmp1, rselector, rtmp_klass, rtmp2);
+  // Find value for that bucket
+  bind(found);
+  movl(rselector, Address(rtmp_klass, rtmp1, Address::times_4, 0));
+}
+
+void MacroAssembler::unpack_table_entry(Register rmethod, Register rentry) {
+  movl(rmethod, rentry);
+  shrq(rentry, 32 - CodeCache::code_pointer_shift());
+  if (!CodeCache::supports_32_bit_code_pointers()) {
+    movptr(r14, (intptr_t)CodeCache::low_bound());
+    addptr(rentry, r14);
+  }
+}
+
+void MacroAssembler::compiled_lazy_call(LazyInvocation* lazy) {
+  if (lazy->call_kind() == LazyInvocation::direct_call) {
+    movptr(rbx, ExternalAddress(lazy->value_addr()));  // rbx = Method*
+    Assembler::call(Address(rbx, in_bytes(Method::from_compiled_offset())));
+  } else if (lazy->call_kind() == LazyInvocation::vtable_call) {
+    movptr(rax, ExternalAddress(lazy->value_addr()));
+    lookup_vtable_entry(r10, r11, rax);
+    unpack_table_entry(rbx, r10);
+    Assembler::call(r10);
+  } else {
+    assert(lazy->call_kind() == LazyInvocation::itable_call, "must be");
+    movptr(rax, ExternalAddress(lazy->value_addr()));
+    Register refc = noreg;
+    if (!Verifier::interfaces_are_sane()) {
+      refc = rbx;
+      movptr(refc, ExternalAddress(lazy->refc_addr()));
+      testptr(refc, refc);
+      cmovptr(Assembler::zero, refc, r11);
+    }
+    compiled_itable_call(rax, refc, NULL);
+  }
+}
+
+void MacroAssembler::compiled_direct_call(ciMethod* method) {
+  assert(method != NULL && method->is_loaded(), "sanity");
+  assert(!method->is_abstract(), "sanity");
+  assert(!method->is_overpass(), "sanity");
+  mov_metadata(rbx, method->get_Method());
+  Assembler::call(Address(rbx, in_bytes(Method::from_compiled_offset())));
+}
+
+void MacroAssembler::compiled_vtable_call(int vtable_index) {
+  Register rklass = r11;
+  lookup_vtable_entry(r10, rklass, vtable_index);
+  unpack_table_entry(rbx, r10);
+  Assembler::call(r10);
+}
+
+void MacroAssembler::lookup_itable_entry(Register rselector, Register rklass, Register rentry, Label& dispatch_to_entry) {
+  // Compute primary bucket
+  movl(rentry, rselector);
+  andl(rentry, Address(rklass, InstanceKlass::itable_code_map_mask_offset()));
+  movq(rentry, Address(rklass, rentry, Address::times_8, InstanceKlass::itable_code_map_table_offset()));
+
+  // Check for primary bucket match
+  cmpl(rentry, rselector);
+  jcc(Assembler::equal, dispatch_to_entry);
+
+  // Compute secondary bucket
+  movl(rentry, rselector);
+  shrl(rentry, 16);
+  andl(rentry, Address(rklass, InstanceKlass::itable_code_map_mask_offset()));
+  movq(rentry, Address(rklass, rentry, Address::times_8, InstanceKlass::itable_code_map_table_offset()));
+
+  // Check for secondary bucket match
+  cmpl(rentry, rselector);
+  jcc(Assembler::equal, dispatch_to_entry);
+}
+
+void MacroAssembler::compiled_itable_call(Register rselector, Register rrefc, ciMethod* method) {
+  assert_different_registers(rselector, rrefc);
+  Register rklass = r11;
+  Label dispatch;
+
+  if (rrefc != noreg) {
+    // Only when the verifier can't prove that data flow does not admit non-REFC
+    // targets for interface invocations, do we have to check REFC. This should
+    // almost never happen. When it does, we bring a larger hammer. You deserve
+    // to run slower, if you spin bytecodes that violate type safety of the program.
+    Label isa_refc;
+    check_klass_subtype(rklass,
+                        rrefc,
+                        r10,
+                        isa_refc);
+    lea(r10, RuntimeAddress(StubRoutines::throw_IncompatibleClassChangeError_entry()));
+    jmp(dispatch);
+    bind(isa_refc);
+  }
+
+  if (method != NULL && method->get_Method()->vtable_index() >= 0) {
+    // Interface call to java.lang.Object methods that require vtable dispatch
+    lookup_vtable_entry(r10, rklass, method->get_Method()->vtable_index());
+    unpack_table_entry(rbx, r10);
+  } else if (method != NULL && !klassItable::interface_method_needs_itable_index(method->get_Method())) {
+    // Interface call to presumably statically bound method, not part of the itable
+    assert(method != NULL && method->is_loaded(), "sanity");
+    assert(!method->is_abstract(), "sanity");
+    assert(!method->is_overpass(), "sanity");
+    mov_metadata(rbx, method->get_Method());
+    movptr(r10, Address(rbx, in_bytes(Method::from_compiled_offset())));
+  } else {
+    // The normal case: an actual itable dispatch
+    Label dispatch_to_entry;
+    lookup_itable_entry(rselector, rklass, r10, dispatch_to_entry);
+
+    // Unfortunate race where buckets are being shuffled around concurrently to optimize call
+    // patterns. This happens very rarely; take a slow path and perform the lookup under a lock.
+    lea(r10, RuntimeAddress(SharedRuntime::get_bad_call_stub()));
+    jmp(dispatch);
+
+    // Unpack and call primary bucket
+    bind(dispatch_to_entry);
+    unpack_table_entry(rbx, r10);
+  }
+  bind(dispatch);
+  Assembler::call(r10);
+}
+
+
+void MacroAssembler::c2i_itable_entry() {
+  lookup_itable_selector(rbx /* rselector*/, r11 /* rtmp_klass*/,
+                         rax /* rtmp1 */, r10 /* rtmp2 */);
+}
+
+void MacroAssembler::c2i_vtable_entry() {
+  lookup_method_from_table_entry(rbx /* rentry */, r10 /* rtmp1 */,
+                                 r11 /* rtmp2 */, rax /* rtmp3 */);
+}
+
+void MacroAssembler::c2i_clinit_entry() {
+  Label L_skip_barrier;
+  Register method = rbx;
+
+  { // Bypass the barrier for non-static methods
+    Register flags  = rscratch1;
+    movl(flags, Address(method, Method::access_flags_offset()));
+    testl(flags, JVM_ACC_STATIC);
+    jcc(Assembler::zero, L_skip_barrier); // non-static
+  }
+
+  Register klass = rscratch1;
+  load_method_holder(klass, method);
+  clinit_barrier(klass, r15_thread, &L_skip_barrier /*L_fast_path*/);
+
+  jump(RuntimeAddress(SharedRuntime::get_bad_call_stub())); // slow path
+
+  bind(L_skip_barrier);
+}
+
 // Look up the method for a megamorphic invokeinterface call.
 // The target method is determined by <intf_klass, itable_index>.
 // The receiver klass is in recv_klass.
 // On success, the result will be in method_result, and execution falls through.
 // On failure, execution transfers to the given label.
-void MacroAssembler::lookup_interface_method(Register recv_klass,
-                                             Register intf_klass,
-                                             RegisterOrConstant itable_index,
-                                             Register method_result,
-                                             Register scan_temp,
-                                             Label& L_no_such_interface,
-                                             bool return_method) {
-  assert_different_registers(recv_klass, intf_klass, scan_temp);
-  assert_different_registers(method_result, intf_klass, scan_temp);
-  assert(recv_klass != method_result || !return_method,
+void MacroAssembler::lookup_interface_method(Register rmethod,
+                                             Register rklass,
+                                             Register rtmp1,
+                                             Register rtmp2) {
+  assert_different_registers(rklass, rtmp1, rtmp2);
+  assert_different_registers(rmethod, rtmp1, rtmp2);
+  assert(rklass != rmethod,
          "recv_klass can be destroyed when method isn't needed");
 
-  assert(itable_index.is_constant() || itable_index.as_register() == method_result,
-         "caller must use same register for non-constant itable index as for method");
-
-  // Compute start of first itableOffsetEntry (which is at the end of the vtable)
-  int vtable_base = in_bytes(Klass::vtable_start_offset());
-  int itentry_off = itableMethodEntry::method_offset_in_bytes();
-  int scan_step   = itableOffsetEntry::size() * wordSize;
-  int vte_size    = vtableEntry::size_in_bytes();
-  Address::ScaleFactor times_vte_scale = Address::times_ptr;
-  assert(vte_size == wordSize, "else adjust times_vte_scale");
-
-  movl(scan_temp, Address(recv_klass, Klass::vtable_length_offset()));
-
-  // %%% Could store the aligned, prescaled offset in the klassoop.
-  lea(scan_temp, Address(recv_klass, scan_temp, times_vte_scale, vtable_base));
-
-  if (return_method) {
-    // Adjust recv_klass by scaled itable_index, so we can free itable_index.
-    assert(itableMethodEntry::size() * wordSize == wordSize, "adjust the scaling in the code below");
-    lea(recv_klass, Address(recv_klass, itable_index, Address::times_ptr, itentry_off));
-  }
-
-  // for (scan = klass->itable(); scan->interface() != NULL; scan += scan_step) {
-  //   if (scan->interface() == intf) {
-  //     result = (klass + scan->offset() + itable_index);
-  //   }
-  // }
-  Label search, found_method;
-
-  for (int peel = 1; peel >= 0; peel--) {
-    movptr(method_result, Address(scan_temp, itableOffsetEntry::interface_offset_in_bytes()));
-    cmpptr(intf_klass, method_result);
-
-    if (peel) {
-      jccb(Assembler::equal, found_method);
-    } else {
-      jccb(Assembler::notEqual, search);
-      // (invert the test to fall through to found_method...)
-    }
-
-    if (!peel)  break;
-
-    bind(search);
-
-    // Check that the previous entry is non-null.  A null entry means that
-    // the receiver class doesn't implement the interface, and wasn't the
-    // same as when the caller was compiled.
-    testptr(method_result, method_result);
-    jcc(Assembler::zero, L_no_such_interface);
-    addptr(scan_temp, scan_step);
-  }
-
-  bind(found_method);
-
-  if (return_method) {
-    // Got a hit.
-    movl(scan_temp, Address(scan_temp, itableOffsetEntry::offset_offset_in_bytes()));
-    movptr(method_result, Address(recv_klass, scan_temp, Address::times_1));
-  }
+  lookup_itable_selector(rmethod /* rselector*/, rklass /* rtmp_klass*/,
+                         rtmp1 /* rtmp1 */, rtmp2 /* rtmp2 */);
+  lookup_method_from_table_entry(rmethod /* rentry */, rtmp1 /* rtmp1 */,
+                                 rtmp2 /* rtmp2 */, rklass /* rtmp3 */);
 }
 
 
 // virtual method calling
-void MacroAssembler::lookup_virtual_method(Register recv_klass,
-                                           RegisterOrConstant vtable_index,
-                                           Register method_result) {
-  const int base = in_bytes(Klass::vtable_start_offset());
-  assert(vtableEntry::size() * wordSize == wordSize, "else adjust the scaling in the code below");
-  Address vtable_entry_addr(recv_klass,
-                            vtable_index, Address::times_ptr,
-                            base + vtableEntry::method_offset_in_bytes());
-  movptr(method_result, vtable_entry_addr);
+void MacroAssembler::lookup_virtual_method(Register rmethod,
+                                           Register rklass,
+                                           Register rtmp1,
+                                           Register rtmp2) {
+  lookup_vtable_entry(rmethod, rklass, rmethod);
+  lookup_method_from_table_entry(rmethod /* rentry */, rtmp1 /* rtmp1 */,
+                                 rtmp2 /* rtmp2 */, rklass /* rtmp3 */);
 }
 
 
@@ -4289,34 +4418,12 @@ void MacroAssembler::resolve_oop_handle(Register result, Register tmp) {
                  result, Address(result, 0), tmp, /*tmp_thread*/noreg);
 }
 
-// ((WeakHandle)result).resolve();
-void MacroAssembler::resolve_weak_handle(Register rresult, Register rtmp) {
-  assert_different_registers(rresult, rtmp);
-  Label resolved;
-
-  // A null weak handle resolves to null.
-  cmpptr(rresult, 0);
-  jcc(Assembler::equal, resolved);
-
-  // Only 64 bit platforms support GCs that require a tmp register
-  // Only IN_HEAP loads require a thread_tmp register
-  // WeakHandle::resolve is an indirection like jweak.
-  access_load_at(T_OBJECT, IN_NATIVE | ON_PHANTOM_OOP_REF,
-                 rresult, Address(rresult, 0), rtmp, /*tmp_thread*/noreg);
-  bind(resolved);
-}
-
 void MacroAssembler::load_mirror(Register mirror, Register method, Register tmp) {
   // get mirror
   const int mirror_offset = in_bytes(Klass::java_mirror_offset());
   load_method_holder(mirror, method);
   movptr(mirror, Address(mirror, mirror_offset));
   resolve_oop_handle(mirror, tmp);
-}
-
-void MacroAssembler::load_method_holder_cld(Register rresult, Register rmethod) {
-  load_method_holder(rresult, rmethod);
-  movptr(rresult, Address(rresult, InstanceKlass::class_loader_data_offset()));
 }
 
 void MacroAssembler::load_method_holder(Register holder, Register method) {
@@ -4721,13 +4828,6 @@ void MacroAssembler::reinit_heapbase() {
 
 // C2 compiled method's prolog code.
 void MacroAssembler::verified_entry(int framesize, int stack_bang_size, bool fp_mode_24b, bool is_stub) {
-
-  // WARNING: Initial instruction MUST be 5 bytes or longer so that
-  // NativeJump::patch_verified_entry will be able to patch out the entry
-  // code safely. The push to verify stack depth is ok at 5 bytes,
-  // the frame allocation can be either 3 or 6 bytes. So if we don't do
-  // stack bang then we must use the 6 byte frame allocation even if
-  // we have no frame. :-(
   assert(stack_bang_size >= framesize || stack_bang_size <= 0, "stack bang size incorrect");
 
   assert((framesize & (StackAlignmentInBytes-1)) == 0, "frame size not aligned");

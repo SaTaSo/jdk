@@ -246,10 +246,7 @@ static size_t       granule_size          = 0;
 static bool         segment_granules      = false;
 static unsigned int nBlocks_t1            = 0;  // counting "in_use" nmethods only.
 static unsigned int nBlocks_t2            = 0;  // counting "in_use" nmethods only.
-static unsigned int nBlocks_alive         = 0;  // counting "not_used" and "not_entrant" nmethods only.
-static unsigned int nBlocks_dead          = 0;  // counting "zombie" and "unloaded" methods only.
-static unsigned int nBlocks_inconstr      = 0;  // counting "inconstruction" nmethods only. This is a transient state.
-static unsigned int nBlocks_unloaded      = 0;  // counting "unloaded" nmethods only. This is a transient state.
+static unsigned int nBlocks_notentrant    = 0;  // counting "not_used" and "not_entrant" nmethods only.
 static unsigned int nBlocks_stub          = 0;
 
 static struct FreeBlk*          FreeArray = NULL;
@@ -317,10 +314,6 @@ void CodeHeapState::get_HeapStatGlobals(outputStream* out, const char* heapName)
     segment_granules      = CodeHeapStatArray[ix].segment_granules;
     nBlocks_t1            = CodeHeapStatArray[ix].nBlocks_t1;
     nBlocks_t2            = CodeHeapStatArray[ix].nBlocks_t2;
-    nBlocks_alive         = CodeHeapStatArray[ix].nBlocks_alive;
-    nBlocks_dead          = CodeHeapStatArray[ix].nBlocks_dead;
-    nBlocks_inconstr      = CodeHeapStatArray[ix].nBlocks_inconstr;
-    nBlocks_unloaded      = CodeHeapStatArray[ix].nBlocks_unloaded;
     nBlocks_stub          = CodeHeapStatArray[ix].nBlocks_stub;
     FreeArray             = CodeHeapStatArray[ix].FreeArray;
     alloc_freeBlocks      = CodeHeapStatArray[ix].alloc_freeBlocks;
@@ -340,10 +333,6 @@ void CodeHeapState::get_HeapStatGlobals(outputStream* out, const char* heapName)
     segment_granules      = false;
     nBlocks_t1            = 0;
     nBlocks_t2            = 0;
-    nBlocks_alive         = 0;
-    nBlocks_dead          = 0;
-    nBlocks_inconstr      = 0;
-    nBlocks_unloaded      = 0;
     nBlocks_stub          = 0;
     FreeArray             = NULL;
     alloc_freeBlocks      = 0;
@@ -367,10 +356,6 @@ void CodeHeapState::set_HeapStatGlobals(outputStream* out, const char* heapName)
     CodeHeapStatArray[ix].segment_granules      = segment_granules;
     CodeHeapStatArray[ix].nBlocks_t1            = nBlocks_t1;
     CodeHeapStatArray[ix].nBlocks_t2            = nBlocks_t2;
-    CodeHeapStatArray[ix].nBlocks_alive         = nBlocks_alive;
-    CodeHeapStatArray[ix].nBlocks_dead          = nBlocks_dead;
-    CodeHeapStatArray[ix].nBlocks_inconstr      = nBlocks_inconstr;
-    CodeHeapStatArray[ix].nBlocks_unloaded      = nBlocks_unloaded;
     CodeHeapStatArray[ix].nBlocks_stub          = nBlocks_stub;
     CodeHeapStatArray[ix].FreeArray             = FreeArray;
     CodeHeapStatArray[ix].alloc_freeBlocks      = alloc_freeBlocks;
@@ -535,7 +520,6 @@ void CodeHeapState::aggregate(outputStream* out, CodeHeap* heap, size_t granular
   unsigned int nBlocks_free    = 0;
   unsigned int nBlocks_used    = 0;
   unsigned int nBlocks_zomb    = 0;
-  unsigned int nBlocks_disconn = 0;
   unsigned int nBlocks_notentr = 0;
 
   //---<  max & min of TopSizeArray  >---
@@ -655,16 +639,11 @@ void CodeHeapState::aggregate(outputStream* out, CodeHeap* heap, size_t granular
     //---<  reset counters with every aggregation  >---
     nBlocks_t1       = 0;
     nBlocks_t2       = 0;
-    nBlocks_alive    = 0;
-    nBlocks_dead     = 0;
-    nBlocks_inconstr = 0;
-    nBlocks_unloaded = 0;
     nBlocks_stub     = 0;
 
     nBlocks_free     = 0;
     nBlocks_used     = 0;
     nBlocks_zomb     = 0;
-    nBlocks_disconn  = 0;
     nBlocks_notentr  = 0;
 
     //---<  discard old arrays if size does not match  >---
@@ -687,12 +666,7 @@ void CodeHeapState::aggregate(outputStream* out, CodeHeap* heap, size_t granular
     size_t       usedSpace     = 0;
     size_t       t1Space       = 0;
     size_t       t2Space       = 0;
-    size_t       aliveSpace    = 0;
-    size_t       disconnSpace  = 0;
     size_t       notentrSpace  = 0;
-    size_t       deadSpace     = 0;
-    size_t       inconstrSpace = 0;
-    size_t       unloadedSpace = 0;
     size_t       stubSpace     = 0;
     size_t       freeSpace     = 0;
     size_t       maxFreeSize   = 0;
@@ -778,28 +752,9 @@ void CodeHeapState::aggregate(outputStream* out, CodeHeap* heap, size_t granular
                 break;
               }
               case nMethod_notused:
-                nBlocks_alive++;
-                nBlocks_disconn++;
-                aliveSpace     += hb_bytelen;
-                disconnSpace   += hb_bytelen;
-                break;
-              case nMethod_notentrant:  // equivalent to nMethod_alive
-                nBlocks_alive++;
-                nBlocks_notentr++;
-                aliveSpace     += hb_bytelen;
-                notentrSpace   += hb_bytelen;
-                break;
-              case nMethod_unloaded:
-                nBlocks_unloaded++;
-                unloadedSpace  += hb_bytelen;
-                break;
-              case nMethod_dead:
-                nBlocks_dead++;
-                deadSpace      += hb_bytelen;
-                break;
-              case nMethod_inconstruction:
-                nBlocks_inconstr++;
-                inconstrSpace  += hb_bytelen;
+              case nMethod_notentrant:
+                nBlocks_notentrant++;
+                notentrSpace += hb_bytelen;
                 break;
               default:
                 break;
@@ -955,18 +910,13 @@ void CodeHeapState::aggregate(outputStream* out, CodeHeap* heap, size_t granular
               StatArray[ix_beg].level     = comp_lvl;
               StatArray[ix_beg].compiler  = cType;
               break;
-            case nMethod_inconstruction: // let's count "in construction" nmethods here.
-            case nMethod_alive:
+            case nMethod_notused:
+            case nMethod_notentrant:
               StatArray[ix_beg].tx_count++;
               StatArray[ix_beg].tx_space += (unsigned short)hb_len;
               StatArray[ix_beg].tx_age    = StatArray[ix_beg].tx_age < compile_id ? compile_id : StatArray[ix_beg].tx_age;
               StatArray[ix_beg].level     = comp_lvl;
               StatArray[ix_beg].compiler  = cType;
-              break;
-            case nMethod_dead:
-            case nMethod_unloaded:
-              StatArray[ix_beg].dead_count++;
-              StatArray[ix_beg].dead_space += (unsigned short)hb_len;
               break;
             default:
               // must be a stub, if it's not a dead or alive nMethod
@@ -1012,8 +962,8 @@ void CodeHeapState::aggregate(outputStream* out, CodeHeap* heap, size_t granular
               StatArray[ix_end].level     = comp_lvl;
               StatArray[ix_end].compiler  = cType;
               break;
-            case nMethod_inconstruction: // let's count "in construction" nmethods here.
-            case nMethod_alive:
+            case nMethod_notused:
+            case nMethod_notentrant:
               StatArray[ix_beg].tx_count++;
               StatArray[ix_beg].tx_space += (unsigned short)beg_space;
               StatArray[ix_beg].tx_age    = StatArray[ix_beg].tx_age < compile_id ? compile_id : StatArray[ix_beg].tx_age;
@@ -1026,13 +976,6 @@ void CodeHeapState::aggregate(outputStream* out, CodeHeap* heap, size_t granular
               StatArray[ix_beg].compiler  = cType;
               StatArray[ix_end].level     = comp_lvl;
               StatArray[ix_end].compiler  = cType;
-              break;
-            case nMethod_dead:
-            case nMethod_unloaded:
-              StatArray[ix_beg].dead_count++;
-              StatArray[ix_beg].dead_space += (unsigned short)beg_space;
-              StatArray[ix_end].dead_count++;
-              StatArray[ix_end].dead_space += (unsigned short)end_space;
               break;
             default:
               // must be a stub, if it's not a dead or alive nMethod
@@ -1060,18 +1003,13 @@ void CodeHeapState::aggregate(outputStream* out, CodeHeap* heap, size_t granular
                 StatArray[ix].level     = comp_lvl;
                 StatArray[ix].compiler  = cType;
                 break;
-              case nMethod_inconstruction: // let's count "in construction" nmethods here.
-              case nMethod_alive:
+              case nMethod_notentrant:
+              case nMethod_notused:
                 StatArray[ix].tx_count++;
                 StatArray[ix].tx_space += (unsigned short)(granule_size>>log2_seg_size);
                 StatArray[ix].tx_age    = StatArray[ix].tx_age < compile_id ? compile_id : StatArray[ix].tx_age;
                 StatArray[ix].level     = comp_lvl;
                 StatArray[ix].compiler  = cType;
-                break;
-              case nMethod_dead:
-              case nMethod_unloaded:
-                StatArray[ix].dead_count++;
-                StatArray[ix].dead_space += (unsigned short)(granule_size>>log2_seg_size);
                 break;
               default:
                 // must be a stub, if it's not a dead or alive nMethod
@@ -1094,12 +1032,7 @@ void CodeHeapState::aggregate(outputStream* out, CodeHeap* heap, size_t granular
       ast->print_cr("usedSpace        = " SIZE_FORMAT_W(8) "k, nBlocks_used     = %6d, %10.3f%% of capacity, %10.3f%% of max_capacity", usedSpace/(size_t)K,     nBlocks_used,     (100.0*usedSpace)/size,     (100.0*usedSpace)/res_size);
       ast->print_cr("  Tier1 Space    = " SIZE_FORMAT_W(8) "k, nBlocks_t1       = %6d, %10.3f%% of capacity, %10.3f%% of max_capacity", t1Space/(size_t)K,       nBlocks_t1,       (100.0*t1Space)/size,       (100.0*t1Space)/res_size);
       ast->print_cr("  Tier2 Space    = " SIZE_FORMAT_W(8) "k, nBlocks_t2       = %6d, %10.3f%% of capacity, %10.3f%% of max_capacity", t2Space/(size_t)K,       nBlocks_t2,       (100.0*t2Space)/size,       (100.0*t2Space)/res_size);
-      ast->print_cr("  Alive Space    = " SIZE_FORMAT_W(8) "k, nBlocks_alive    = %6d, %10.3f%% of capacity, %10.3f%% of max_capacity", aliveSpace/(size_t)K,    nBlocks_alive,    (100.0*aliveSpace)/size,    (100.0*aliveSpace)/res_size);
-      ast->print_cr("    disconnected = " SIZE_FORMAT_W(8) "k, nBlocks_disconn  = %6d, %10.3f%% of capacity, %10.3f%% of max_capacity", disconnSpace/(size_t)K,  nBlocks_disconn,  (100.0*disconnSpace)/size,  (100.0*disconnSpace)/res_size);
       ast->print_cr("    not entrant  = " SIZE_FORMAT_W(8) "k, nBlocks_notentr  = %6d, %10.3f%% of capacity, %10.3f%% of max_capacity", notentrSpace/(size_t)K,  nBlocks_notentr,  (100.0*notentrSpace)/size,  (100.0*notentrSpace)/res_size);
-      ast->print_cr("  inconstrSpace  = " SIZE_FORMAT_W(8) "k, nBlocks_inconstr = %6d, %10.3f%% of capacity, %10.3f%% of max_capacity", inconstrSpace/(size_t)K, nBlocks_inconstr, (100.0*inconstrSpace)/size, (100.0*inconstrSpace)/res_size);
-      ast->print_cr("  unloadedSpace  = " SIZE_FORMAT_W(8) "k, nBlocks_unloaded = %6d, %10.3f%% of capacity, %10.3f%% of max_capacity", unloadedSpace/(size_t)K, nBlocks_unloaded, (100.0*unloadedSpace)/size, (100.0*unloadedSpace)/res_size);
-      ast->print_cr("  deadSpace      = " SIZE_FORMAT_W(8) "k, nBlocks_dead     = %6d, %10.3f%% of capacity, %10.3f%% of max_capacity", deadSpace/(size_t)K,     nBlocks_dead,     (100.0*deadSpace)/size,     (100.0*deadSpace)/res_size);
       ast->print_cr("  stubSpace      = " SIZE_FORMAT_W(8) "k, nBlocks_stub     = %6d, %10.3f%% of capacity, %10.3f%% of max_capacity", stubSpace/(size_t)K,     nBlocks_stub,     (100.0*stubSpace)/size,     (100.0*stubSpace)/res_size);
       ast->print_cr("ZombieBlocks     = %8d. These are HeapBlocks which could not be identified as CodeBlobs.", nBlocks_zomb);
       ast->cr();
@@ -1375,9 +1308,12 @@ void CodeHeapState::print_usedSpace(outputStream* out, CodeHeap* heap) {
         }
 
         //---<  print size, name, and signature (for nMethods)  >---
-        // access nmethod and Method fields only if we own the CodeCache_lock.
+        // access nmethod and Method fields only if we own the
+        // Compile_lock (to avoid seeing not_installed nmethods) and
+        // the CodeCache_lock (because otherwise the nmethods may
+        // be concurrently deleted).
         // This fact is implicitly transported via nm != NULL.
-        if (CompiledMethod::nmethod_access_is_safe(nm)) {
+        if (nm != NULL) {
           ResourceMark rm;
           Method* method = nm->method();
           if (nm->is_in_use()) {
@@ -1400,12 +1336,6 @@ void CodeHeapState::print_usedSpace(outputStream* out, CodeHeap* heap) {
           ast->print("%5d", nm->hotness_counter());
           //---<  name and signature  >---
           ast->fill_to(67+6);
-          if (nm->is_not_installed()) {
-            ast->print(" not (yet) installed method ");
-          }
-          if (nm->is_zombie()) {
-            ast->print(" zombie method ");
-          }
           ast->print("%s", blob_name);
         } else {
           //---<  block size in hex  >---
@@ -1798,8 +1728,8 @@ void CodeHeapState::print_count(outputStream* out, CodeHeap* heap) {
   }
 
   {
-    if (nBlocks_alive > 0) {
-      printBox(ast, '-', "not_used/not_entrant/not_installed nMethod count only, 0x1..0xf. '*' indicates >= 16 blocks, ' ' indicates empty", NULL);
+    if (nBlocks_notentrant > 0) {
+      printBox(ast, '-', "not_used/not_entrant nMethod count only, 0x1..0xf. '*' indicates >= 16 blocks, ' ' indicates empty", NULL);
 
       granules_per_line = 128;
       for (unsigned int ix = 0; ix < alloc_granules; ix++) {
@@ -1833,26 +1763,6 @@ void CodeHeapState::print_count(outputStream* out, CodeHeap* heap) {
       ast->print("|");
     } else {
       ast->print("No Stubs and Blobs found in CodeHeap.");
-    }
-    BUFFEREDSTREAM_FLUSH_LOCKED("\n\n\n")
-  }
-
-  {
-    if (nBlocks_dead > 0) {
-      printBox(ast, '-', "Dead nMethod count only, 0x1..0xf. '*' indicates >= 16 blocks, ' ' indicates empty", NULL);
-
-      granules_per_line = 128;
-      for (unsigned int ix = 0; ix < alloc_granules; ix++) {
-        print_line_delim(out, ast, low_bound, ix, granules_per_line);
-        if (segment_granules && StatArray[ix].dead_count > 0) {
-          print_blobType_single(ast, StatArray[ix].type);
-        } else {
-          print_count_single(ast, StatArray[ix].dead_count);
-        }
-      }
-      ast->print("|");
-    } else {
-      ast->print("No dead nMethods found in CodeHeap.");
     }
     BUFFEREDSTREAM_FLUSH_LOCKED("\n\n\n")
   }
@@ -1979,8 +1889,8 @@ void CodeHeapState::print_space(outputStream* out, CodeHeap* heap) {
   }
 
   {
-    if (nBlocks_alive > 0) {
-      printBox(ast, '-', "not_used/not_entrant/not_installed space consumption. ' ' indicates empty, '*' indicates full", NULL);
+    if (nBlocks_notentrant > 0) {
+      printBox(ast, '-', "not_used/not_entrant space consumption. ' ' indicates empty, '*' indicates full", NULL);
 
       granules_per_line = 128;
       for (unsigned int ix = 0; ix < alloc_granules; ix++) {
@@ -2014,22 +1924,6 @@ void CodeHeapState::print_space(outputStream* out, CodeHeap* heap) {
       ast->print("|");
     } else {
       ast->print("No Stubs and Blobs found in CodeHeap.");
-    }
-    BUFFEREDSTREAM_FLUSH_LOCKED("\n\n\n")
-  }
-
-  {
-    if (nBlocks_dead > 0) {
-      printBox(ast, '-', "Dead space consumption. ' ' indicates empty, '*' indicates full", NULL);
-
-      granules_per_line = 128;
-      for (unsigned int ix = 0; ix < alloc_granules; ix++) {
-        print_line_delim(out, ast, low_bound, ix, granules_per_line);
-        print_space_single(ast, StatArray[ix].dead_space);
-      }
-      ast->print("|");
-    } else {
-      ast->print("No dead nMethods found in CodeHeap.");
     }
     BUFFEREDSTREAM_FLUSH_LOCKED("\n\n\n")
   }
@@ -2145,8 +2039,8 @@ void CodeHeapState::print_age(outputStream* out, CodeHeap* heap) {
   }
 
   {
-    if (nBlocks_alive > 0) {
-      printBox(ast, '-', "not_used/not_entrant/not_installed age distribution. '0' indicates youngest 1/256, '8': oldest half, ' ': no age information", NULL);
+    if (nBlocks_notentrant > 0) {
+      printBox(ast, '-', "not_used/not_entrant age distribution. '0' indicates youngest 1/256, '8': oldest half, ' ': no age information", NULL);
 
       granules_per_line = 128;
       for (unsigned int ix = 0; ix < alloc_granules; ix++) {
@@ -2283,7 +2177,7 @@ void CodeHeapState::print_names(outputStream* out, CodeHeap* heap) {
 
         // access nmethod and Method fields only if we own the CodeCache_lock.
         // This fact is implicitly transported via nm != NULL.
-        if (CompiledMethod::nmethod_access_is_safe(nm)) {
+        if (nm != NULL) {
           Method* method = nm->method();
           ResourceMark rm;
           //---<  collect all data to locals as quickly as possible  >---
@@ -2303,9 +2197,6 @@ void CodeHeapState::print_names(outputStream* out, CodeHeap* heap) {
           ast->fill_to(62+6);
           ast->print("%s", blobTypeName[cbType]);
           ast->fill_to(82+6);
-          if (cbType == nMethod_dead) {
-            ast->print("%14s", " zombie method");
-          }
 
           if (get_name) {
             Symbol* methName  = method->name();
@@ -2505,13 +2396,9 @@ CodeHeapState::blobType CodeHeapState::get_cbType(CodeBlob* cb) {
     if (CodeCache_lock->owned_by_self()) {
       nmethod*  nm = cb->as_nmethod_or_null();
       if (nm != NULL) { // no is_readable check required, nm = (nmethod*)cb.
-        if (nm->is_not_installed()) return nMethod_inconstruction;
-        if (nm->is_zombie())        return nMethod_dead;
-        if (nm->is_unloaded())      return nMethod_unloaded;
-        if (nm->is_in_use())        return nMethod_inuse;
-        if (nm->is_alive() && !(nm->is_not_entrant()))   return nMethod_notused;
-        if (nm->is_alive())         return nMethod_alive;
-        return nMethod_dead;
+        if (nm->is_in_use())   return nMethod_inuse;
+        if (nm->is_not_entrant()) return nMethod_notentrant;
+        return nMethod_notused;
       }
     }
   }

@@ -35,6 +35,7 @@
 #include "ci/ciUtilities.inline.hpp"
 #include "classfile/symbolTable.hpp"
 #include "classfile/systemDictionary.hpp"
+#include "classfile/verifier.hpp"
 #include "classfile/vmSymbols.hpp"
 #include "code/codeCache.hpp"
 #include "code/scopeDesc.hpp"
@@ -157,6 +158,7 @@ ciEnv::ciEnv(CompileTask* task)
   _the_min_jint_string = NULL;
 
   _jvmti_redefinition_count = 0;
+  _interfaces_are_sane = Verifier::interfaces_are_sane();
   _jvmti_can_hotswap_or_post_breakpoint = false;
   _jvmti_can_access_local_variables = false;
   _jvmti_can_post_on_exceptions = false;
@@ -213,6 +215,7 @@ ciEnv::ciEnv(Arena* arena) : _ciEnv_arena(mtCompiler) {
   _the_min_jint_string = NULL;
 
   _jvmti_redefinition_count = 0;
+  _interfaces_are_sane = Verifier::interfaces_are_sane();
   _jvmti_can_hotswap_or_post_breakpoint = false;
   _jvmti_can_access_local_variables = false;
   _jvmti_can_post_on_exceptions = false;
@@ -968,6 +971,7 @@ void ciEnv::register_method(ciMethod* target,
                             AbstractCompiler* compiler,
                             bool has_unsafe_access,
                             bool has_wide_vectors,
+                            LazyInvocation* lazy_invocations,
                             RTMState  rtm_state) {
   VM_ENTRY_MARK;
   nmethod* nm = NULL;
@@ -984,6 +988,10 @@ void ciEnv::register_method(ciMethod* target,
     // Change in Jvmti state may invalidate compilation.
     if (!failing() && jvmti_state_changed()) {
       record_failure("Jvmti state change invalidated dependencies");
+    }
+
+    if (!failing() && _interfaces_are_sane != Verifier::interfaces_are_sane()) {
+      record_failure("Loading of interface unfriendly bytecodes invalidated nmethod");
     }
 
     // Change in DTrace flags may invalidate compilation.
@@ -1048,7 +1056,8 @@ void ciEnv::register_method(ciMethod* target,
                                debug_info(), dependencies(), code_buffer,
                                frame_words, oop_map_set,
                                handler_table, inc_table,
-                               compiler, task()->comp_level());
+                               compiler, task()->comp_level(),
+                               lazy_invocations);
 
     // Free codeBlobs
     code_buffer->free_blob();
@@ -1089,7 +1098,7 @@ void ciEnv::register_method(ciMethod* target,
         }
         // Allow the code to be executed
         MutexLocker ml(CompiledMethod_lock, Mutex::_no_safepoint_check_flag);
-        if (nm->make_in_use()) {
+        if (nm->is_in_use()) {
           method->set_code(method, nm);
         }
       } else {
@@ -1101,7 +1110,7 @@ void ciEnv::register_method(ciMethod* target,
                     task()->comp_level(), method_name, entry_bci);
         }
         MutexLocker ml(CompiledMethod_lock, Mutex::_no_safepoint_check_flag);
-        if (nm->make_in_use()) {
+        if (nm->is_in_use()) {
           method->method_holder()->add_osr_nmethod(nm);
         }
       }

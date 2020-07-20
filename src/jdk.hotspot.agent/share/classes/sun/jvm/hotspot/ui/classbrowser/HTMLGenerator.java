@@ -926,7 +926,6 @@ public class HTMLGenerator implements /* imports */ ClassConstants {
          sun.jvm.hotspot.debugger.Address adr = longToAddress(pc);
          if (nmethod != null) {
             if (adr.equals(nmethod.getEntryPoint()))             print("[Entry Point]\n");
-            if (adr.equals(nmethod.getVerifiedEntryPoint()))     print("[Verified Entry Point]\n");
             if (adr.equals(nmethod.exceptionBegin()))            print("[Exception Handler]\n");
             if (adr.equals(nmethod.stubBegin()) &&
                 !nmethod.stubBegin().equals(nmethod.stubEnd()))  print("[Stub Code]\n");

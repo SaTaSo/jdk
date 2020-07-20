@@ -47,10 +47,10 @@
 #include "oops/klassVtable.hpp"
 #include "oops/oop.inline.hpp"
 #include "oops/recordComponent.hpp"
+#include "oops/selectorMap.inline.hpp"
 #include "prims/jvmtiImpl.hpp"
 #include "prims/jvmtiRedefineClasses.hpp"
 #include "prims/jvmtiThreadState.inline.hpp"
-#include "prims/resolvedMethodTable.hpp"
 #include "prims/methodComparator.hpp"
 #include "runtime/atomic.hpp"
 #include "runtime/deoptimization.hpp"
@@ -81,7 +81,6 @@ VM_RedefineClasses::VM_RedefineClasses(jint class_count,
   _class_count = class_count;
   _class_defs = class_defs;
   _class_load_kind = class_load_kind;
-  _any_class_has_resolved_methods = false;
   _res = JVMTI_ERROR_NONE;
   _the_class = NULL;
   _id = next_id();
@@ -229,14 +228,9 @@ void VM_RedefineClasses::doit() {
   // are redefined are marked as old.
   AdjustAndCleanMetadata adjust_and_clean_metadata(thread);
   ClassLoaderDataGraph::classes_do(&adjust_and_clean_metadata);
+  SystemDictionary::adjust_method_table();
 
-  // JSR-292 support
-  if (_any_class_has_resolved_methods) {
-    bool trace_name_printed = false;
-    ResolvedMethodTable::adjust_method_entries(&trace_name_printed);
-  }
-
-  // Increment flag indicating that some invariants are no longer true.
+  // Set flag indicating that some invariants are no longer true.
   // See jvmtiExport.hpp for detailed explanation.
   JvmtiExport::increment_redefinition_count();
 
@@ -3645,14 +3639,8 @@ void VM_RedefineClasses::AdjustAndCleanMetadata::do_klass(Klass* k) {
   bool trace_name_printed = false;
 
   // If the class being redefined is java.lang.Object, we need to fix all
-  // array class vtables also. The _has_redefined_Object flag is global.
-  // Once the java.lang.Object has been redefined (by the current or one
-  // of the previous VM_RedefineClasses operations) we have to always
-  // adjust method entries for array classes.
-  if (k->is_array_klass() && _has_redefined_Object) {
-    k->vtable().adjust_method_entries(&trace_name_printed);
-
-  } else if (k->is_instance_klass()) {
+  // array class vtables also
+  if (k->is_instance_klass()) {
     HandleMark hm(_thread);
     InstanceKlass *ik = InstanceKlass::cast(k);
 
@@ -3668,14 +3656,8 @@ void VM_RedefineClasses::AdjustAndCleanMetadata::do_klass(Klass* k) {
 
     // Adjust all vtables, default methods and itables, to clean out old methods.
     ResourceMark rm(_thread);
-    if (ik->vtable_length() > 0) {
-      ik->vtable().adjust_method_entries(&trace_name_printed);
-      ik->adjust_default_methods(&trace_name_printed);
-    }
 
-    if (ik->itable_length() > 0) {
-      ik->itable().adjust_method_entries(&trace_name_printed);
-    }
+    ik->adjust_default_methods(&trace_name_printed);
 
     // The constant pools in other classes (other_cp) can refer to
     // old methods.  We have to update method information in
@@ -3716,16 +3698,44 @@ void VM_RedefineClasses::AdjustAndCleanMetadata::do_klass(Klass* k) {
   }
 }
 
-void VM_RedefineClasses::update_jmethod_ids(Thread* thread) {
+void VM_RedefineClasses::update_jmethod_ids_and_selectors() {
+  SelectorMap<Method*> method_map = SystemDictionary::method_selector_map();
   for (int j = 0; j < _matching_methods_length; ++j) {
     Method* old_method = _matching_old_methods[j];
+    Method* new_method = _matching_new_methods[j];
     jmethodID jmid = old_method->find_jmethod_id_or_null();
     if (jmid != NULL) {
       // There is a jmethodID, change it to point to the new method
-      methodHandle new_method_h(thread, _matching_new_methods[j]);
-      Method::change_method_associated_with_jmethod_id(jmid, new_method_h());
+      Method::change_method_associated_with_jmethod_id(jmid, old_method, new_method);
       assert(Method::resolve_jmethod_id(jmid) == _matching_new_methods[j],
              "should be replaced");
+    }
+    if (old_method->has_selector()) {
+      method_map.remap(old_method->selector(), new_method);
+      new_method->set_selector(old_method->selector());
+    } else {
+      assert(!new_method->has_selector(), "sanity");
+    }
+    new_method->set_vtable_index(old_method->vtable_index());
+  }
+  // Update deleted jmethodID
+  for (int j = 0; j < _deleted_methods_length; ++j) {
+    Method* old_method = _deleted_methods[j];
+    jmethodID jmid = old_method->find_jmethod_id_or_null();
+    if (jmid != NULL) {
+      // Change the jmethodID to point to NSME.
+      Method::change_method_associated_with_jmethod_id(jmid, old_method, Universe::throw_no_such_method_error());
+    }
+    if (old_method->has_selector()) {
+      method_map.remap(old_method->selector(), Universe::throw_no_such_method_error());
+    }
+  }
+  for (int j = 0; j < _added_methods_length; ++j) {
+    Method* new_method = _added_methods[j];
+    if (new_method->is_final()) {
+      assert(new_method->is_private(), "only private methods can be added");
+      // Give method as-if linked vtable index
+      new_method->set_vtable_index(Method::nonvirtual_vtable_index);
     }
   }
 }
@@ -4160,9 +4170,7 @@ void VM_RedefineClasses::redefine_single_class(jclass the_jclass,
   _new_methods = scratch_class->methods();
   _the_class = the_class;
   compute_added_deleted_matching_methods();
-  update_jmethod_ids(THREAD);
-
-  _any_class_has_resolved_methods = the_class->has_resolved_methods() || _any_class_has_resolved_methods;
+  update_jmethod_ids_and_selectors();
 
   // Attach new constant pool to the original klass. The original
   // klass still refers to the old constant pool (for now).
@@ -4294,16 +4302,8 @@ void VM_RedefineClasses::redefine_single_class(jclass the_jclass,
   the_class->set_inner_classes(scratch_class->inner_classes());
   scratch_class->set_inner_classes(old_inner_classes);
 
-  // Initialize the vtable and interface table after
-  // methods have been rewritten
-  // no exception should happen here since we explicitly
-  // do not check loader constraints.
-  // compare_and_normalize_class_versions has already checked:
-  //  - classloaders unchanged, signatures unchanged
-  //  - all instanceKlasses for redefined classes reused & contents updated
-  the_class->vtable().initialize_vtable(false, THREAD);
-  the_class->itable().initialize_itable(false, THREAD);
-  assert(!HAS_PENDING_EXCEPTION || (THREAD->pending_exception()->is_a(SystemDictionary::ThreadDeath_klass())), "redefine exception");
+  // Redefined methods do not need to change itables or itables, because they only
+  // refer to selectors, not concrete Method*. We leave them unchanged.
 
   // Leave arrays of jmethodIDs and itable index cache unchanged
 
@@ -4423,32 +4423,10 @@ void VM_RedefineClasses::CheckClass::do_klass(Klass* k) {
   // Both array and instance classes have vtables.
   // a vtable should never contain old or obsolete methods
   ResourceMark rm(_thread);
-  if (k->vtable_length() > 0 &&
-      !k->vtable().check_no_old_or_obsolete_entries()) {
-    if (log_is_enabled(Trace, redefine, class, obsolete, metadata)) {
-      log_trace(redefine, class, obsolete, metadata)
-        ("klassVtable::check_no_old_or_obsolete_entries failure -- OLD or OBSOLETE method found -- class: %s",
-         k->signature_name());
-      k->vtable().dump_vtable();
-    }
-    no_old_methods = false;
-  }
 
   if (k->is_instance_klass()) {
     HandleMark hm(_thread);
     InstanceKlass *ik = InstanceKlass::cast(k);
-
-    // an itable should never contain old or obsolete methods
-    if (ik->itable_length() > 0 &&
-        !ik->itable().check_no_old_or_obsolete_entries()) {
-      if (log_is_enabled(Trace, redefine, class, obsolete, metadata)) {
-        log_trace(redefine, class, obsolete, metadata)
-          ("klassItable::check_no_old_or_obsolete_entries failure -- OLD or OBSOLETE method found -- class: %s",
-           ik->signature_name());
-        ik->itable().dump_itable();
-      }
-      no_old_methods = false;
-    }
 
     // the constant pool cache should never contain non-deleted old or obsolete methods
     if (ik->constants() != NULL &&

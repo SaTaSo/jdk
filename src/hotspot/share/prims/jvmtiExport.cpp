@@ -1080,7 +1080,7 @@ class JvmtiCompiledMethodLoadEventMark : public JvmtiMethodEventMark {
   jvmtiAddrLocationMap *_map;
   const void *_compile_info;
  public:
-  JvmtiCompiledMethodLoadEventMark(JavaThread *thread, nmethod *nm, void* compile_info_ptr = NULL)
+  JvmtiCompiledMethodLoadEventMark(JavaThread *thread, nmethod* nm, void* compile_info_ptr = NULL)
           : JvmtiMethodEventMark(thread,methodHandle(thread, nm->method())) {
     _code_data = nm->insts_begin();
     _code_size = nm->insts_size();

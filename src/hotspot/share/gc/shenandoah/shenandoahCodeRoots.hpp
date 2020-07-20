@@ -89,7 +89,6 @@ public:
   static void initialize();
   static void register_nmethod(nmethod* nm);
   static void unregister_nmethod(nmethod* nm);
-  static void flush_nmethod(nmethod* nm);
 
   static ShenandoahNMethodTable* table() {
     return _nmethod_table;

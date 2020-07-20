@@ -380,9 +380,6 @@ public:
   static OptoRegPair   return_value(uint ideal_reg, bool is_outgoing);
   static OptoRegPair c_return_value(uint ideal_reg, bool is_outgoing);
   RegMask                     _return_value_mask;
-  // Inline Cache Register
-  static OptoReg::Name  inline_cache_reg();
-  static int            inline_cache_reg_encode();
 
   // Register for DIVI projection of divmodI
   static RegMask divI_proj_mask();
@@ -399,6 +396,7 @@ public:
   static bool use_asm_for_ldiv_by_con( jlong divisor );
 
   static const RegMask method_handle_invoke_SP_save_mask();
+  static const RegMask invoke_receiver_klass_mask();
 
   // Java-Interpreter calling convention
   // (what you use when calling between compiled-Java and Interpreted-Java
@@ -406,9 +404,6 @@ public:
   // Number of callee-save + always-save registers
   // Ignores frame pointer and "special" registers
   static int  number_of_saved_registers();
-
-  // The Method-klass-holder may be passed in the inline_cache_reg
-  // and then expanded into the inline_cache_reg and a method_oop register
 
   static OptoReg::Name  interpreter_method_oop_reg();
   static int            interpreter_method_oop_reg_encode();

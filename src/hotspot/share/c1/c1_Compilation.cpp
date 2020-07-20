@@ -421,7 +421,8 @@ void Compilation::install_code(int frame_size) {
     implicit_exception_table(),
     compiler(),
     has_unsafe_access(),
-    SharedRuntime::is_wide_vector(max_vector_size())
+    SharedRuntime::is_wide_vector(max_vector_size()),
+    _lazy_invocations
   );
 }
 
@@ -538,6 +539,12 @@ void Compilation::generate_exception_handler_table() {
   }
 }
 
+LazyInvocation* Compilation::create_lazy_invocation(LazyInvocation::CallKind call_kind) {
+  LazyInvocation* lazy_invocation = new LazyInvocation(call_kind, _lazy_invocations);
+  _lazy_invocations = lazy_invocation;
+  return lazy_invocation;
+}
+
 Compilation::Compilation(AbstractCompiler* compiler, ciEnv* env, ciMethod* method,
                          int osr_bci, BufferBlob* buffer_blob, bool install_code, DirectiveSet* directive)
 : _next_id(0)
@@ -565,6 +572,7 @@ Compilation::Compilation(AbstractCompiler* compiler, ciEnv* env, ciMethod* metho
 , _code(buffer_blob)
 , _has_access_indexed(false)
 , _interpreter_frame_size(0)
+, _lazy_invocations(NULL)
 , _current_instruction(NULL)
 #ifndef PRODUCT
 , _last_instruction_printed(NULL)

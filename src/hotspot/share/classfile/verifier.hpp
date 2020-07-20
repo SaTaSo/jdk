@@ -33,8 +33,13 @@
 #include "utilities/growableArray.hpp"
 #include "utilities/resourceHash.hpp"
 
+class SerializeClosure;
+
 // The verifier class
 class Verifier : AllStatic {
+  friend class DeoptimizeInvokeinterfaceVMOperation;
+  static bool _interfaces_are_sane;
+
  public:
   enum {
     STACKMAP_ATTRIBUTE_MAJOR_VERSION    = 50,
@@ -42,6 +47,18 @@ class Verifier : AllStatic {
     NO_RELAX_ACCESS_CTRL_CHECK_VERSION  = 52,
     DYNAMICCONSTANT_MAJOR_VERSION       = 55
   };
+
+  static void serialize(SerializeClosure* f);
+
+  // Have we been able to verify all interface dataflow in bytecodes is sane?
+  // It is possible to spin up bytecodes that fundamentally break the type safety
+  // of the JVM, and the JVMS caters for that being fully valid. Javac has never
+  // generated such bytecodes, and you will get exceptions thrown when executing
+  // such code. But you are allowed to do it. We assume programs do not do this
+  // and deoptimize the world when the verifier catches the first batch of bad
+  // bytecodes, to reinstate a RECV is-a REFC check for invokeinterface.
+  static bool interfaces_are_sane() { return _interfaces_are_sane; }
+  static void set_interfaces_are_insane();
 
   // Verify the bytecodes for a class.
   static bool verify(InstanceKlass* klass, bool should_verify_class, TRAPS);

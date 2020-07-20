@@ -997,9 +997,6 @@ void ADLParser::frame_parse(void) {
       if (strcmp(token,"interpreter_frame_pointer")==0) {
         interpreter_frame_pointer_parse(frame, false);
       }
-      if (strcmp(token,"inline_cache_reg")==0) {
-        inline_cache_parse(frame, false);
-      }
       if (strcmp(token,"compiler_method_oop_reg")==0) {
         parse_err(WARN, "Using obsolete Token, compiler_method_oop_reg");
         skipws();
@@ -1141,11 +1138,6 @@ void ADLParser::frame_pointer_parse(FrameForm *frame, bool native) {
 //------------------------------interpreter_frame_pointer_parse----------------------------
 void ADLParser::interpreter_frame_pointer_parse(FrameForm *frame, bool native) {
   frame->_interpreter_frame_pointer_reg = parse_one_arg("interpreter frame pointer entry");
-}
-
-//------------------------------inline_cache_parse-----------------------------
-void ADLParser::inline_cache_parse(FrameForm *frame, bool native) {
-  frame->_inline_cache_reg = parse_one_arg("inline cache reg entry");
 }
 
 //------------------------------interpreter_method_oop_parse------------------

@@ -75,6 +75,11 @@ class CompileTask : public CHeapObj<mtCompiler> {
 
  private:
   static CompileTask* _task_free_list;
+#ifdef ASSERT
+  static int          _num_allocated_tasks;
+#endif
+
+  nmethod*     _code;
   Monitor*     _lock;
   uint         _compile_id;
   Method*      _method;
@@ -90,7 +95,6 @@ class CompileTask : public CHeapObj<mtCompiler> {
 #endif
   int          _comp_level;
   int          _num_inlined_bytecodes;
-  nmethodLocker* _code_handle;  // holder of eventual result
   CompileTask* _next, *_prev;
   bool         _is_free;
   // Fields used for logging why the compilation was initiated:
@@ -157,10 +161,8 @@ class CompileTask : public CHeapObj<mtCompiler> {
   }
 #endif
 
-  nmethodLocker* code_handle() const             { return _code_handle; }
-  void         set_code_handle(nmethodLocker* l) { _code_handle = l; }
-  nmethod*     code() const;                     // _code_handle->code()
-  void         set_code(nmethod* nm);            // _code_handle->set_code(nm)
+  nmethod*     code() const;
+  void         set_code(nmethod* nm);
 
   Monitor*     lock() const                      { return _lock; }
 

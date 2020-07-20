@@ -38,7 +38,7 @@ RecordComponent* RecordComponent::allocate(ClassLoaderData* loader_data,
                                            u2 generic_signature_index,
                                            AnnotationArray* annotations,
                                            AnnotationArray* type_annotations, TRAPS) {
-  return new (loader_data, size(), MetaspaceObj::RecordComponentType, THREAD)
+  return new (loader_data, size(), 0, MetaspaceObj::RecordComponentType, THREAD)
          RecordComponent(name_index, descriptor_index, attributes_count,
                          generic_signature_index, annotations, type_annotations);
 }

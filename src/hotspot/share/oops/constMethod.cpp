@@ -42,7 +42,7 @@ ConstMethod* ConstMethod::allocate(ClassLoaderData* loader_data,
                                    MethodType method_type,
                                    TRAPS) {
   int size = ConstMethod::size(byte_code_size, sizes);
-  return new (loader_data, size, MetaspaceObj::ConstMethodType, THREAD) ConstMethod(
+  return new (loader_data, size, 0, MetaspaceObj::ConstMethodType, THREAD) ConstMethod(
       byte_code_size, sizes, method_type, size);
 }
 

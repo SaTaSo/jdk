@@ -101,6 +101,9 @@ public:
 
   static bool is_mapped() { return FileMapInfo::dynamic_info() != NULL; }
   static bool validate(FileMapInfo* dynamic_info);
+
+
+  static void serialize_method_selector_table(SerializeClosure* soc);
 };
 #endif // INCLUDE_CDS
 #endif // SHARE_VM_MEMORY_DYNAMICARCHIVE_HPP

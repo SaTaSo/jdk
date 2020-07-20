@@ -31,7 +31,7 @@ class nmethod;
 
 class ZBarrierSetNMethod : public BarrierSetNMethod {
 protected:
-  virtual bool nmethod_entry_barrier(nmethod* nm);
+  virtual void nmethod_entry_barrier(nmethod* nm);
 
 public:
   virtual ByteSize thread_disarmed_offset() const;

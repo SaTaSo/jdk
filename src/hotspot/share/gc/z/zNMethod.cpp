@@ -24,7 +24,7 @@
 #include "precompiled.hpp"
 #include "code/relocInfo.hpp"
 #include "code/nmethod.hpp"
-#include "code/icBuffer.hpp"
+#include "code/lazyInvocation.hpp"
 #include "gc/shared/barrierSet.hpp"
 #include "gc/shared/barrierSetNMethod.hpp"
 #include "gc/z/zGlobals.hpp"
@@ -180,9 +180,7 @@ void ZNMethod::unregister_nmethod(nmethod* nm) {
   log_unregister(nm);
 
   ZNMethodTable::unregister_nmethod(nm);
-}
 
-void ZNMethod::flush_nmethod(nmethod* nm) {
   // Destroy GC data
   delete gc_data(nm);
 }
@@ -237,6 +235,11 @@ void ZNMethod::nmethod_oops_do(nmethod* nm, OopClosure* cl) {
     }
   }
 
+  // Lazy invocations
+  for (LazyInvocation* lazy = nm->lazy_invocations(); lazy != NULL; lazy = lazy->next()) {
+    lazy->oops_do(cl);
+  }
+
   // Process non-immediate oops
   if (oops->has_non_immediates()) {
     nm->fix_oop_relocations();
@@ -271,82 +274,40 @@ void ZNMethod::oops_do(OopClosure* cl) {
 
 class ZNMethodUnlinkClosure : public NMethodClosure {
 private:
-  bool          _unloading_occurred;
-  volatile bool _failed;
-
-  void set_failed() {
-    Atomic::store(&_failed, true);
-  }
-
-  void unlink(nmethod* nm) {
-    // Unlinking of the dependencies must happen before the
-    // handshake separating unlink and purge.
-    nm->flush_dependencies(false /* delete_immediately */);
-
-    // unlink_from_method will take the CompiledMethod_lock.
-    // In this case we don't strictly need it when unlinking nmethods from
-    // the Method, because it is only concurrently unlinked by
-    // the entry barrier, which acquires the per nmethod lock.
-    nm->unlink_from_method();
-
-    if (nm->is_osr_method()) {
-      // Invalidate the osr nmethod before the handshake. The nmethod
-      // will be made unloaded after the handshake. Then invalidate_osr_method()
-      // will be called again, which will be a no-op.
-      nm->invalidate_osr_method();
-    }
-  }
+  bool _unloading_occurred;
 
 public:
   ZNMethodUnlinkClosure(bool unloading_occurred) :
-      _unloading_occurred(unloading_occurred),
-      _failed(false) {}
+      _unloading_occurred(unloading_occurred) { }
 
   virtual void do_nmethod(nmethod* nm) {
-    if (failed()) {
-      return;
-    }
-
-    if (!nm->is_alive()) {
-      return;
-    }
-
     if (nm->is_unloading()) {
-      ZLocker<ZReentrantLock> locker(ZNMethod::lock_for_nmethod(nm));
-      unlink(nm);
+      nm->make_not_entrant();
+      nm->flush_dependencies();
       return;
     }
 
     ZLocker<ZReentrantLock> locker(ZNMethod::lock_for_nmethod(nm));
 
-    if (ZNMethod::is_armed(nm)) {
-      // Heal oops and disarm
-      ZNMethodOopClosure cl;
-      ZNMethod::nmethod_oops_do(nm, &cl);
-      ZNMethod::disarm(nm);
-    }
+    // Heal oops and disarm
+    ZNMethodOopClosure cl;
+    ZNMethod::nmethod_oops_do(nm, &cl);
 
-    // Clear compiled ICs and exception caches
-    if (!nm->unload_nmethod_caches(_unloading_occurred)) {
-      set_failed();
-    }
-  }
+    // Clean exception caches
+    nm->unload_nmethod_caches(_unloading_occurred);
 
-  bool failed() const {
-    return Atomic::load(&_failed);
+    ZNMethod::disarm(nm);
   }
 };
 
 class ZNMethodUnlinkTask : public ZTask {
 private:
   ZNMethodUnlinkClosure _cl;
-  ICRefillVerifier*     _verifier;
 
 public:
-  ZNMethodUnlinkTask(bool unloading_occurred, ICRefillVerifier* verifier) :
+  ZNMethodUnlinkTask(bool unloading_occurred) :
       ZTask("ZNMethodUnlinkTask"),
-      _cl(unloading_occurred),
-      _verifier(verifier) {
+      _cl(unloading_occurred) {
     ZNMethodTable::nmethods_do_begin();
   }
 
@@ -355,40 +316,20 @@ public:
   }
 
   virtual void work() {
-    ICRefillVerifierMark mark(_verifier);
     ZNMethodTable::nmethods_do(&_cl);
-  }
-
-  bool success() const {
-    return !_cl.failed();
   }
 };
 
 void ZNMethod::unlink(ZWorkers* workers, bool unloading_occurred) {
-  for (;;) {
-    ICRefillVerifier verifier;
-
-    {
-      ZNMethodUnlinkTask task(unloading_occurred, &verifier);
-      workers->run_concurrent(&task);
-      if (task.success()) {
-        return;
-      }
-    }
-
-    // Cleaning failed because we ran out of transitional IC stubs,
-    // so we have to refill and try again. Refilling requires taking
-    // a safepoint, so we temporarily leave the suspendible thread set.
-    SuspendibleThreadSetLeaver sts;
-    InlineCacheBuffer::refill_ic_stubs();
-  }
+  ZNMethodUnlinkTask task(unloading_occurred);
+  workers->run_concurrent(&task);
 }
 
 class ZNMethodPurgeClosure : public NMethodClosure {
 public:
   virtual void do_nmethod(nmethod* nm) {
-    if (nm->is_alive() && nm->is_unloading()) {
-      nm->make_unloaded();
+    if (nm->is_unloading()) {
+      nm->flush();
     }
   }
 };
@@ -415,5 +356,5 @@ public:
 
 void ZNMethod::purge(ZWorkers* workers) {
   ZNMethodPurgeTask task;
-  workers->run_concurrent(&task);
+ workers->run_concurrent(&task);
 }

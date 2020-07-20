@@ -802,7 +802,7 @@ void TemplateInterpreterGenerator::generate_counter_overflow(Label& continue_ent
   __ li(R4_ARG2, 0);
   __ call_VM(noreg, CAST_FROM_FN_PTR(address, InterpreterRuntime::frequency_counter_overflow), R4_ARG2, true);
 
-  // Returns verified_entry_point or NULL.
+  // Returns entry_point or NULL.
   // We ignore it in any case.
   __ b(continue_entry);
 }

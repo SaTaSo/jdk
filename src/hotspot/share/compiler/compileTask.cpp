@@ -61,7 +61,6 @@ CompileTask* CompileTask::allocate() {
 void CompileTask::free(CompileTask* task) {
   MutexLocker locker(CompileTaskAlloc_lock);
   if (!task->is_free()) {
-    task->set_code(NULL);
     assert(!task->lock()->is_locked(), "Should not be locked when freed");
     if ((task->_method_holder != NULL && JNIHandles::is_weak_global_handle(task->_method_holder)) ||
         (task->_hot_method_holder != NULL && JNIHandles::is_weak_global_handle(task->_hot_method_holder))) {
@@ -106,7 +105,7 @@ void CompileTask::initialize(int compile_id,
 
   _is_complete = false;
   _is_success = false;
-  _code_handle = NULL;
+  _code = NULL;
 
   _hot_method = NULL;
   _hot_method_holder = NULL;
@@ -161,8 +160,11 @@ CompileTask* CompileTask::select_for_compilation() {
 // CompileTask::code/set_code
 //
 nmethod* CompileTask::code() const {
-  if (_code_handle == NULL)  return NULL;
-  CodeBlob *blob = _code_handle->code();
+  assert(_code == NULL ||
+         (Thread::current()->is_Compiler_thread() &&
+          ((CompilerThread*)Thread::current())->compiled_method() == _code),
+         "code not protected from dying");
+  CodeBlob *blob = _code;
   if (blob != NULL) {
     return blob->as_nmethod();
   }
@@ -170,10 +172,9 @@ nmethod* CompileTask::code() const {
 }
 
 void CompileTask::set_code(nmethod* nm) {
-  if (_code_handle == NULL && nm == NULL)  return;
-  guarantee(_code_handle != NULL, "");
-  _code_handle->set_code(nm);
-  if (nm == NULL)  _code_handle = NULL;  // drop the handle also
+  assert(Thread::current()->is_Compiler_thread(), "only used by compiler threads");
+  ((CompilerThread*)Thread::current())->set_compiled_method(nm);
+  _code = nm;
 }
 
 void CompileTask::mark_on_stack() {

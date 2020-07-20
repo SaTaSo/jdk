@@ -466,14 +466,8 @@ void AOTCodeHeap::link_graal_runtime_symbols()  {
 }
 
 void AOTCodeHeap::link_shared_runtime_symbols() {
-    SET_AOT_GLOBAL_SYMBOL_VALUE("_resolve_static_entry", address, SharedRuntime::get_resolve_static_call_stub());
-    SET_AOT_GLOBAL_SYMBOL_VALUE("_resolve_virtual_entry", address, SharedRuntime::get_resolve_virtual_call_stub());
-    SET_AOT_GLOBAL_SYMBOL_VALUE("_resolve_opt_virtual_entry", address, SharedRuntime::get_resolve_opt_virtual_call_stub());
-    SET_AOT_GLOBAL_SYMBOL_VALUE("_aot_deopt_blob_unpack", address, SharedRuntime::deopt_blob()->unpack());
     SET_AOT_GLOBAL_SYMBOL_VALUE("_aot_deopt_blob_unpack_with_exception_in_tls", address, SharedRuntime::deopt_blob()->unpack_with_exception_in_tls());
     SET_AOT_GLOBAL_SYMBOL_VALUE("_aot_deopt_blob_uncommon_trap", address, SharedRuntime::deopt_blob()->uncommon_trap());
-    SET_AOT_GLOBAL_SYMBOL_VALUE("_aot_ic_miss_stub", address, SharedRuntime::get_ic_miss_stub());
-    SET_AOT_GLOBAL_SYMBOL_VALUE("_aot_handle_wrong_method_stub", address, SharedRuntime::get_handle_wrong_method_stub());
     SET_AOT_GLOBAL_SYMBOL_VALUE("_aot_exception_handler_for_return_address", address, SharedRuntime::exception_handler_for_return_address);
     SET_AOT_GLOBAL_SYMBOL_VALUE("_aot_register_finalizer", address, SharedRuntime::register_finalizer);
     SET_AOT_GLOBAL_SYMBOL_VALUE("_aot_object_notify", address, JVMCIRuntime::object_notify);
@@ -951,39 +945,13 @@ void AOTCodeHeap::got_metadata_do(MetadataClosure* f) {
   }
 }
 
-void AOTCodeHeap::cleanup_inline_caches() {
-  for (int index = 0; index < _method_count; index++) {
-    if (_code_to_aot[index]._state != in_use) {
-      continue; // Skip uninitialized entries.
-    }
-    AOTCompiledMethod* aot = _code_to_aot[index]._aot;
-    aot->cleanup_inline_caches(false);
-  }
-}
-
-#ifdef ASSERT
-int AOTCodeHeap::verify_icholder_relocations() {
-  int count = 0;
-  for (int index = 0; index < _method_count; index++) {
-    if (_code_to_aot[index]._state != in_use) {
-      continue; // Skip uninitialized entries.
-    }
-    AOTCompiledMethod* aot = _code_to_aot[index]._aot;
-    count += aot->verify_icholder_relocations();
-  }
-  return count;
-}
-#endif
-
 void AOTCodeHeap::metadata_do(MetadataClosure* f) {
   for (int index = 0; index < _method_count; index++) {
     if (_code_to_aot[index]._state != in_use) {
       continue; // Skip uninitialized entries.
     }
     AOTCompiledMethod* aot = _code_to_aot[index]._aot;
-    if (aot->_is_alive()) {
-      aot->metadata_do(f);
-    }
+    aot->metadata_do(f);
   }
   // Scan klasses_got cells.
   got_metadata_do(f);

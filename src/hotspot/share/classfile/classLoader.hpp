@@ -367,8 +367,6 @@ class ClassLoader: AllStatic {
   CDS_ONLY(static void initialize_shared_path();)
   CDS_ONLY(static void initialize_module_path(TRAPS);)
 
-  static int compute_Object_vtable();
-
   static ClassPathEntry* classpath_entry(int n);
 
   static bool is_in_patch_mod_entries(Symbol* module_name);

@@ -149,7 +149,7 @@ inline NativePltCall* nativePltCall_before(address addr) {
 class NativeCall;
 inline NativeCall* nativeCall_at(address address);
 // The NativeCall is an abstraction for accessing/manipulating native call imm32/rel32off
-// instructions (used to manipulate inline caches, primitive & dll calls, etc.).
+// instructions (used to manipulate primitive & dll calls, etc.).
 
 class NativeCall: public NativeInstruction {
  public:
@@ -183,9 +183,6 @@ class NativeCall: public NativeInstruction {
   void  print();
 
   // Creation
-  inline friend NativeCall* nativeCall_at(address address);
-  inline friend NativeCall* nativeCall_before(address return_address);
-
   static bool is_call_at(address instr) {
     return ((*instr) & 0xFF) == NativeCall::instruction_code;
   }
@@ -500,8 +497,6 @@ class NativeJump: public NativeInstruction {
      address dest = (int_at(data_offset)+next_instruction_address());
      // 32bit used to encode unresolved jmp as jmp -1
      // 64bit can't produce this so it used jump to self.
-     // Now 32bit and 64bit use jump to self as the unresolved address
-     // which the inline cache code (and relocs) know about
 
      // return -1 if jump to self
     dest = (dest == (address) this) ? (address) -1 : dest;
@@ -526,9 +521,6 @@ class NativeJump: public NativeInstruction {
 
   // Insertion of native jump instruction
   static void insert(address code_pos, address entry);
-  // MT-safe insertion of native jump at verified method entry
-  static void check_verified_entry_alignment(address entry, address verified_entry);
-  static void patch_verified_entry(address entry, address verified_entry, address dest);
 };
 
 inline NativeJump* nativeJump_at(address address) {

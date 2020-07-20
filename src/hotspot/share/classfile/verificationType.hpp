@@ -334,6 +334,16 @@ class VerificationType {
     const VerificationType&, ClassVerifier*, bool from_field_is_protected,
     TRAPS) const;
 
+  static bool resolve_and_check_assignability_sane(Klass* this_class, InstanceKlass* klass,
+                                                   Symbol* name, Symbol* from_name,
+                                                   bool from_field_is_protected, bool from_is_array,
+                                                   bool from_is_object, TRAPS);
+
+  static bool resolve_and_check_assignability_insane(Klass* this_class, InstanceKlass* klass,
+                                                     Symbol* name, Symbol* from_name,
+                                                     bool from_field_is_protected, bool from_is_array,
+                                                     bool from_is_object, TRAPS);
+
  public:
   static bool resolve_and_check_assignability(InstanceKlass* klass, Symbol* name,
                                               Symbol* from_name, bool from_field_is_protected,

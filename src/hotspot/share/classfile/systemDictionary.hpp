@@ -128,11 +128,13 @@ class PlaceholderTable;
 class LoaderConstraintTable;
 template <MEMFLAGS F> class HashtableBucket;
 class ResolutionErrorTable;
+class SerializeClosure;
 class SymbolPropertyTable;
 class ProtectionDomainCacheTable;
 class ProtectionDomainCacheEntry;
 class GCTimer;
 class EventClassLoad;
+template <typename V> class SelectorMap;
 
 #define WK_KLASS_ENUM_NAME(kname)    kname##_knum
 
@@ -212,7 +214,6 @@ class EventClassLoad;
   do_klass(MethodHandle_klass,                          java_lang_invoke_MethodHandle                         ) \
   do_klass(VarHandle_klass,                             java_lang_invoke_VarHandle                            ) \
   do_klass(MemberName_klass,                            java_lang_invoke_MemberName                           ) \
-  do_klass(ResolvedMethodName_klass,                    java_lang_invoke_ResolvedMethodName                   ) \
   do_klass(MethodHandleNatives_klass,                   java_lang_invoke_MethodHandleNatives                  ) \
   do_klass(LambdaForm_klass,                            java_lang_invoke_LambdaForm                           ) \
   do_klass(MethodType_klass,                            java_lang_invoke_MethodType                           ) \
@@ -713,10 +714,29 @@ private:
   static OopHandle  _java_system_loader;
   static OopHandle  _java_platform_loader;
 
+  static uint8_t* _method_selector_purge_list;
+  static uint8_t* volatile _method_selector_freelist;
+  static uint8_t* volatile _method_selector_map_blob;
+
 public:
   static TableStatistics placeholders_statistics();
   static TableStatistics loader_constraints_statistics();
   static TableStatistics protection_domain_cache_statistics();
+
+  static SelectorMap<Method*> method_selector_map();
+
+  static address method_selector_map_blob() {
+    return (address)&_method_selector_map_blob;
+  }
+
+  static void purge_method_selector_map();
+  static void unlink_method_selector_map();
+  static void adjust_method_table();
+
+  // CDS support
+  static void metaspace_pointers_do(MetaspaceClosure* it);
+  static void serialize(SerializeClosure* soc);
+  static void clean_method_selector_map();
 };
 
 #endif // SHARE_CLASSFILE_SYSTEMDICTIONARY_HPP

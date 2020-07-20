@@ -1524,6 +1524,11 @@ void ClassLoaderMetaspace::deallocate(MetaWord* ptr, size_t word_size, bool is_c
 
   DEBUG_ONLY(Atomic::inc(&g_internal_statistics.num_external_deallocs));
 
+  if (is_class) {
+    // Adjust the biased pointer of the vtable to delete the right chunk of memory
+    ptr -= ((Klass*)ptr)->vtable_length();
+  }
+
   MutexLocker ml(vsm()->lock(), Mutex::_no_safepoint_check_flag);
 
   if (is_class && Metaspace::using_class_space()) {

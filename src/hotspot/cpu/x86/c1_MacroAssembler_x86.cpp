@@ -290,31 +290,6 @@ void C1_MacroAssembler::allocate_array(Register obj, Register len, Register t1, 
   verify_oop(obj);
 }
 
-
-
-void C1_MacroAssembler::inline_cache_check(Register receiver, Register iCache) {
-  verify_oop(receiver);
-  // explicit NULL check not needed since load from [klass_offset] causes a trap
-  // check against inline cache
-  assert(!MacroAssembler::needs_explicit_null_check(oopDesc::klass_offset_in_bytes()), "must add explicit null check");
-  int start_offset = offset();
-  Register tmp_load_klass = LP64_ONLY(rscratch2) NOT_LP64(noreg);
-
-  if (UseCompressedClassPointers) {
-    load_klass(rscratch1, receiver, tmp_load_klass);
-    cmpptr(rscratch1, iCache);
-  } else {
-    cmpptr(iCache, Address(receiver, oopDesc::klass_offset_in_bytes()));
-  }
-  // if icache check fails, then jump to runtime routine
-  // Note: RECEIVER must still contain the receiver!
-  jump_cc(Assembler::notEqual,
-          RuntimeAddress(SharedRuntime::get_ic_miss_stub()));
-  const int ic_cmp_size = LP64_ONLY(10) NOT_LP64(9);
-  assert(UseCompressedClassPointers || offset() - start_offset == ic_cmp_size, "check alignment in emit_method_entry");
-}
-
-
 void C1_MacroAssembler::build_frame(int frame_size_in_bytes, int bang_size_in_bytes) {
   assert(bang_size_in_bytes >= frame_size_in_bytes, "stack bang size incorrect");
   // Make sure there is enough stack space for this method's activation.
@@ -348,16 +323,6 @@ void C1_MacroAssembler::remove_frame(int frame_size_in_bytes) {
 
 
 void C1_MacroAssembler::verified_entry() {
-  if (C1Breakpoint || VerifyFPU || !UseStackBanging) {
-    // Verified Entry first instruction should be 5 bytes long for correct
-    // patching by patch_verified_entry().
-    //
-    // C1Breakpoint and VerifyFPU have one byte first instruction.
-    // Also first instruction will be one byte "push(rbp)" if stack banging
-    // code is not generated (see build_frame() above).
-    // For all these cases generate long instruction first.
-    fat_nop();
-  }
   if (C1Breakpoint)int3();
   // build frame
   IA32_ONLY( verify_FPU(0, "method_entry"); )

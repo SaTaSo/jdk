@@ -870,15 +870,8 @@ const size_t minimumSymbolTableSize = 1024;
   develop(bool, TraceOopMapRewrites, false,                                 \
           "Trace rewriting of method oops during oop map generation")       \
                                                                             \
-  develop(bool, TraceICBuffer, false,                                       \
-          "Trace usage of IC buffer")                                       \
-                                                                            \
-  develop(bool, TraceCompiledIC, false,                                     \
-          "Trace changes of compiled IC")                                   \
-                                                                            \
   develop(bool, FLSVerifyDictionary, false,                                 \
           "Do lots of (expensive) FLS dictionary verification")             \
-                                                                            \
                                                                             \
   notproduct(bool, CheckMemoryInitialization, false,                        \
           "Check memory initialization")                                    \
@@ -1157,9 +1150,6 @@ const size_t minimumSymbolTableSize = 1024;
                                                                             \
   notproduct(bool, PrintVtableStats, false,                                 \
           "print vtables stats at end of run")                              \
-                                                                            \
-  develop(bool, TraceCreateZombies, false,                                  \
-          "trace creation of zombie nmethods")                              \
                                                                             \
   product(bool, RangeCheckElimination, true,                                \
           "Eliminate range checks")                                         \

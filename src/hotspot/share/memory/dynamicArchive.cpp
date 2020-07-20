@@ -38,6 +38,7 @@
 #include "memory/resourceArea.hpp"
 #include "oops/compressedOops.hpp"
 #include "oops/objArrayKlass.hpp"
+#include "oops/selectorMap.hpp"
 #include "prims/jvmtiRedefineClasses.hpp"
 #include "runtime/handles.inline.hpp"
 #include "runtime/os.inline.hpp"
@@ -452,6 +453,7 @@ private:
   }
 
   address copy_impl(MetaspaceClosure::Ref* ref, bool read_only, int bytes) {
+    int prefix_size = 0; // Klass has vtable at negative prefix
     if (ref->msotype() == MetaspaceObj::ClassType) {
       // Save a pointer immediate in front of an InstanceKlass, so
       // we can do a quick lookup from InstanceKlass* -> RunTimeSharedClassInfo*
@@ -459,6 +461,7 @@ private:
       // in systemDictionaryShared.cpp.
       address obj = ref->obj();
       Klass* klass = (Klass*)obj;
+      prefix_size = klass->vtable_length() * BytesPerWord;
       if (klass->is_instance_klass()) {
         SystemDictionaryShared::validate_before_archiving(InstanceKlass::cast(klass));
         current_dump_space()->allocate(sizeof(address), BytesPerWord);
@@ -469,7 +472,8 @@ private:
     log_debug(cds, dynamic)("COPY: " PTR_FORMAT " ==> " PTR_FORMAT " %5d %s",
                             p2i(obj), p2i(p), bytes,
                             MetaspaceObj::type_name(ref->msotype()));
-    memcpy(p, obj, bytes);
+    memcpy(p, obj - prefix_size, bytes);
+    p += prefix_size;
     intptr_t* archived_vtable = MetaspaceShared::get_archived_cpp_vtable(ref->msotype(), p);
     if (archived_vtable != NULL) {
       update_pointer((address*)p, (address)archived_vtable, "vtb", 0, /*is_mso_pointer*/false);
@@ -486,7 +490,7 @@ private:
 
   // Conservative estimate for number of bytes needed for:
   size_t _estimated_metsapceobj_bytes;   // all archived MetsapceObj's.
-  size_t _estimated_hashtable_bytes;     // symbol table and dictionaries
+  size_t _estimated_hashtable_bytes;     // symbol table, dictionaries, and method map
   size_t _estimated_trampoline_bytes;    // method entry trampolines
 
   size_t estimate_archive_size();
@@ -501,6 +505,11 @@ private:
   void set_symbols_permanent();
   void relocate_buffer_to_target();
   void write_archive(char* serialized_data);
+
+  // MethodSelectorMap support
+  void gather_method_selectors();
+  size_t estimate_method_size_for_archive();
+  void dynamic_selectors_pointers_do(MetaspaceClosure* it);
 
   void init_first_dump_space(address reserved_bottom) {
     DumpRegion* mc_space = MetaspaceShared::misc_code_dump_space();
@@ -573,10 +582,14 @@ public:
     DEBUG_ONLY(SystemDictionaryShared::NoClassLoadingMark nclm);
     SystemDictionaryShared::check_excluded_classes();
 
+    // Get new method selectors for the dynamic archive.
+    gather_method_selectors();
+
     {
       ResourceMark rm;
       GatherKlassesAndSymbols gatherer(this);
 
+      dynamic_selectors_pointers_do(&gatherer);
       SystemDictionaryShared::dumptime_classes_do(&gatherer);
       SymbolTable::metaspace_pointers_do(&gatherer);
       FileMapInfo::metaspace_pointers_do(&gatherer);
@@ -652,6 +665,7 @@ public:
       WriteClosure wc(ro_space);
       SymbolTable::serialize_shared_table_header(&wc, false);
       SystemDictionaryShared::serialize_dictionary_headers(&wc, false);
+      DynamicArchive::serialize_method_selector_table(&wc);
     }
 
     verify_estimate_size(_estimated_hashtable_bytes, "Hashtables");
@@ -699,6 +713,9 @@ public:
     //
     // SystemDictionaryShared::dumptime_classes_do(it);
     // SymbolTable::metaspace_pointers_do(it);
+    // SystemDictionary::metaspace_pointers_do(it);
+
+    dynamic_selectors_pointers_do(it);
 
     it->finish();
   }
@@ -712,6 +729,7 @@ size_t DynamicArchiveBuilder::estimate_archive_size() {
   _estimated_hashtable_bytes = 0;
   _estimated_hashtable_bytes += SymbolTable::estimate_size_for_archive();
   _estimated_hashtable_bytes += SystemDictionaryShared::estimate_size_for_archive();
+  _estimated_hashtable_bytes += estimate_method_size_for_archive();
 
   _estimated_trampoline_bytes = estimate_trampoline_size();
 
@@ -790,6 +808,78 @@ void DynamicArchiveBuilder::release_header() {
   _header = NULL;
 }
 
+// Static and Dynamic archiving support
+// Read the methods added that aren't in the archive into a side list to
+// save and merge into the method map table at runtime.
+
+static Method** _dynamic_method_selector_list = NULL;
+static int _dynamic_method_selector_list_length = 0;
+
+// Count new shareable entries for dynamic archive, and save them to this list.
+void DynamicArchiveBuilder::gather_method_selectors() {
+
+  assert(_dynamic_method_selector_list == NULL, "Should be NULL");
+  SelectorMap<Method*> method_map = SystemDictionary::method_selector_map();
+  int capacity = method_map.capacity();
+
+  _dynamic_method_selector_list = NEW_C_HEAP_ARRAY(Method*, capacity, mtClass);
+
+  Method** methods = method_map.value_table();
+  int j = 0;
+  for (int i = 0; i < capacity; ++i) {
+    Method* m = methods[i];
+    // Share selector from new classes, not from already shared classes.
+    // Those methods won't be in the vtable.
+    if (m != NULL) {
+      InstanceKlass* ik = m->method_holder();
+      if (!ik->is_shared() && !SystemDictionaryShared::is_excluded_class(ik)) {
+        _dynamic_method_selector_list[j] = m;
+        j++;
+      }
+    }
+  }
+  _dynamic_method_selector_list_length = j;
+}
+
+void DynamicArchiveBuilder::dynamic_selectors_pointers_do(MetaspaceClosure* it) {
+  // Push saved method selector list too for dynamic archiving.
+  for (int i = 0; i < _dynamic_method_selector_list_length; i++) {
+    it->push(_dynamic_method_selector_list + i);
+  }
+}
+
+size_t DynamicArchiveBuilder::estimate_method_size_for_archive() {
+  return align_up(_dynamic_method_selector_list_length * sizeof(Method*) + sizeof(u4), sizeof(Method*));
+}
+
+// Read/write dynamic version of Method SelectorMap table.
+void DynamicArchive::serialize_method_selector_table(SerializeClosure* soc) {
+  soc->do_u4((u4*)&_dynamic_method_selector_list_length);
+
+  if (soc->reading()) {
+    assert(_dynamic_method_selector_list == NULL, "Should be uninitialized");
+    _dynamic_method_selector_list = NEW_C_HEAP_ARRAY(Method*, _dynamic_method_selector_list_length, mtClass);
+    memset((void*)_dynamic_method_selector_list, 0, _dynamic_method_selector_list_length * sizeof(Method*));
+  }
+
+  for (int i = 0; i < _dynamic_method_selector_list_length; i++) {
+    soc->do_ptr((void**)_dynamic_method_selector_list + i);
+  }
+
+  // After reading methods, merge in global method selector map.
+  if (soc->reading()) {
+    SelectorMap<Method*> method_map = SystemDictionary::method_selector_map();
+    for (int i = 0; i < _dynamic_method_selector_list_length; i++) {
+      Method* m =_dynamic_method_selector_list[i];
+      bool t = method_map.set(m->selector(), m);
+      assert(t, "should never fail");
+    }
+    FREE_C_HEAP_ARRAY(Method*, _dynamic_method_selector_list);
+  }
+
+  log_info(cds, dynamic)("Archiving/reading %d methods", _dynamic_method_selector_list_length);
+}
+
 size_t DynamicArchiveBuilder::estimate_trampoline_size() {
   size_t total = 0;
   size_t each_method_bytes =
@@ -801,6 +891,7 @@ size_t DynamicArchiveBuilder::estimate_trampoline_size() {
     Array<Method*>* methods = ik->methods();
     total += each_method_bytes * methods->length();
   }
+
   if (total == 0) {
     // We have nothing to archive, but let's avoid having an empty region.
     total = SharedRuntime::trampoline_size();
@@ -905,8 +996,10 @@ void DynamicArchiveBuilder::sort_methods(InstanceKlass* ik) const {
   if (ik->default_methods() != NULL) {
     Method::sort_methods(ik->default_methods(), /*set_idnums=*/false, dynamic_dump_method_comparator);
   }
-  ik->vtable().initialize_vtable(true, THREAD); assert(!HAS_PENDING_EXCEPTION, "cannot fail");
-  ik->itable().initialize_itable(true, THREAD); assert(!HAS_PENDING_EXCEPTION, "cannot fail");
+  // The vtable and itable can't be reinitialized here.  Because their adapters point outside the code cache.
+  // Right now, they're reinitialized at runtime.
+  // ik->vtable().initialize_vtable(true, THREAD); assert(!HAS_PENDING_EXCEPTION, "cannot fail");
+  // ik->itable().initialize_itable(true, THREAD); assert(!HAS_PENDING_EXCEPTION, "cannot fail");
 }
 
 void DynamicArchiveBuilder::set_symbols_permanent() {

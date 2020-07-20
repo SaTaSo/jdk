@@ -23,6 +23,7 @@
  */
 
 #include "precompiled.hpp"
+#include "code/vmreg.inline.hpp"
 #include "gc/shared/barrierSet.hpp"
 #include "gc/shared/c2/barrierSetC2.hpp"
 #include "memory/allocation.inline.hpp"
@@ -238,8 +239,7 @@ void Matcher::match( ) {
       if (parm_reg->is_reg()) {
         OptoReg::Name opto_parm_reg = OptoReg::as_OptoReg(parm_reg);
         assert(can_be_java_arg(opto_parm_reg) ||
-               C->stub_function() == CAST_FROM_FN_PTR(address, OptoRuntime::rethrow_C) ||
-               opto_parm_reg == inline_cache_reg(),
+               C->stub_function() == CAST_FROM_FN_PTR(address, OptoRuntime::rethrow_C),
                "parameters in register must be preserved by runtime stubs");
       }
       for (uint j = 0; j < i; j++) {
@@ -1135,7 +1135,7 @@ MachNode *Matcher::match_sfpt( SafePointNode *sfpt ) {
   if( sfpt->is_Call() ) {
     call = sfpt->as_Call();
     domain = call->tf()->domain();
-    cnt = domain->cnt();
+    cnt = domain->cnt() + (call->is_CallDynamicJava() ? 1 : 0);
 
     // Match just the call, nothing else
     MachNode *m = match_tree(call);
@@ -1163,12 +1163,14 @@ MachNode *Matcher::match_sfpt( SafePointNode *sfpt ) {
       if (is_method_handle_invoke) {
         C->set_has_method_handle_invokes(true);
       }
-      if( mcall_java->is_MachCallStaticJava() )
+      if( mcall_java->is_MachCallStaticJava() ) {
         mcall_java->as_MachCallStaticJava()->_name =
          call_java->as_CallStaticJava()->_name;
-      if( mcall_java->is_MachCallDynamicJava() )
+      }
+      if( mcall_java->is_MachCallDynamicJava() ) {
         mcall_java->as_MachCallDynamicJava()->_vtable_index =
          call_java->as_CallDynamicJava()->_vtable_index;
+      }
     }
     else if( mcall->is_MachCallRuntime() ) {
       mcall->as_MachCallRuntime()->_name = call->as_CallRuntime()->_name;
@@ -1210,20 +1212,27 @@ MachNode *Matcher::match_sfpt( SafePointNode *sfpt ) {
 
   // Do the normal argument list (parameters) register masks
   int argcnt = cnt - TypeFunc::Parms;
+  int call_argcnt = argcnt;
+  bool is_dynamic = false;
+  if (call != NULL && call->is_CallDynamicJava()) {
+    // Last arg is the klass pointer.
+    call_argcnt--;
+    is_dynamic = true;
+  }
   if( argcnt > 0 ) {          // Skip it all if we have no args
-    BasicType *sig_bt  = NEW_RESOURCE_ARRAY( BasicType, argcnt );
-    VMRegPair *parm_regs = NEW_RESOURCE_ARRAY( VMRegPair, argcnt );
+    BasicType *sig_bt  = NEW_RESOURCE_ARRAY( BasicType, call_argcnt );
+    VMRegPair *parm_regs = NEW_RESOURCE_ARRAY( VMRegPair, call_argcnt );
     int i;
-    for( i = 0; i < argcnt; i++ ) {
+    for( i = 0; i < call_argcnt; i++ ) {
       sig_bt[i] = domain->field_at(i+TypeFunc::Parms)->basic_type();
     }
     // V-call to pick proper calling convention
-    call->calling_convention( sig_bt, parm_regs, argcnt );
+    call->calling_convention( sig_bt, parm_regs, call_argcnt );
 
 #ifdef ASSERT
     // Sanity check users' calling convention.  Really handy during
     // the initial porting effort.  Fairly expensive otherwise.
-    { for (int i = 0; i<argcnt; i++) {
+    { for (int i = 0; i<call_argcnt; i++) {
       if( !parm_regs[i].first()->is_valid() &&
           !parm_regs[i].second()->is_valid() ) continue;
       VMReg reg1 = parm_regs[i].first();
@@ -1249,12 +1258,11 @@ MachNode *Matcher::match_sfpt( SafePointNode *sfpt ) {
     }
     }
 #endif
-
     // Visit each argument.  Compute its outgoing register mask.
     // Return results now can have 2 bits returned.
     // Compute max over all outgoing arguments both per call-site
     // and over the entire method.
-    for( i = 0; i < argcnt; i++ ) {
+    for( i = 0; i < call_argcnt; i++ ) {
       // Address of incoming argument mask to fill in
       RegMask *rm = &mcall->_in_rms[i+TypeFunc::Parms];
       if( !parm_regs[i].first()->is_valid() &&
@@ -1274,6 +1282,11 @@ MachNode *Matcher::match_sfpt( SafePointNode *sfpt ) {
     // Compute number of stack slots needed to restore stack in case of
     // Pascal-style argument popping.
     mcall->_argsize = out_arg_limit_per_call - begin_out_arg_area;
+  }
+
+  if (is_dynamic) {
+    RegMask *rm = &mcall->_in_rms[call_argcnt + TypeFunc::Parms];
+    rm->OR(invoke_receiver_klass_mask());
   }
 
   // Compute the max stack slot killed by any call.  These will not be
@@ -1307,9 +1320,11 @@ MachNode *Matcher::match_sfpt( SafePointNode *sfpt ) {
     jvms->set_map(sfpt);
   }
 
-  // Debug inputs begin just after the last incoming parameter
+  // Debug inputs begin just after the last incoming parameter, for virtual calls, it's one after.
+  int invoke_extra_args = 1;
   assert((mcall == NULL) || (mcall->jvms() == NULL) ||
-         (mcall->jvms()->debug_start() + mcall->_jvmadj == mcall->tf()->domain()->cnt()), "");
+         (mcall->jvms()->debug_start() + mcall->_jvmadj == mcall->tf()->domain()->cnt()) ||
+         (mcall->jvms()->debug_start() + mcall->_jvmadj == mcall->tf()->domain()->cnt() + invoke_extra_args), "");
 
   // Move the OopMap
   msfpt->_oop_map = sfpt->_oop_map;
@@ -1953,10 +1968,6 @@ bool Matcher::clone_base_plus_offset_address(AddPNode* m, Matcher::MStack& mstac
   }
   return false;
 }
-
-// A method-klass-holder may be passed in the inline_cache_reg
-// and then expanded into the inline_cache_reg and a method_oop register
-//   defined in ad_<arch>.cpp
 
 //------------------------------find_shared------------------------------------
 // Set bits if Node is shared or otherwise a root

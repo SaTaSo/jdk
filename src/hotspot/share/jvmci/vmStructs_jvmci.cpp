@@ -46,7 +46,6 @@
                                                                                                                                      \
   static_field(CompilerToVM::Data,             Method_extra_stack_entries,             int)                                          \
                                                                                                                                      \
-  static_field(CompilerToVM::Data,             SharedRuntime_ic_miss_stub,             address)                                      \
   static_field(CompilerToVM::Data,             SharedRuntime_handle_wrong_method_stub, address)                                      \
   static_field(CompilerToVM::Data,             SharedRuntime_deopt_blob_unpack,        address)                                      \
   static_field(CompilerToVM::Data,             SharedRuntime_deopt_blob_unpack_with_exception_in_tls,        address)                       \
@@ -76,7 +75,7 @@
                                                                                                                                      \
   static_field(CompilerToVM::Data,             vm_page_size,                           int)                                          \
                                                                                                                                      \
-  static_field(CompilerToVM::Data,             sizeof_vtableEntry,                     int)                                          \
+  static_field(CompilerToVM::Data,             sizeof_tableEntry,                      int)                                          \
   static_field(CompilerToVM::Data,             sizeof_ExceptionTableElement,           int)                                          \
   static_field(CompilerToVM::Data,             sizeof_LocalVariableTableElement,       int)                                          \
   static_field(CompilerToVM::Data,             sizeof_ConstantPool,                    int)                                          \
@@ -252,7 +251,7 @@
   nonstatic_field(MethodData,                  _backedge_mask,                                int)                                   \
   nonstatic_field(MethodData,                  _jvmci_ir_size,                                int)                                   \
                                                                                                                                      \
-  nonstatic_field(nmethod,                     _verified_entry_point,                         address)                               \
+  nonstatic_field(nmethod,                     _entry_point,                                  address)                               \
   nonstatic_field(nmethod,                     _comp_level,                                   int)                                   \
                                                                                                                                      \
   nonstatic_field(ObjArrayKlass,               _element_klass,                                Klass*)                                \
@@ -348,7 +347,7 @@
                                                                                                                                      \
   static_field(vmSymbols,                   _symbols[0],                                      Symbol*)                               \
                                                                                                                                      \
-  nonstatic_field(vtableEntry,              _method,                                          Method*)                               \
+  nonstatic_field(tableEntry,               _entry,                                           uint64_t)                              \
 
 #define VM_TYPES(declare_type, declare_toplevel_type, declare_integer_type, declare_unsigned_integer_type) \
   declare_integer_type(bool)                                              \
@@ -368,7 +367,7 @@
   declare_toplevel_type(narrowKlass)                                      \
   declare_toplevel_type(ObjectWaiter)                                     \
   declare_toplevel_type(Symbol*)                                          \
-  declare_toplevel_type(vtableEntry)                                      \
+  declare_toplevel_type(tableEntry)                                       \
                                                                           \
   declare_toplevel_type(oopDesc)                                          \
     declare_type(arrayOopDesc, oopDesc)                                   \

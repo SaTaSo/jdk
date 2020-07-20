@@ -46,16 +46,11 @@ class CodeHeapState : public CHeapObj<mtCode> {
     noType = 0,             // must be! due to initialization by memset to zero
     // The nMethod_* values correspond to the CompiledMethod enum values.
     // We can't use the CompiledMethod values 1:1 because we depend on noType == 0.
-    nMethod_inconstruction, // under construction. Very soon, the type will transition to "in_use".
     nMethod_inuse,          // executable. This is the "normal" state for a nmethod.
     nMethod_notused,        // assumed inactive, marked not entrant. Could be revived if necessary.
     nMethod_notentrant,     // no new activations allowed, marked for deoptimization. Old activations may still exist.
                             // Will transition to "zombie" after all activations are gone.
-    nMethod_zombie,         // No more activations exist, ready for purge (remove from code cache).
-    nMethod_unloaded,       // No activations exist, should not be called. Transient state on the way to "zombie".
-    nMethod_alive = nMethod_notentrant, // Combined state: nmethod may have activations, thus can't be purged.
-    nMethod_dead  = nMethod_zombie,     // Combined state: nmethod does not have any activations.
-    runtimeStub   = nMethod_unloaded + 1,
+    runtimeStub   = nMethod_notentrant + 1,
     ricochetStub,
     deoptimizationStub,
     uncommonTrapStub,
@@ -214,10 +209,7 @@ struct CodeHeapStat {
     bool          segment_granules;
     unsigned int  nBlocks_t1;
     unsigned int  nBlocks_t2;
-    unsigned int  nBlocks_alive;
-    unsigned int  nBlocks_dead;
-    unsigned int  nBlocks_inconstr;
-    unsigned int  nBlocks_unloaded;
+    unsigned int  nBlocks_inuse;
     unsigned int  nBlocks_stub;
     // FreeBlk data
     unsigned int  alloc_freeBlocks;

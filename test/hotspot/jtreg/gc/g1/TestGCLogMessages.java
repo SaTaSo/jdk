@@ -164,7 +164,6 @@ public class TestGCLogMessages {
         new LogMessageWithLevel("Weak Processing", Level.DEBUG),
         new LogMessageWithLevel("JNI Weak", Level.DEBUG),
         new LogMessageWithLevel("StringTable Weak", Level.DEBUG),
-        new LogMessageWithLevel("ResolvedMethodTable Weak", Level.DEBUG),
         new LogMessageWithLevel("VM Weak", Level.DEBUG),
 
         new LogMessageWithLevelC2OrJVMCIOnly("DerivedPointerTable Update", Level.DEBUG),

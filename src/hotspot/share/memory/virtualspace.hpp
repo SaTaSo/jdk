@@ -62,6 +62,8 @@ class ReservedSpace {
   ReservedSpace(size_t size, size_t preferred_page_size = 0);
   ReservedSpace(size_t size, size_t alignment, bool large,
                 char* requested_address = NULL);
+  ReservedSpace(size_t size, size_t alignment, bool large, bool executable);
+  ReservedSpace(size_t size, size_t alignment, bool large, bool executable, char* addr);
 
   // Accessors
   char*  base()            const { return _base;      }

@@ -382,14 +382,6 @@ public class WhiteBox {
   }
   public native Object[] getCodeBlob(long addr);
 
-  private native void clearInlineCaches0(boolean preserve_static_stubs);
-  public void clearInlineCaches() {
-    clearInlineCaches0(false);
-  }
-  public void clearInlineCaches(boolean preserve_static_stubs) {
-    clearInlineCaches0(preserve_static_stubs);
-  }
-
   // Intered strings
   public native boolean isInStringTable(String str);
 

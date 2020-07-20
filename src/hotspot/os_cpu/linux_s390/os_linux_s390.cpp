@@ -31,9 +31,9 @@
 #include "classfile/classLoader.hpp"
 #include "classfile/systemDictionary.hpp"
 #include "classfile/vmSymbols.hpp"
-#include "code/icBuffer.hpp"
+
 #include "code/nativeInst.hpp"
-#include "code/vtableStubs.hpp"
+
 #include "compiler/disassembler.hpp"
 #include "interpreter/interpreter.hpp"
 #include "memory/allocation.inline.hpp"
@@ -382,14 +382,6 @@ JVM_handle_linux_signal(int sig,
     if (thread->thread_state() == _thread_in_Java) {
       // Java thread running in Java code => find exception handler if any
       // a fault inside compiled code, the interpreter, or a stub
-
-      // Handle signal from NativeJump::patch_verified_entry().
-      if (sig == SIGILL && nativeInstruction_at(pc)->is_sigill_zombie_not_entrant()) {
-        if (TraceTraps) {
-          tty->print_cr("trap: zombie_not_entrant (SIGILL)");
-        }
-        stub = SharedRuntime::get_handle_wrong_method_stub();
-      }
 
       else if (sig == SIGSEGV &&
                SafepointMechanism::is_poll_address((address)info->si_addr)) {

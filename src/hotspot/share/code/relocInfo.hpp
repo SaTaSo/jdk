@@ -157,63 +157,6 @@ class NativeMovConstReg;
 //   Instruction types: PC-relative call (or a PC-relative branch)
 //   Data:  []   stored in 4 bytes of instruction
 //
-// relocInfo::static_call_type -- a static call
-//   Value:  an CodeBlob, a stub, or a fixup routine
-//   Instruction types: a call
-//   Data:  []
-//   The identity of the callee is extracted from debugging information.
-//   //%note reloc_3
-//
-// relocInfo::virtual_call_type -- a virtual call site (which includes an inline
-//                                 cache)
-//   Value:  an CodeBlob, a stub, the interpreter, or a fixup routine
-//   Instruction types: a call, plus some associated set-oop instructions
-//   Data:  []       the associated set-oops are adjacent to the call
-//          [n]      n is a relative offset to the first set-oop
-//          [[N]n l] and l is a limit within which the set-oops occur
-//          [Nn Ll]  both n and l may be 32 bits if necessary
-//   The identity of the callee is extracted from debugging information.
-//
-// relocInfo::opt_virtual_call_type -- a virtual call site that is statically bound
-//
-//    Same info as a static_call_type. We use a special type, so the handling of
-//    virtuals and statics are separated.
-//
-//
-//   The offset n points to the first set-oop.  (See [About Offsets] below.)
-//   In turn, the set-oop instruction specifies or contains an oop cell devoted
-//   exclusively to the IC call, which can be patched along with the call.
-//
-//   The locations of any other set-oops are found by searching the relocation
-//   information starting at the first set-oop, and continuing until all
-//   relocations up through l have been inspected.  The value l is another
-//   relative offset.  (Both n and l are relative to the call's first byte.)
-//
-//   The limit l of the search is exclusive.  However, if it points within
-//   the call (e.g., offset zero), it is adjusted to point after the call and
-//   any associated machine-specific delay slot.
-//
-//   Since the offsets could be as wide as 32-bits, these conventions
-//   put no restrictions whatever upon code reorganization.
-//
-//   The compiler is responsible for ensuring that transition from a clean
-//   state to a monomorphic compiled state is MP-safe.  This implies that
-//   the system must respond well to intermediate states where a random
-//   subset of the set-oops has been correctly from the clean state
-//   upon entry to the VEP of the compiled method.  In the case of a
-//   machine (Intel) with a single set-oop instruction, the 32-bit
-//   immediate field must not straddle a unit of memory coherence.
-//   //%note reloc_3
-//
-// relocInfo::static_stub_type -- an extra stub for each static_call_type
-//   Value:  none
-//   Instruction types: a virtual call:  { set_oop; jump; }
-//   Data:  [[N]n]  the offset of the associated static_call reloc
-//   This stub becomes the target of a static call which must be upgraded
-//   to a virtual call (because the callee is interpreted).
-//   See [About Offsets] below.
-//   //%note reloc_2
-//
 // relocInfo::poll_[return_]type -- a safepoint poll
 //   Value:  none
 //   Instruction types: memory load or test
@@ -258,20 +201,16 @@ class relocInfo {
   enum relocType {
     none                    =  0, // Used when no relocation should be generated
     oop_type                =  1, // embedded oop
-    virtual_call_type       =  2, // a standard inline cache call for a virtual send
-    opt_virtual_call_type   =  3, // a virtual call that has been statically bound (i.e., no IC cache)
-    static_call_type        =  4, // a static send
-    static_stub_type        =  5, // stub-entry for static send  (takes care of interpreter case)
-    runtime_call_type       =  6, // call to fixed external routine
-    external_word_type      =  7, // reference to fixed external address
-    internal_word_type      =  8, // reference within the current code blob
-    section_word_type       =  9, // internal, but a cross-section reference
-    poll_type               = 10, // polling instruction for safepoints
-    poll_return_type        = 11, // polling instruction for safepoints at return
-    metadata_type           = 12, // metadata that used to be oops
-    trampoline_stub_type    = 13, // stub-entry for trampoline
-    runtime_call_w_cp_type  = 14, // Runtime call which may load its target from the constant pool
-    data_prefix_tag         = 15, // tag for a prefix (carries data arguments)
+    runtime_call_type       =  2, // call to fixed external routine
+    external_word_type      =  3, // reference to fixed external address
+    internal_word_type      =  4, // reference within the current code blob
+    section_word_type       =  5, // internal, but a cross-section reference
+    poll_type               =  6, // polling instruction for safepoints
+    poll_return_type        =  7, // polling instruction for safepoints at return
+    metadata_type           =  8, // metadata that used to be oops
+    trampoline_stub_type    =  9, // stub-entry for trampoline
+    runtime_call_w_cp_type  = 10, // Runtime call which may load its target from the constant pool
+    data_prefix_tag         = 11, // tag for a prefix (carries data arguments)
     type_mask               = 15  // A mask which selects only the above values
   };
 
@@ -300,10 +239,6 @@ class relocInfo {
   #define APPLY_TO_RELOCATIONS(visitor) \
     visitor(oop) \
     visitor(metadata) \
-    visitor(virtual_call) \
-    visitor(opt_virtual_call) \
-    visitor(static_call) \
-    visitor(static_stub) \
     visitor(runtime_call) \
     visitor(runtime_call_w_cp) \
     visitor(external_word) \
@@ -805,8 +740,6 @@ class Relocation {
   // all relocations are able to reassert their values
   virtual void set_value(address x);
 
-  virtual bool clear_inline_cache()              { return true; }
-
   // This method assumes that all virtual/static (inline) caches are cleared (since for static_call_type and
   // ic_call_type is not always posisition dependent (depending on the state of the cache)). However, this is
   // probably a reasonable assumption, since empty caches simplifies code reloacation.
@@ -999,142 +932,6 @@ class metadata_Relocation : public DataRelocation {
   // Note:  metadata_value transparently converts Universe::non_metadata_word to NULL.
 };
 
-
-class virtual_call_Relocation : public CallRelocation {
-
- public:
-  // "cached_value" points to the first associated set-oop.
-  // The oop_limit helps find the last associated set-oop.
-  // (See comments at the top of this file.)
-  static RelocationHolder spec(address cached_value, jint method_index = 0) {
-    RelocationHolder rh = newHolder();
-    new(rh) virtual_call_Relocation(cached_value, method_index);
-    return rh;
-  }
-
- private:
-  address _cached_value; // location of set-value instruction
-  jint    _method_index; // resolved method for a Java call
-
-  virtual_call_Relocation(address cached_value, int method_index)
-    : CallRelocation(relocInfo::virtual_call_type),
-      _cached_value(cached_value),
-      _method_index(method_index) {
-    assert(cached_value != NULL, "first oop address must be specified");
-  }
-
-  friend class RelocIterator;
-  virtual_call_Relocation() : CallRelocation(relocInfo::virtual_call_type) { }
-
- public:
-  address cached_value();
-
-  int     method_index() { return _method_index; }
-  Method* method_value();
-
-  // data is packed as scaled offsets in "2_ints" format:  [f l] or [Ff Ll]
-  // oop_limit is set to 0 if the limit falls somewhere within the call.
-  // When unpacking, a zero oop_limit is taken to refer to the end of the call.
-  // (This has the effect of bringing in the call's delay slot on SPARC.)
-  void pack_data_to(CodeSection* dest);
-  void unpack_data();
-
-  bool clear_inline_cache();
-};
-
-
-class opt_virtual_call_Relocation : public CallRelocation {
- public:
-  static RelocationHolder spec(int method_index = 0) {
-    RelocationHolder rh = newHolder();
-    new(rh) opt_virtual_call_Relocation(method_index);
-    return rh;
-  }
-
- private:
-  jint _method_index; // resolved method for a Java call
-
-  opt_virtual_call_Relocation(int method_index)
-    : CallRelocation(relocInfo::opt_virtual_call_type),
-      _method_index(method_index) { }
-
-  friend class RelocIterator;
-  opt_virtual_call_Relocation() : CallRelocation(relocInfo::opt_virtual_call_type) {}
-
- public:
-  int     method_index() { return _method_index; }
-  Method* method_value();
-
-  void pack_data_to(CodeSection* dest);
-  void unpack_data();
-
-  bool clear_inline_cache();
-
-  // find the matching static_stub
-  address static_stub(bool is_aot);
-};
-
-
-class static_call_Relocation : public CallRelocation {
- public:
-  static RelocationHolder spec(int method_index = 0) {
-    RelocationHolder rh = newHolder();
-    new(rh) static_call_Relocation(method_index);
-    return rh;
-  }
-
- private:
-  jint _method_index; // resolved method for a Java call
-
-  static_call_Relocation(int method_index)
-    : CallRelocation(relocInfo::static_call_type),
-    _method_index(method_index) { }
-
-  friend class RelocIterator;
-  static_call_Relocation() : CallRelocation(relocInfo::static_call_type) {}
-
- public:
-  int     method_index() { return _method_index; }
-  Method* method_value();
-
-  void pack_data_to(CodeSection* dest);
-  void unpack_data();
-
-  bool clear_inline_cache();
-
-  // find the matching static_stub
-  address static_stub(bool is_aot);
-};
-
-class static_stub_Relocation : public Relocation {
- public:
-  static RelocationHolder spec(address static_call, bool is_aot = false) {
-    RelocationHolder rh = newHolder();
-    new(rh) static_stub_Relocation(static_call, is_aot);
-    return rh;
-  }
-
- private:
-  address _static_call;  // location of corresponding static_call
-  bool _is_aot;          // trampoline to aot code
-
-  static_stub_Relocation(address static_call, bool is_aot)
-    : Relocation(relocInfo::static_stub_type),
-      _static_call(static_call), _is_aot(is_aot) { }
-
-  friend class RelocIterator;
-  static_stub_Relocation() : Relocation(relocInfo::static_stub_type) { }
-
- public:
-  bool clear_inline_cache();
-
-  address static_call() { return _static_call; }
-  bool is_aot() { return _is_aot; }
-
-  // data is packed as a scaled offset in "1_int" format:  [c] or [Cc]
-  void pack_data_to(CodeSection* dest);
-  void unpack_data();
-};
 
 class runtime_call_Relocation : public CallRelocation {
 

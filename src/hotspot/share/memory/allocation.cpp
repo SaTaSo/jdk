@@ -77,10 +77,10 @@ void* StackObj::operator new [](size_t size)  throw() { ShouldNotCallThis(); ret
 void  StackObj::operator delete [](void* p)           { ShouldNotCallThis(); }
 
 void* MetaspaceObj::operator new(size_t size, ClassLoaderData* loader_data,
-                                 size_t word_size,
+                                 size_t word_size, size_t prefix_size,
                                  MetaspaceObj::Type type, TRAPS) throw() {
   // Klass has it's own operator new
-  return Metaspace::allocate(loader_data, word_size, type, THREAD);
+  return Metaspace::allocate(loader_data, word_size + prefix_size, type, THREAD) + prefix_size;
 }
 
 bool MetaspaceObj::is_valid(const MetaspaceObj* p) {

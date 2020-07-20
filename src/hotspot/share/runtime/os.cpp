@@ -30,8 +30,8 @@
 #include "classfile/systemDictionary.hpp"
 #include "classfile/vmSymbols.hpp"
 #include "code/codeCache.hpp"
-#include "code/icBuffer.hpp"
-#include "code/vtableStubs.hpp"
+
+
 #include "gc/shared/gcVMOperations.hpp"
 #include "logging/log.hpp"
 #include "interpreter/interpreter.hpp"
@@ -816,7 +816,7 @@ void os::init_random(unsigned int initval) {
 }
 
 
-static int random_helper(unsigned int rand_seed) {
+int random_helper(unsigned int rand_seed) {
   /* standard, well-known linear congruential random generator with
    * next_rand = (16807*seed) mod (2**31-1)
    * see
@@ -1034,8 +1034,7 @@ void os::print_date_and_time(outputStream *st, char* buf, size_t buflen) {
 
 // Check if pointer can be read from (4-byte read access).
 // Helps to prove validity of a not-NULL pointer.
-// Returns true in very early stages of VM life when stub is not yet generated.
-#define SAFEFETCH_DEFAULT true
+#define SAFEFETCH_DEFAULT false
 bool os::is_readable_pointer(const void* p) {
   if (!CanUseSafeFetch32()) {
     return SAFEFETCH_DEFAULT;

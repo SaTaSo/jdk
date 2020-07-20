@@ -512,6 +512,7 @@ Compile::Compile( ciEnv* ci_env, ciMethod* target, int osr_bci,
                   _stub_function(NULL),
                   _stub_name(NULL),
                   _stub_entry_point(NULL),
+                  _lazy_invocations(NULL),
                   _max_node_limit(MaxNodeLimit),
                   _inlining_progress(false),
                   _inlining_incrementally(false),
@@ -799,6 +800,7 @@ Compile::Compile( ciEnv* ci_env,
     _stub_function(stub_function),
     _stub_name(stub_name),
     _stub_entry_point(NULL),
+    _lazy_invocations(NULL),
     _max_node_limit(MaxNodeLimit),
     _inlining_progress(false),
     _inlining_incrementally(false),
@@ -1008,6 +1010,12 @@ void Compile::Init(int aliaslevel) {
   _type_verify_symmetry = true;
   _phase_optimize_finished = false;
 #endif
+}
+
+LazyInvocation* Compile::create_lazy_invocation(LazyInvocation::CallKind call_kind) {
+  LazyInvocation* lazy_invocation = new LazyInvocation(call_kind, _lazy_invocations);
+  _lazy_invocations = lazy_invocation;
+  return lazy_invocation;
 }
 
 //---------------------------init_start----------------------------------------

@@ -43,7 +43,6 @@
 #include "memory/resourceArea.hpp"
 #include "memory/universe.hpp"
 #include "prims/jvmtiExport.hpp"
-#include "prims/resolvedMethodTable.hpp"
 #include "runtime/atomic.hpp"
 #include "runtime/safepoint.hpp"
 #include "runtime/synchronizer.hpp"
@@ -148,7 +147,8 @@ public:
     if (nm != NULL && nm->oops_do_try_claim()) {
       ZNMethod::nmethod_oops_do(nm, _cl);
       assert(!ZNMethod::supports_entry_barrier(nm) ||
-             ZNMethod::is_armed(nm) == _should_disarm_nmethods, "Invalid state");
+             ZNMethod::is_armed(nm) == _should_disarm_nmethods ||
+             nm->is_not_entrant(), "Invalid state");
       if (_should_disarm_nmethods) {
         ZNMethod::disarm(nm);
       }

@@ -50,26 +50,10 @@ class NativeInstruction {
  public:
   bool is_jump() { return Assembler::is_b(long_at(0)); } // See NativeGeneralJump.
 
-  bool is_sigtrap_ic_miss_check() {
-    assert(UseSIGTRAP, "precondition");
-    return MacroAssembler::is_trap_ic_miss_check(long_at(0));
-  }
-
   bool is_sigtrap_null_check() {
     assert(UseSIGTRAP && TrapBasedNullChecks, "precondition");
     return MacroAssembler::is_trap_null_check(long_at(0));
   }
-
-  int get_stop_type() {
-    return MacroAssembler::tdi_get_si16(long_at(0), Assembler::traptoUnconditional, 0);
-  }
-
-  // We use an illtrap for marking a method as not_entrant or zombie.
-  bool is_sigill_zombie_not_entrant() {
-    // Work around a C++ compiler bug which changes 'this'.
-    return NativeInstruction::is_sigill_zombie_not_entrant_at(addr_at(0));
-  }
-  static bool is_sigill_zombie_not_entrant_at(address addr);
 
 #ifdef COMPILER2
   // SIGTRAP-based implicit range checks
@@ -111,8 +95,7 @@ inline NativeInstruction* nativeInstruction_at(address address) {
 }
 
 // The NativeCall is an abstraction for accessing/manipulating call
-// instructions. It is used to manipulate inline caches, primitive &
-// dll calls, etc.
+// instructions. It is used to manipulate primitive & dll calls, etc.
 //
 // Sparc distinguishes `NativeCall' and `NativeFarCall'. On PPC64,
 // at present, we provide a single class `NativeCall' representing the
@@ -316,15 +299,7 @@ class NativeJump: public NativeInstruction {
     }
   }
 
-  // MT-safe insertion of native jump at verified method entry
-  static void patch_verified_entry(address entry, address verified_entry, address dest);
-
   void verify() NOT_DEBUG_RETURN;
-
-  static void check_verified_entry_alignment(address entry, address verified_entry) {
-    // We just patch one instruction on ppc64, so the jump doesn't have to
-    // be aligned. Nothing to do here.
-  }
 };
 
 // Instantiates a NativeJump object starting at the given instruction

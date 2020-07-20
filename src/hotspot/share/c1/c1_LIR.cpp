@@ -347,7 +347,7 @@ LIR_OpTypeCheck::LIR_OpTypeCheck(LIR_Code code, LIR_Opr object, LIR_Opr array, L
 
 
 LIR_OpArrayCopy::LIR_OpArrayCopy(LIR_Opr src, LIR_Opr src_pos, LIR_Opr dst, LIR_Opr dst_pos, LIR_Opr length,
-                                 LIR_Opr tmp, ciArrayKlass* expected_type, int flags, CodeEmitInfo* info)
+                                 LIR_Opr tmp, ciArrayKlass* expected_type, int flags, CodeEmitInfo* info, ciMethod* method)
   : LIR_Op(lir_arraycopy, LIR_OprFact::illegalOpr, info)
   , _src(src)
   , _src_pos(src_pos)
@@ -356,7 +356,8 @@ LIR_OpArrayCopy::LIR_OpArrayCopy(LIR_Opr src, LIR_Opr src_pos, LIR_Opr dst, LIR_
   , _length(length)
   , _tmp(tmp)
   , _expected_type(expected_type)
-  , _flags(flags) {
+  , _flags(flags)
+  , _method(method) {
   _stub = new ArrayCopyStub(this);
 }
 
@@ -688,8 +689,8 @@ void LIR_OpVisitState::visit(LIR_Op* op) {
 
 // LIR_OpJavaCall
     case lir_static_call:
-    case lir_optvirtual_call:
-    case lir_icvirtual_call:
+    case lir_direct_call:
+    case lir_interface_call:
     case lir_virtual_call:
     case lir_dynamic_call: {
       LIR_OpJavaCall* opJavaCall = op->as_OpJavaCall();
@@ -706,6 +707,7 @@ void LIR_OpVisitState::visit(LIR_Op* op) {
       }
 
       if (opJavaCall->_info)                     do_info(opJavaCall->_info);
+      if (opJavaCall->_info_for_exception)       do_info(opJavaCall->_info_for_exception);
       if (FrameMap::method_handle_invoke_SP_save_opr() != LIR_OprFact::illegalOpr &&
           opJavaCall->is_method_handle_invoke()) {
         opJavaCall->_method_handle_invoke_SP_save_opr = FrameMap::method_handle_invoke_SP_save_opr();
@@ -1675,8 +1677,8 @@ const char * LIR_Op::name() const {
      case lir_fmaf:                  s = "fmaf";          break;
      // LIR_OpJavaCall
      case lir_static_call:           s = "static";        break;
-     case lir_optvirtual_call:       s = "optvirtual";    break;
-     case lir_icvirtual_call:        s = "icvirtual";     break;
+     case lir_direct_call:           s = "direct";        break;
+     case lir_interface_call:        s = "interface";     break;
      case lir_virtual_call:          s = "virtual";       break;
      case lir_dynamic_call:          s = "dynamic";       break;
      // LIR_OpArrayCopy

@@ -215,7 +215,7 @@ void ScavengableNMethods::unlist_nmethod(nmethod* nm, nmethod* prev) {
 #ifndef PRODUCT
 // Temporarily mark nmethods that are claimed to be on the scavenge list.
 void ScavengableNMethods::mark_on_list_nmethods() {
-  NMethodIterator iter(NMethodIterator::only_alive);
+  NMethodIterator iter;
   while(iter.next()) {
     nmethod* nm = iter.method();
     ScavengableNMethodsData data = gc_data(nm);
@@ -228,7 +228,7 @@ void ScavengableNMethods::mark_on_list_nmethods() {
 // If the closure is given, run it on the unlisted nmethods.
 // Also make sure that the effects of mark_on_list_nmethods is gone.
 void ScavengableNMethods::verify_unlisted_nmethods(CodeBlobClosure* cl) {
-  NMethodIterator iter(NMethodIterator::only_alive);
+  NMethodIterator iter;
   while(iter.next()) {
     nmethod* nm = iter.method();
 

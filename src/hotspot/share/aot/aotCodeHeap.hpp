@@ -275,8 +275,6 @@ public:
 
   static Method* find_method(Klass* klass, Thread* thread, const char* method_name);
 
-  void cleanup_inline_caches();
-
   DEBUG_ONLY( int verify_icholder_relocations(); )
 
   void alive_methods_do(void f(CompiledMethod* nm));

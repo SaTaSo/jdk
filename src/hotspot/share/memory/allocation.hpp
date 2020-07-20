@@ -335,7 +335,7 @@ class MetaspaceObj {
   }
 
   void* operator new(size_t size, ClassLoaderData* loader_data,
-                     size_t word_size,
+                     size_t word_size, size_t prefix_word_size,
                      Type type, Thread* thread) throw();
                      // can't use TRAPS from this header file.
   void operator delete(void* p) { ShouldNotCallThis(); }

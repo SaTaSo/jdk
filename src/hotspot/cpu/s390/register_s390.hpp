@@ -530,8 +530,6 @@ REGISTER_DECLARATION(Register, Z_esp,         Z_R7);
 REGISTER_DECLARATION(Register, Z_thread,      Z_R8);
 // Address of current method. only valid in interpreter_entry.
 REGISTER_DECLARATION(Register, Z_method,      Z_R9);
-// Inline cache register. used by c1 and c2.
-REGISTER_DECLARATION(Register, Z_inline_cache,Z_R9);
 // Frame pointer of current interpreter frame. only valid while
 // executing bytecodes.
 REGISTER_DECLARATION(Register, Z_fp,          Z_R9);
@@ -547,7 +545,6 @@ REGISTER_DECLARATION(Register, Z_bytecode,    Z_R14);
 #define Z_esp             AS_REGISTER(Register, Z_R7)
 #define Z_thread          AS_REGISTER(Register, Z_R8)
 #define Z_method          AS_REGISTER(Register, Z_R9)
-#define Z_inline_cache    AS_REGISTER(Register, Z_R9)
 #define Z_fp              AS_REGISTER(Register, Z_R9)
 #define Z_locals          AS_REGISTER(Register, Z_R12)
 #define Z_bcp             AS_REGISTER(Register, Z_R13)

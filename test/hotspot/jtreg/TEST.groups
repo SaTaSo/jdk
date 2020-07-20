@@ -230,7 +230,6 @@ tier1_gc_shenandoah = \
   gc/CriticalNativeArgs.java
 
 tier2_gc_shenandoah = \
-  runtime/MemberName/MemberNameLeak.java \
   runtime/CompressedOops/UseCompressedOops.java \
   gc/TestHumongousReferenceObject.java \
   gc/TestSystemGC.java \
@@ -347,8 +346,7 @@ hotspot_cds_relocation = \
   runtime/modules/PatchModule/PatchModuleCDS.java \
   runtime/modules/PatchModule/PatchModuleClassList.java \
   runtime/NMT \
-  serviceability/sa \
- -runtime/cds/DeterministicDump.java
+  serviceability/sa
 
 # A subset of AppCDS tests to be run in tier1
 tier1_runtime_appcds = \

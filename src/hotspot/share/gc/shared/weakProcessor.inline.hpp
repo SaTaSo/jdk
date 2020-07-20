@@ -32,7 +32,6 @@
 #include "gc/shared/weakProcessorPhases.hpp"
 #include "gc/shared/weakProcessorPhaseTimes.hpp"
 #include "gc/shared/workgroup.hpp"
-#include "prims/resolvedMethodTable.hpp"
 #include "utilities/debug.hpp"
 
 class BoolObjectClosure;

@@ -147,7 +147,7 @@ bool frame::safe_for_sender(JavaThread *thread) {
       return sender.is_interpreted_frame_valid(thread);
     }
 
-    if (sender_blob->is_zombie() || sender_blob->is_unloaded()) {
+    if (!sender_blob->is_alive()) {
       return false;
     }
 

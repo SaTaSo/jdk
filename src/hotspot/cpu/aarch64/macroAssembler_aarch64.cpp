@@ -717,10 +717,7 @@ void MacroAssembler::call_VM_helper(Register oop_result, address entry_point, in
 
 address MacroAssembler::trampoline_call(Address entry, CodeBuffer *cbuf) {
   assert(JavaThread::current()->is_Compiler_thread(), "just checking");
-  assert(entry.rspec().type() == relocInfo::runtime_call_type
-         || entry.rspec().type() == relocInfo::opt_virtual_call_type
-         || entry.rspec().type() == relocInfo::static_call_type
-         || entry.rspec().type() == relocInfo::virtual_call_type, "wrong reloc type");
+  assert(entry.rspec().type() == relocInfo::runtime_call_type, "wrong reloc type");
 
   // We need a trampoline if branches are far.
   if (far_branches()) {
@@ -819,15 +816,6 @@ void MacroAssembler::c2bool(Register x) {
   //       only! (was bug)
   tst(x, 0xff);
   cset(x, Assembler::NE);
-}
-
-address MacroAssembler::ic_call(address entry, jint method_index) {
-  RelocationHolder rh = virtual_call_Relocation::spec(pc(), method_index);
-  // address const_ptr = long_constant((jlong)Universe::non_oop_word());
-  // uintptr_t offset;
-  // ldr_constant(rscratch2, const_ptr);
-  movptr(rscratch2, (uintptr_t)Universe::non_oop_word());
-  return trampoline_call(Address(entry, rh));
 }
 
 // Implementation of call_VM versions

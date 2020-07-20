@@ -28,15 +28,10 @@
 #include "asm/macroAssembler.inline.hpp"
 #include "code/codeCache.hpp"
 #include "code/debugInfoRec.hpp"
-#include "code/icBuffer.hpp"
-#include "code/vtableStubs.hpp"
-#include "gc/shared/barrierSetAssembler.hpp"
 #include "interpreter/interpreter.hpp"
 #include "interpreter/interp_masm.hpp"
 #include "logging/log.hpp"
 #include "memory/resourceArea.hpp"
-#include "nativeInst_aarch64.hpp"
-#include "oops/compiledICHolder.hpp"
 #include "oops/klass.inline.hpp"
 #include "runtime/safepointMechanism.hpp"
 #include "runtime/sharedRuntime.hpp"
@@ -325,50 +320,12 @@ int SharedRuntime::java_calling_convention(const BasicType *sig_bt,
 }
 
 // Patch the callers callsite with entry to compiled code if it exists.
-static void patch_callers_callsite(MacroAssembler *masm) {
-  Label L;
-  __ ldr(rscratch1, Address(rmethod, in_bytes(Method::code_offset())));
-  __ cbz(rscratch1, L);
-
-  __ enter();
-  __ push_CPU_state();
-
-  // VM needs caller's callsite
-  // VM needs target method
-  // This needs to be a long call since we will relocate this adapter to
-  // the codeBuffer and it may not reach
-
-#ifndef PRODUCT
-  assert(frame::arg_reg_save_area_bytes == 0, "not expecting frame reg save area");
-#endif
-
-  __ mov(c_rarg0, rmethod);
-  __ mov(c_rarg1, lr);
-  __ lea(rscratch1, RuntimeAddress(CAST_FROM_FN_PTR(address, SharedRuntime::fixup_callers_callsite)));
-  __ blr(rscratch1);
-  __ maybe_isb();
-
-  __ pop_CPU_state();
-  // restore sp
-  __ leave();
-  __ bind(L);
-}
-
 static void gen_c2i_adapter(MacroAssembler *masm,
                             int total_args_passed,
                             int comp_args_on_stack,
                             const BasicType *sig_bt,
                             const VMRegPair *regs,
                             Label& skip_fixup) {
-  // Before we get into the guts of the C2I adapter, see if we should be here
-  // at all.  We've come from compiled code and are attempting to jump to the
-  // interpreter, which means the caller made a static call to get here
-  // (vcalls always get a compiled target if there is one).  Check for a
-  // compiled target.  If there is one, we need to patch the caller's call.
-  patch_callers_callsite(masm);
-
-  __ bind(skip_fixup);
-
   int words_pushed = 0;
 
   // Since all args are passed on the stack, total_args_passed *
@@ -694,24 +651,8 @@ AdapterHandlerEntry* SharedRuntime::generate_i2c2i_adapters(MacroAssembler *masm
   // On exit from the interpreter, the interpreter will restore our SP (lest the
   // compiled code, which relys solely on SP and not FP, get sick).
 
-  {
-    __ block_comment("c2i_unverified_entry {");
-    __ load_klass(rscratch1, receiver);
-    __ ldr(tmp, Address(holder, CompiledICHolder::holder_klass_offset()));
-    __ cmp(rscratch1, tmp);
-    __ ldr(rmethod, Address(holder, CompiledICHolder::holder_metadata_offset()));
-    __ br(Assembler::EQ, ok);
-    __ far_jump(RuntimeAddress(SharedRuntime::get_ic_miss_stub()));
-
-    __ bind(ok);
-    // Method might have been compiled since the call site was patched to
-    // interpreted; if that is the case treat it as a miss so we can get
-    // the call site corrected.
-    __ ldr(rscratch1, Address(rmethod, in_bytes(Method::code_offset())));
-    __ cbz(rscratch1, skip_fixup);
-    __ far_jump(RuntimeAddress(SharedRuntime::get_ic_miss_stub()));
-    __ block_comment("} c2i_unverified_entry");
-  }
+  // TODO: track new entries
+  __ vtable_entry();
 
   address c2i_entry = __ pc();
 
@@ -1453,28 +1394,9 @@ nmethod* SharedRuntime::generate_native_wrapper(MacroAssembler* masm,
 
   int stack_size = stack_slots * VMRegImpl::stack_slot_size;
 
-  // First thing make an ic check to see if we should even be here
-
   // We are free to use all registers as temps without saving them and
   // restoring them except rfp. rfp is the only callee save register
   // as far as the interpreter and the compiler(s) are concerned.
-
-
-  const Register ic_reg = rscratch2;
-  const Register receiver = j_rarg0;
-
-  Label hit;
-  Label exception_pending;
-
-  assert_different_registers(ic_reg, receiver, rscratch1);
-  __ verify_oop(receiver);
-  __ cmp_klass(receiver, ic_reg, rscratch1);
-  __ br(Assembler::EQ, hit);
-
-  __ far_jump(RuntimeAddress(SharedRuntime::get_ic_miss_stub()));
-
-  // Verified entry point must be aligned
-  __ align(8);
 
   __ bind(hit);
 

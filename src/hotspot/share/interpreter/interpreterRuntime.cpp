@@ -618,6 +618,11 @@ JRT_END
 JRT_ENTRY(void, InterpreterRuntime::throw_IncompatibleClassChangeErrorVerbose(JavaThread* thread,
                                                                               Klass* recvKlass,
                                                                               Klass* interfaceKlass))
+  LastFrameAccessor last_frame(thread);
+  ConstantPoolCacheEntry* cp_cache_entry = last_frame.cache_entry();
+  interfaceKlass = cp_cache_entry->f1_as_klass();
+  recvKlass->print();
+
   ResourceMark rm(thread);
   char buf[1000];
   buf[0] = '\0';
@@ -858,8 +863,8 @@ void InterpreterRuntime::resolve_invoke(JavaThread* thread, Bytecodes::Code byte
     } else {
       // Setup itable entry
       assert(info.call_kind() == CallInfo::itable_call, "");
-      int index = info.resolved_method()->itable_index();
-      assert(info.itable_index() == index, "");
+      uint32_t selector = info.resolved_method()->selector();
+      assert(info.itable_selector() == selector, "");
     }
   } else if (bytecode == Bytecodes::_invokespecial) {
     assert(info.call_kind() == CallInfo::direct_call, "must be direct call");
@@ -892,8 +897,7 @@ void InterpreterRuntime::resolve_invoke(JavaThread* thread, Bytecodes::Code byte
     cp_cache_entry->set_itable_call(
       bytecode,
       info.resolved_klass(),
-      resolved_method,
-      info.itable_index());
+      resolved_method);
     break;
   default:  ShouldNotReachHere();
   }

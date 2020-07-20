@@ -256,6 +256,8 @@ class Compile : public Phase {
   const char*           _stub_name;             // Name of stub or adapter being compiled, or NULL
   address               _stub_entry_point;      // Compile code entry for generated stub, or NULL
 
+  LazyInvocation*       _lazy_invocations;
+
   // Control of this compilation.
   int                   _max_inline_size;       // Max inline size for this compilation
   int                   _freq_inline_size;      // Max hot method inline size for this compilation
@@ -433,6 +435,9 @@ class Compile : public Phase {
  public:
 
   void* barrier_set_state() const { return _barrier_set_state; }
+
+  LazyInvocation* create_lazy_invocation(LazyInvocation::CallKind call_kind);
+  LazyInvocation* lazy_invocations() const { return _lazy_invocations; }
 
   outputStream* print_inlining_stream() const {
     assert(print_inlining() || print_intrinsics(), "PrintInlining off?");

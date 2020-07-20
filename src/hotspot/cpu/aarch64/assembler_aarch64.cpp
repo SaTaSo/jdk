@@ -1579,12 +1579,6 @@ Address::Address(address target, relocInfo::relocType rtype) : _mode(literal){
   case relocInfo::internal_word_type:
     _rspec = internal_word_Relocation::spec(target);
     break;
-  case relocInfo::opt_virtual_call_type:
-    _rspec = opt_virtual_call_Relocation::spec();
-    break;
-  case relocInfo::static_call_type:
-    _rspec = static_call_Relocation::spec();
-    break;
   case relocInfo::runtime_call_type:
     _rspec = runtime_call_Relocation::spec();
     break;

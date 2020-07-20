@@ -26,7 +26,7 @@
 #include "code/codeBlob.hpp"
 #include "code/codeCache.hpp"
 #include "code/scopeDesc.hpp"
-#include "code/vtableStubs.hpp"
+
 #include "memory/allocation.inline.hpp"
 #include "memory/resourceArea.hpp"
 #include "oops/oop.inline.hpp"
@@ -66,7 +66,6 @@ class CodeBlobCollector : StackObj {
   // used during a collection
   static GrowableArray<JvmtiCodeBlobDesc*>* _global_code_blobs;
   static void do_blob(CodeBlob* cb);
-  static void do_vtable_stub(VtableStub* vs);
  public:
   CodeBlobCollector() {
     _code_blobs = NULL;
@@ -146,12 +145,6 @@ void CodeBlobCollector::do_blob(CodeBlob* cb) {
 
 // called for each VtableStub in VtableStubs
 
-void CodeBlobCollector::do_vtable_stub(VtableStub* vs) {
-    JvmtiCodeBlobDesc* scb = new JvmtiCodeBlobDesc(vs->is_vtable_stub() ? "vtable stub" : "itable stub",
-                                                   vs->code_begin(), vs->code_end());
-    _global_code_blobs->append(scb);
-}
-
 // collects a list of CodeBlobs in the CodeCache.
 //
 // The created list is growable array of JvmtiCodeBlobDesc - each one describes
@@ -178,10 +171,6 @@ void CodeBlobCollector::collect() {
   for (StubCodeDesc* desc = StubCodeDesc::first(); desc != NULL; desc = StubCodeDesc::next(desc)) {
     _global_code_blobs->append(new JvmtiCodeBlobDesc(desc->name(), desc->begin(), desc->end()));
   }
-
-  // Vtable stubs are not described with StubCodeDesc,
-  // process them separately
-  VtableStubs::vtable_stub_do(do_vtable_stub);
 
   // next iterate over all the non-nmethod code blobs and add them to
   // the list - as noted above this will filter out duplicates and
@@ -231,7 +220,7 @@ jvmtiError JvmtiCodeBlobEvents::generate_compiled_method_load_events(JvmtiEnv* e
       // Save events to the queue for posting outside the CodeCache_lock.
       MutexLocker mu(java_thread, CodeCache_lock, Mutex::_no_safepoint_check_flag);
       // Iterate over non-profiled and profiled nmethods
-      NMethodIterator iter(NMethodIterator::only_alive_and_not_unloading);
+      NMethodIterator iter;
       while(iter.next()) {
         nmethod* current = iter.method();
         current->post_compiled_method_load_event(state);

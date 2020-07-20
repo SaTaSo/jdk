@@ -37,7 +37,6 @@ class xmlStream;
 class CompiledStaticCall;
 class NativeCallWrapper;
 class ScopeDesc;
-class CompiledIC;
 class MetadataClosure;
 
 // This class is used internally by nmethods, to cache
@@ -160,7 +159,7 @@ protected:
   unsigned int _lazy_critical_native:1;      // Lazy JNI critical native
   unsigned int _has_wide_vectors:1;          // Preserve wide vectors at safepoints
 
-  Method*   _method;
+  Method* _method;
   address _scopes_data_begin;
   // All deoptee's will resume execution at this location described by
   // this address.
@@ -172,12 +171,14 @@ protected:
   PcDescContainer _pc_desc_container;
   ExceptionCache * volatile _exception_cache;
 
+  LazyInvocation* _lazy_invocations;
+  CompiledMethod* _purge_list_next;
+
   void* _gc_data;
 
-  virtual void flush() = 0;
 protected:
-  CompiledMethod(Method* method, const char* name, CompilerType type, const CodeBlobLayout& layout, int frame_complete_offset, int frame_size, ImmutableOopMapSet* oop_maps, bool caller_must_gc_arguments);
-  CompiledMethod(Method* method, const char* name, CompilerType type, int size, int header_size, CodeBuffer* cb, int frame_complete_offset, int frame_size, OopMapSet* oop_maps, bool caller_must_gc_arguments);
+  CompiledMethod(Method* method, const char* name, CompilerType type, const CodeBlobLayout& layout, int frame_complete_offset, int frame_size, ImmutableOopMapSet* oop_maps, bool caller_must_gc_arguments, LazyInvocation* direct_invocations);
+  CompiledMethod(Method* method, const char* name, CompilerType type, int size, int header_size, CodeBuffer* cb, int frame_complete_offset, int frame_size, OopMapSet* oop_maps, bool caller_must_gc_arguments, LazyInvocation* direct_invocations);
 
 public:
   // Only used by unit test.
@@ -202,29 +203,22 @@ public:
   bool  has_wide_vectors() const                  { return _has_wide_vectors; }
   void  set_has_wide_vectors(bool z)              { _has_wide_vectors = z; }
 
-  enum { not_installed = -1, // in construction, only the owner doing the construction is
-                             // allowed to advance state
-         in_use        = 0,  // executable nmethod
+  enum { in_use        = 0,  // executable nmethod
          not_used      = 1,  // not entrant, but revivable
-         not_entrant   = 2,  // marked for deoptimization but activations may still exist,
-                             // will be transformed to zombie when all activations are gone
-         unloaded      = 3,  // there should be no activations, should not be called, will be
-                             // transformed to zombie by the sweeper, when not "locked in vm".
-         zombie        = 4   // no activations exist, nmethod is ready for purge
+         not_entrant   = 2,  // marked for deoptimization but activations may still exist
   };
 
-  virtual bool  is_in_use() const = 0;
+  virtual bool  is_in_use() = 0;
   virtual int   comp_level() const = 0;
   virtual int   compile_id() const = 0;
 
-  virtual address verified_entry_point() const = 0;
   virtual void log_identity(xmlStream* log) const = 0;
   virtual void log_state_change() const = 0;
   virtual bool make_not_used() = 0;
   virtual bool make_not_entrant() = 0;
   virtual bool make_entrant() = 0;
+  virtual void flush() = 0;
   virtual address entry_point() const = 0;
-  virtual bool make_zombie() = 0;
   virtual bool is_osr_method() const = 0;
   virtual int osr_entry_bci() const = 0;
   Method* method() const                          { return _method; }
@@ -254,8 +248,6 @@ public:
     return _mark_for_deoptimization_status != deoptimize_noupdate;
   }
 
-  static bool nmethod_access_is_safe(nmethod* nm);
-
   // tells whether frames described by this nmethod can be deoptimized
   // note: native wrappers cannot be deoptimized.
   bool can_be_deoptimized() const { return is_java_method(); }
@@ -270,6 +262,9 @@ public:
   virtual PcDesc* scopes_pcs_begin() const = 0;
   virtual PcDesc* scopes_pcs_end() const = 0;
   int scopes_pcs_size() const { return (intptr_t) scopes_pcs_end() - (intptr_t) scopes_pcs_begin(); }
+
+  LazyInvocation* lazy_invocation_at(address pc);
+  Method* attached_method_at(address call_instr);
 
   address insts_begin() const { return code_begin(); }
   address insts_end() const { return stub_begin(); }
@@ -333,7 +328,7 @@ public:
   bool is_deopt_mh_entry(address pc) { return pc == deopt_mh_handler_begin(); }
   inline bool is_deopt_entry(address pc);
 
-  virtual bool can_convert_to_zombie() = 0;
+  virtual bool can_delete() = 0;
   virtual const char* compile_kind() const = 0;
   virtual int get_state() const = 0;
 
@@ -341,36 +336,16 @@ public:
 
   bool is_far_code() const { return _is_far_code; }
 
-  bool inlinecache_check_contains(address addr) const {
-    return (addr >= code_begin() && addr < verified_entry_point());
-  }
-
   void preserve_callee_argument_oops(frame fr, const RegisterMap *reg_map, OopClosure* f);
 
   // implicit exceptions support
-  address continuation_for_implicit_div0_exception(address pc) { return continuation_for_implicit_exception(pc, true); }
-  address continuation_for_implicit_null_exception(address pc) { return continuation_for_implicit_exception(pc, false); }
-
-  static address get_deopt_original_pc(const frame* fr);
-
-  // Inline cache support for class unloading and nmethod unloading
- private:
-  bool cleanup_inline_caches_impl(bool unloading_occurred, bool clean_all);
-
   address continuation_for_implicit_exception(address pc, bool for_div0_check);
 
- public:
-  // Serial version used by sweeper and whitebox test
-  void cleanup_inline_caches(bool clean_all);
-
-  virtual void clear_inline_caches();
-  void clear_ic_callsites();
+  static address get_deopt_original_pc(const frame* fr);
 
   // Execute nmethod barrier code, as if entering through nmethod call.
   void run_nmethod_entry_barrier();
 
-  // Verify and count cached icholder relocations.
-  int  verify_icholder_relocations();
   void verify_oop_relocations();
 
   bool has_evol_metadata();
@@ -380,16 +355,7 @@ public:
   // corresponds to the given method as well.
   virtual bool is_dependent_on_method(Method* dependee) = 0;
 
-  virtual NativeCallWrapper* call_wrapper_at(address call) const = 0;
-  virtual NativeCallWrapper* call_wrapper_before(address return_pc) const = 0;
   virtual address call_instruction_address(address pc) const = 0;
-
-  virtual CompiledStaticCall* compiledStaticCall_at(Relocation* call_site) const = 0;
-  virtual CompiledStaticCall* compiledStaticCall_at(address addr) const = 0;
-  virtual CompiledStaticCall* compiledStaticCall_before(address addr) const = 0;
-
-  Method* attached_method(address call_pc);
-  Method* attached_method_before_pc(address pc);
 
   virtual void metadata_do(MetadataClosure* f) = 0;
 
@@ -397,17 +363,15 @@ public:
  protected:
   address oops_reloc_begin() const;
 
- private:
-  bool static clean_ic_if_metadata_is_dead(CompiledIC *ic);
-
  public:
   // GC unloading support
-  // Cleans unloaded klasses and unloaded nmethods in inline caches
-
   virtual bool is_unloading() = 0;
 
-  bool unload_nmethod_caches(bool class_unloading_occurred);
+  void unload_nmethod_caches(bool class_unloading_occurred);
   virtual void do_unloading(bool unloading_occurred) = 0;
+
+  void set_purge_list_next(CompiledMethod *cm) { _purge_list_next = cm; }
+  CompiledMethod* purge_list_next() const { return _purge_list_next; }
 
 private:
   PcDesc* find_pc_desc(address pc, bool approximate) {

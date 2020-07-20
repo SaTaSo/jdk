@@ -134,14 +134,12 @@ JVMState* DirectCallGenerator::generate(JVMState* jvms) {
   GraphKit kit(jvms);
   kit.C->print_inlining_update(this);
   bool is_static = method()->is_static();
-  address target = is_static ? SharedRuntime::get_resolve_static_call_stub()
-                             : SharedRuntime::get_resolve_opt_virtual_call_stub();
 
   if (kit.C->log() != NULL) {
     kit.C->log()->elem("direct_call bci='%d'", jvms->bci());
   }
 
-  CallStaticJavaNode *call = new CallStaticJavaNode(kit.C, tf(), target, method(), kit.bci());
+  CallStaticJavaNode *call = new CallStaticJavaNode(kit.C, tf(), method(), kit.bci());
   if (is_inlined_method_handle_intrinsic(jvms, method())) {
     // To be able to issue a direct call and skip a call to MH.linkTo*/invokeBasic adapter,
     // additional information about the method being invoked should be attached
@@ -198,6 +196,19 @@ JVMState* VirtualCallGenerator::generate(JVMState* jvms) {
     kit.C->log()->elem("virtual_call bci='%d'", jvms->bci());
   }
 
+  if (!method()->is_loaded()) {
+    assert(Bytecodes::is_invoke(kit.java_bc()), "%d: %s", kit.java_bc(), Bytecodes::name(kit.java_bc()));
+    ciMethod* declared_method = kit.method()->get_method_at_bci(kit.bci());
+    int arg_size = declared_method->signature()->arg_size_for_bc(kit.java_bc());
+    kit.inc_sp(arg_size);  // restore arguments
+    kit.uncommon_trap(Deoptimization::Reason_uninitialized,
+                      Deoptimization::Action_reinterpret,
+                      method()->holder());
+    return kit.transfer_exceptions_into_jvms();
+  }
+
+  ciMethod* declared_method = kit.method()->get_method_at_bci(kit.bci());
+
   // If the receiver is a constant null, do not torture the system
   // by attempting to call through it.  The compile will proceed
   // correctly, but may bail out in final_graph_reshaping, because
@@ -205,7 +216,6 @@ JVMState* VirtualCallGenerator::generate(JVMState* jvms) {
   // (The bailout says something misleading about an "infinite loop".)
   if (kit.gvn().type(receiver)->higher_equal(TypePtr::NULL_PTR)) {
     assert(Bytecodes::is_invoke(kit.java_bc()), "%d: %s", kit.java_bc(), Bytecodes::name(kit.java_bc()));
-    ciMethod* declared_method = kit.method()->get_method_at_bci(kit.bci());
     int arg_size = declared_method->signature()->arg_size_for_bc(kit.java_bc());
     kit.inc_sp(arg_size);  // restore arguments
     kit.uncommon_trap(Deoptimization::Reason_null_check,
@@ -220,7 +230,7 @@ JVMState* VirtualCallGenerator::generate(JVMState* jvms) {
   // Block::implicit_null_check() only looks for loads and stores, not calls.
   ciMethod *caller = kit.method();
   ciMethodData *caller_md = (caller == NULL) ? NULL : caller->method_data();
-  if (!UseInlineCaches || !ImplicitNullChecks || !os::zero_page_read_protected() ||
+  if (!ImplicitNullChecks || !os::zero_page_read_protected() ||
        ((ImplicitNullCheckThreshold > 0) && caller_md &&
        (caller_md->trap_count(Deoptimization::Reason_null_check)
        >= (uint)ImplicitNullCheckThreshold))) {
@@ -236,11 +246,8 @@ JVMState* VirtualCallGenerator::generate(JVMState* jvms) {
   assert(!method()->is_static(), "virtual call must not be to static");
   assert(!method()->is_final(), "virtual call should not be to final");
   assert(!method()->is_private(), "virtual call should not be to private");
-  assert(_vtable_index == Method::invalid_vtable_index || !UseInlineCaches,
-         "no vtable calls if +UseInlineCaches ");
-  address target = SharedRuntime::get_resolve_virtual_call_stub();
-  // Normal inline cache used for call
-  CallDynamicJavaNode *call = new CallDynamicJavaNode(tf(), target, method(), _vtable_index, kit.bci());
+
+  CallDynamicJavaNode *call = new CallDynamicJavaNode(tf(), method(), _vtable_index, kit.bci());
   if (is_inlined_method_handle_intrinsic(jvms, method())) {
     // To be able to issue a direct call (optimized virtual or virtual)
     // and skip a call to MH.linkTo*/invokeBasic adapter, additional information
@@ -249,7 +256,14 @@ JVMState* VirtualCallGenerator::generate(JVMState* jvms) {
     call->set_override_symbolic_info(true);
   }
   kit.set_arguments_for_java_call(call);
+
+  receiver = kit.null_check(receiver);
+  Node* klass_addr = kit.basic_plus_adr(receiver, receiver, oopDesc::klass_offset_in_bytes());
+  Node* klass = kit.gvn().transform(LoadKlassNode::make(kit.gvn(), NULL, kit.immutable_memory(), klass_addr, TypeInstPtr::KLASS, TypeKlassPtr::OBJECT));
+  call->init_req(TypeFunc::Parms + method()->arg_size(), klass);
+
   kit.set_edges_for_java_call(call);
+
   Node* ret = kit.set_results_for_java_call(call);
   kit.push_node(method()->return_type()->basic_type(), ret);
 

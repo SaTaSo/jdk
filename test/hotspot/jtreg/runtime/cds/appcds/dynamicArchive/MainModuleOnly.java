@@ -130,7 +130,7 @@ public class MainModuleOnly extends DynamicArchiveTestBase {
             "--module-path", moduleDir.toString(),
             MAIN_CLASS, "-m", TEST_MODULE1)
             .assertNormalExit(out ->
-                out.shouldMatch(".class.load. com.simple.Main source:.*com.simple.jar"));
+                out.shouldMatch(".class.load.*com.simple.Main source:.*com.simple.jar"));
 
         // run with the archive with exploded module. Since during dump time, we
         // only archive classes from the modular jar in the --module-path, the
@@ -141,7 +141,7 @@ public class MainModuleOnly extends DynamicArchiveTestBase {
             "--module-path", MODS_DIR.toString(),
             "-m", TEST_MODULE1 + "/" + MAIN_CLASS)
             .assertNormalExit(out -> {
-                out.shouldMatch(".class.load. com.simple.Main source:.*com.simple")
+                out.shouldMatch(".class.load . com.simple.Main source:.*com.simple")
                    .shouldContain(MODS_DIR.toString());
             });
 
@@ -157,7 +157,7 @@ public class MainModuleOnly extends DynamicArchiveTestBase {
             .assertSilentlyDisabledCDS(out -> {
                 out.shouldHaveExitValue(0)
                    .shouldMatch("CDS is disabled when the.*option is specified")
-                   .shouldMatch(".class.load. com.simple.Main source:.*com.simple.jar");
+                   .shouldMatch(".class.load.*com.simple.Main source:.*com.simple.jar");
             });
 
         boolean skippedTest = false;
@@ -174,7 +174,7 @@ public class MainModuleOnly extends DynamicArchiveTestBase {
                 .assertSilentlyDisabledCDS(out -> {
                     out.shouldHaveExitValue(0)
                        .shouldMatch("CDS is disabled when the.*option is specified")
-                       .shouldMatch(".class.load. com.simple.Main source:.*com.simple.jar");
+                       .shouldMatch(".class.load.*com.simple.Main source:.*com.simple.jar");
             });
         } else {
             skippedTest = true;
@@ -191,7 +191,7 @@ public class MainModuleOnly extends DynamicArchiveTestBase {
             .assertSilentlyDisabledCDS(out -> {
                 out.shouldHaveExitValue(0)
                    .shouldMatch("CDS is disabled when the.*option is specified")
-                   .shouldMatch(".class.load. com.simple.Main source:.*com.simple.jar");
+                   .shouldMatch(".class.load.*com.simple.Main source:.*com.simple.jar");
             });
         // modify the timestamp of the jar file
         (new File(destJar.toString())).setLastModified(System.currentTimeMillis() + 2000);

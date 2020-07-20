@@ -323,6 +323,8 @@ Thread::Thread() {
     // If the main thread creates other threads before the barrier set that is an error.
     assert(Thread::current_or_null() == NULL, "creating thread before barrier set");
   }
+
+  _nmethod_entry_data = 1;
 }
 
 void Thread::initialize_thread_current() {
@@ -1665,6 +1667,7 @@ void JavaThread::initialize() {
   set_deferred_locals(NULL);
   set_deopt_mark(NULL);
   set_deopt_compiled_method(NULL);
+  _compiled_method = NULL;
   set_monitor_chunks(NULL);
   _on_thread_list = false;
   _thread_state = _thread_new;
@@ -2971,12 +2974,27 @@ class RememberProcessedThread: public StackObj {
   }
 };
 
+void JavaThread::set_compiled_method(CompiledMethod* compiled_method) {
+  if (compiled_method != NULL) {
+    assert(_compiled_method == NULL, "overwriting existing compiled method");
+  }
+  _compiled_method = compiled_method;
+}
+
+CompiledMethod* JavaThread::compiled_method() const {
+  return _compiled_method;
+}
+
 void JavaThread::oops_do(OopClosure* f, CodeBlobClosure* cf) {
   // Verify that the deferred card marks have been flushed.
   assert(deferred_card_mark().is_empty(), "Should be empty during GC");
 
   // Traverse the GCHandles
   Thread::oops_do(f, cf);
+
+  if (_compiled_method != NULL && cf != NULL) {
+    cf->do_code_blob(_compiled_method);
+  }
 
   assert((!has_last_Java_frame() && java_call_counter() == 0) ||
          (has_last_Java_frame() && java_call_counter() > 0), "wrong java_sp info!");
@@ -3040,6 +3058,10 @@ void JavaThread::nmethods_do(CodeBlobClosure* cf) {
          (has_last_Java_frame() && java_call_counter() > 0),
          "unexpected frame info: has_last_frame=%d, java_call_counter=%d",
          has_last_Java_frame(), java_call_counter());
+
+  if (_compiled_method != NULL && cf != NULL) {
+    cf->do_code_blob(_compiled_method);
+  }
 
   if (has_last_Java_frame()) {
     // Traverse the execution stack
@@ -3522,27 +3544,6 @@ bool CompilerThread::can_call_java() const {
 // Create sweeper thread
 CodeCacheSweeperThread::CodeCacheSweeperThread()
 : JavaThread(&sweeper_thread_entry) {
-  _scanned_compiled_method = NULL;
-}
-
-void CodeCacheSweeperThread::oops_do(OopClosure* f, CodeBlobClosure* cf) {
-  JavaThread::oops_do(f, cf);
-  if (_scanned_compiled_method != NULL && cf != NULL) {
-    // Safepoints can occur when the sweeper is scanning an nmethod so
-    // process it here to make sure it isn't unloaded in the middle of
-    // a scan.
-    cf->do_code_blob(_scanned_compiled_method);
-  }
-}
-
-void CodeCacheSweeperThread::nmethods_do(CodeBlobClosure* cf) {
-  JavaThread::nmethods_do(cf);
-  if (_scanned_compiled_method != NULL && cf != NULL) {
-    // Safepoints can occur when the sweeper is scanning an nmethod so
-    // process it here to make sure it isn't unloaded in the middle of
-    // a scan.
-    cf->do_code_blob(_scanned_compiled_method);
-  }
 }
 
 
@@ -3765,7 +3766,6 @@ void Threads::initialize_jsr292_core_classes(TRAPS) {
   TraceTime timer("Initialize java.lang.invoke classes", TRACETIME_LOG(Info, startuptime));
 
   initialize_class(vmSymbols::java_lang_invoke_MethodHandle(), CHECK);
-  initialize_class(vmSymbols::java_lang_invoke_ResolvedMethodName(), CHECK);
   initialize_class(vmSymbols::java_lang_invoke_MemberName(), CHECK);
   initialize_class(vmSymbols::java_lang_invoke_MethodHandleNatives(), CHECK);
 }

@@ -34,7 +34,6 @@
 #include "interpreter/interpreter.hpp"
 #include "memory/universe.hpp"
 #include "nativeInst_s390.hpp"
-#include "oops/compiledICHolder.hpp"
 #include "oops/oop.inline.hpp"
 #include "prims/jvmtiExport.hpp"
 #include "register_s390.hpp"
@@ -65,7 +64,6 @@ int StubAssembler::call_RT(Register oop_result1, Register metadata_result, addre
   z_lgr(Z_ARG1, Z_thread);
 
   address return_pc = NULL;
-  align_call_far_patchable(this->pc());
   return_pc = call_c_opt(entry_point);
   assert(return_pc != NULL, "const section overflow");
 

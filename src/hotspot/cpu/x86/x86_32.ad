@@ -1335,41 +1335,6 @@ uint BoxLockNode::size(PhaseRegAlloc *ra_) const {
 }
 
 //=============================================================================
-#ifndef PRODUCT
-void MachUEPNode::format( PhaseRegAlloc *ra_, outputStream* st ) const {
-  st->print_cr(  "CMP    EAX,[ECX+4]\t# Inline cache check");
-  st->print_cr("\tJNE    SharedRuntime::handle_ic_miss_stub");
-  st->print_cr("\tNOP");
-  st->print_cr("\tNOP");
-  if( !OptoBreakpoint )
-    st->print_cr("\tNOP");
-}
-#endif
-
-void MachUEPNode::emit(CodeBuffer &cbuf, PhaseRegAlloc *ra_) const {
-  MacroAssembler masm(&cbuf);
-#ifdef ASSERT
-  uint insts_size = cbuf.insts_size();
-#endif
-  masm.cmpptr(rax, Address(rcx, oopDesc::klass_offset_in_bytes()));
-  masm.jump_cc(Assembler::notEqual,
-               RuntimeAddress(SharedRuntime::get_ic_miss_stub()));
-  /* WARNING these NOPs are critical so that verified entry point is properly
-     aligned for patching by NativeJump::patch_verified_entry() */
-  int nops_cnt = 2;
-  if( !OptoBreakpoint ) // Leave space for int3
-     nops_cnt += 1;
-  masm.nop(nops_cnt);
-
-  assert(cbuf.insts_size() - insts_size == size(ra_), "checking code size of inline cache node");
-}
-
-uint MachUEPNode::size(PhaseRegAlloc *ra_) const {
-  return OptoBreakpoint ? 11 : 12;
-}
-
-
-//=============================================================================
 
 int Matcher::regnum_to_fpu_offset(int regnum) {
   return regnum - 32; // The FP registers are in the second chunk
@@ -1909,7 +1874,7 @@ encode %{
 
   enc_class Java_Dynamic_Call (method meth) %{    // JAVA DYNAMIC CALL
     MacroAssembler _masm(&cbuf);
-    __ ic_call((address)$meth$$method, resolved_method_index(cbuf));
+    // TODO: insert call here
   %}
 
   enc_class Java_Compiled_Call (method meth) %{    // JAVA COMPILED CALL
@@ -1923,32 +1888,6 @@ encode %{
     emit_d8(cbuf, disp);             // Displacement
 
   %}
-
-//   Following encoding is no longer used, but may be restored if calling
-//   convention changes significantly.
-//   Became: Xor_Reg(EBP), Java_To_Runtime( labl )
-//
-//   enc_class Java_Interpreter_Call (label labl) %{    // JAVA INTERPRETER CALL
-//     // int ic_reg     = Matcher::inline_cache_reg();
-//     // int ic_encode  = Matcher::_regEncode[ic_reg];
-//     // int imo_reg    = Matcher::interpreter_method_oop_reg();
-//     // int imo_encode = Matcher::_regEncode[imo_reg];
-//
-//     // // Interpreter expects method_oop in EBX, currently a callee-saved register,
-//     // // so we load it immediately before the call
-//     // emit_opcode(cbuf, 0x8B);                     // MOV    imo_reg,ic_reg  # method_oop
-//     // emit_rm(cbuf, 0x03, imo_encode, ic_encode ); // R/M byte
-//
-//     // xor rbp,ebp
-//     emit_opcode(cbuf, 0x33);
-//     emit_rm(cbuf, 0x3, EBP_enc, EBP_enc);
-//
-//     // CALL to interpreter.
-//     cbuf.set_insts_mark();
-//     $$$emit8$primary;
-//     emit_d32_reloc(cbuf, ($labl$$label - (int)(cbuf.insts_end()) - 4),
-//                 runtime_call_Relocation::spec(), RELOC_IMM32 );
-//   %}
 
   enc_class RegOpcImm (rRegI dst, immI8 shift) %{    // SHL, SAR, SHR
     $$$emit8$primary;
@@ -3196,7 +3135,6 @@ frame %{
 
   // These three registers define part of the calling convention
   // between compiled code and the interpreter.
-  inline_cache_reg(EAX);                // Inline Cache Register
   interpreter_method_oop_reg(EBX);      // Method Oop Register when calling interpreter
 
   // Optional: name the operand used by cisc-spilling to access [stack_pointer + offset]

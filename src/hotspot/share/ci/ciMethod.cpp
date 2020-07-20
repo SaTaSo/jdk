@@ -1197,7 +1197,7 @@ int ciMethod::instructions_size() {
     GUARDED_VM_ENTRY(
                      CompiledMethod* code = get_Method()->code();
                      if (code != NULL && (code->comp_level() == CompLevel_full_optimization)) {
-                       _instructions_size = code->insts_end() - code->verified_entry_point();
+                       _instructions_size = code->insts_end() - code->entry_point();
                      } else {
                        _instructions_size = 0;
                      }

@@ -71,9 +71,6 @@ class fieldDescriptor;
 class klassVtable;
 class ModuleEntry;
 class PackageEntry;
-class ParCompactionManager;
-class PSPromotionManager;
-class vtableEntry;
 
 class Klass : public Metadata {
   friend class VMStructs;
@@ -114,6 +111,7 @@ class Klass : public Metadata {
   // because it is frequently queried.
   jint        _layout_helper;
 
+protected:
   // Klass identifier used to implement devirtualized oop closure dispatching.
   const KlassID _id;
 
@@ -191,7 +189,7 @@ protected:
   Klass(KlassID id);
   Klass() : _id(KlassID(-1)) { assert(DumpSharedSpaces || UseSharedSpaces, "only for cds"); }
 
-  void* operator new(size_t size, ClassLoaderData* loader_data, size_t word_size, TRAPS) throw();
+  void* operator new(size_t size, ClassLoaderData* loader_data, size_t word_size, size_t prefix_word_size, TRAPS) throw();
 
  public:
   int id() { return _id; }
@@ -346,7 +344,6 @@ protected:
   static ByteSize secondary_super_cache_offset() { return in_ByteSize(offset_of(Klass, _secondary_super_cache)); }
   static ByteSize secondary_supers_offset()      { return in_ByteSize(offset_of(Klass, _secondary_supers)); }
   static ByteSize java_mirror_offset()           { return in_ByteSize(offset_of(Klass, _java_mirror)); }
-  static ByteSize class_loader_data_offset()     { return in_ByteSize(offset_of(Klass, _class_loader_data)); }
   static ByteSize modifier_flags_offset()        { return in_ByteSize(offset_of(Klass, _modifier_flags)); }
   static ByteSize layout_helper_offset()         { return in_ByteSize(offset_of(Klass, _layout_helper)); }
   static ByteSize access_flags_offset()          { return in_ByteSize(offset_of(Klass, _access_flags)); }
@@ -516,14 +513,15 @@ protected:
   // Error handling when length > max_length or length < 0
   static void check_array_allocation_length(int length, int max_length, TRAPS);
 
-  void set_vtable_length(int len) { _vtable_len= len; }
+  void set_vtable_length(int len) {
+    assert(len > 0, "sanity");
+    _vtable_len = len;
+  }
 
-  vtableEntry* start_of_vtable() const;
-  void restore_unshareable_info(ClassLoaderData* loader_data, Handle protection_domain, TRAPS);
  public:
   Method* method_at_vtable(int index);
 
-  static ByteSize vtable_start_offset();
+  static ptrdiff_t vtable_start_offset();
   static ByteSize vtable_length_offset() {
     return byte_offset_of(Klass, _vtable_len);
   }
@@ -715,6 +713,8 @@ protected:
 
   // for error reporting
   static bool is_valid(Klass* k);
+
+  void restore_unshareable_info(ClassLoaderData* loader_data, Handle protection_domain, TRAPS);
 };
 
 #endif // SHARE_OOPS_KLASS_HPP

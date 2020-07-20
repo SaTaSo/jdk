@@ -575,6 +575,7 @@ void ClassLoaderDataGraph::purge() {
     Metaspace::purge();
     set_metaspace_oom(false);
   }
+  SystemDictionary::purge_method_selector_map();
   DependencyContext::purge_dependency_contexts();
 }
 

@@ -30,8 +30,8 @@
 #include "classfile/systemDictionary.hpp"
 #include "classfile/vmSymbols.hpp"
 #include "code/codeCache.hpp"
-#include "code/icBuffer.hpp"
-#include "code/vtableStubs.hpp"
+
+
 #include "interpreter/interpreter.hpp"
 #include "memory/allocation.inline.hpp"
 #include "nativeInst_ppc.hpp"
@@ -332,8 +332,6 @@ JVM_handle_aix_signal(int sig, siginfo_t* info, void* ucVoid, int abort_if_unrec
       //   The ppc trap instruction raises a SIGTRAP and is very efficient if it
       //   does not trap. It is used for conditional branches that are expected
       //   to be never taken. These are:
-      //     - zombie methods
-      //     - IC (inline cache) misses.
       //     - null checks leading to UncommonTraps.
       //     - range checks leading to Uncommon Traps.
       //   On Aix, these are especially null checks, as the ImplicitNullCheck
@@ -363,16 +361,6 @@ JVM_handle_aix_signal(int sig, siginfo_t* info, void* ucVoid, int abort_if_unrec
         goto report_and_die;
       }
 
-      int stop_type = -1;
-      // Handle signal from NativeJump::patch_verified_entry().
-      if (sig == SIGILL && nativeInstruction_at(pc)->is_sigill_zombie_not_entrant()) {
-        if (TraceTraps) {
-          tty->print_cr("trap: zombie_not_entrant");
-        }
-        stub = SharedRuntime::get_handle_wrong_method_stub();
-        goto run_stub;
-      }
-
       else if (USE_POLL_BIT_ONLY
                ? (sig == SIGTRAP && ((NativeInstruction*)pc)->is_safepoint_poll())
                : (sig == SIGSEGV && SafepointMechanism::is_poll_address(addr))) {
@@ -381,16 +369,6 @@ JVM_handle_aix_signal(int sig, siginfo_t* info, void* ucVoid, int abort_if_unrec
                         USE_POLL_BIT_ONLY ? "SIGTRAP" : "SIGSEGV");
         }
         stub = SharedRuntime::get_poll_stub(pc);
-        goto run_stub;
-      }
-
-      // SIGTRAP-based ic miss check in compiled code.
-      else if (sig == SIGTRAP && TrapBasedICMissChecks &&
-               nativeInstruction_at(pc)->is_sigtrap_ic_miss_check()) {
-        if (TraceTraps) {
-          tty->print_cr("trap: ic_miss_check at " INTPTR_FORMAT " (SIGTRAP)", pc);
-        }
-        stub = SharedRuntime::get_ic_miss_stub();
         goto run_stub;
       }
 

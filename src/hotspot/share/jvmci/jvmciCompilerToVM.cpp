@@ -371,12 +371,13 @@ C2V_VMENTRY_NULL(jobject, getResolvedJavaMethod, (JNIEnv* env, jobject, jobject 
   if (base_object.is_null()) {
     method = *((Method**)(offset));
   } else if (JVMCIENV->isa_HotSpotObjectConstantImpl(base_object)) {
-    Handle obj = JVMCIENV->asConstant(base_object, JVMCI_CHECK_NULL);
-    if (obj->is_a(SystemDictionary::ResolvedMethodName_klass())) {
-      method = (Method*) (intptr_t) obj->long_field(offset);
-    } else {
-      JVMCI_THROW_MSG_NULL(IllegalArgumentException, err_msg("Unexpected type: %s", obj->klass()->external_name()));
-    }
+    // TODO: find out what this graal stuff is doing
+    //Handle obj = JVMCIENV->asConstant(base_object, JVMCI_CHECK_NULL);
+    //if (obj->is_a(SystemDictionary::ResolvedMethodName_klass())) {
+    //  method = (Method*) (intptr_t) obj->long_field(offset);
+    //} else {
+    //  JVMCI_THROW_MSG_NULL(IllegalArgumentException, err_msg("Unexpected type: %s", obj->klass()->external_name()));
+    //}
   } else if (JVMCIENV->isa_HotSpotResolvedJavaMethodImpl(base_object)) {
     method = JVMCIENV->asMethod(base_object);
   }
@@ -975,8 +976,7 @@ C2V_VMENTRY_NULL(jobject, disassembleCodeBlob, (JNIEnv* env, jobject, jobject in
   }
 
   JVMCIObject installedCodeObject = JVMCIENV->wrap(installedCode);
-  nmethodLocker locker;
-  CodeBlob* cb = JVMCIENV->get_code_blob(installedCodeObject, locker);
+  CodeBlob* cb = JVMCIENV->get_code_blob(installedCodeObject);
   if (cb == NULL) {
     return NULL;
   }
@@ -1021,9 +1021,8 @@ C2V_VMENTRY_NULL(jobject, executeHotSpotNmethod, (JNIEnv* env, jobject, jobject 
   HandleMark hm;
 
   JVMCIObject nmethod_mirror = JVMCIENV->wrap(hs_nmethod);
-  nmethodLocker locker;
-  nmethod* nm = JVMCIENV->get_nmethod(nmethod_mirror, locker);
-  if (nm == NULL || !nm->is_in_use()) {
+  nmethod* nm = JVMCIENV->get_nmethod(nmethod_mirror);
+  if (nm == NULL) {
     JVMCI_THROW_NULL(InvalidInstalledCodeException);
   }
   methodHandle mh(THREAD, nm->method());
@@ -2451,8 +2450,7 @@ C2V_VMENTRY_0(jlong, translate, (JNIEnv* env, jobject, jobject obj_handle))
     Handle constant = thisEnv->asConstant(obj, JVMCI_CHECK_0);
     result = peerEnv->get_object_constant(constant());
   } else if (thisEnv->isa_HotSpotNmethod(obj)) {
-    nmethodLocker locker;
-    nmethod* nm = JVMCIENV->get_nmethod(obj, locker);
+    nmethod* nm = JVMCIENV->get_nmethod(obj);
     if (nm != NULL) {
       JVMCINMethodData* data = nm->jvmci_nmethod_data();
       if (data != NULL) {
@@ -2517,14 +2515,12 @@ C2V_VMENTRY_NULL(jobject, unhand, (JNIEnv* env, jobject, jlong obj_handle))
 C2V_VMENTRY(void, updateHotSpotNmethod, (JNIEnv* env, jobject, jobject code_handle))
   JVMCIObject code = JVMCIENV->wrap(code_handle);
   // Execute this operation for the side effect of updating the InstalledCode state
-  nmethodLocker locker;
-  JVMCIENV->get_nmethod(code, locker);
+  JVMCIENV->get_nmethod(code);
 }
 
 C2V_VMENTRY_NULL(jbyteArray, getCode, (JNIEnv* env, jobject, jobject code_handle))
   JVMCIObject code = JVMCIENV->wrap(code_handle);
-  nmethodLocker locker;
-  CodeBlob* cb = JVMCIENV->get_code_blob(code, locker);
+  CodeBlob* cb = JVMCIENV->get_code_blob(code);
   if (cb == NULL) {
     return NULL;
   }

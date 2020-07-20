@@ -5404,9 +5404,6 @@ void ClassFileParser::fill_instance_klass(InstanceKlass* ik,
   _transitive_interfaces = NULL;
   _local_interfaces = NULL;
 
-  // Initialize itable offset tables
-  klassItable::setup_itable_offset_table(ik);
-
   // Compute transitive closure of interfaces this class implements
   // Do final class setup
   OopMapBlocksBuilder* oop_map_blocks = _field_info->oop_map_blocks;
@@ -5638,6 +5635,8 @@ ClassFileParser::ClassFileParser(ClassFileStream* stream,
   _all_mirandas(NULL),
   _vtable_size(0),
   _itable_size(0),
+  _itable_seed(os::random()),
+  _selector_itable_blob(NULL),
   _num_miranda_methods(0),
   _rt(REF_NONE),
   _protection_domain(cl_info->protection_domain()),
@@ -6197,9 +6196,7 @@ void ClassFileParser::post_process_parsed_stream(const ClassFileStream* const st
                                                     _local_interfaces,
                                                     CHECK);
 
-  // Size of Java itable (in words)
-  _itable_size = _access_flags.is_interface() ? 0 :
-    klassItable::compute_itable_size(_transitive_interfaces);
+  compute_itable_size();
 
   assert(_fac != NULL, "invariant");
   assert(_parsed_annotations != NULL, "invariant");
@@ -6211,7 +6208,16 @@ void ClassFileParser::post_process_parsed_stream(const ClassFileStream* const st
 
   // Compute reference typ
   _rt = (NULL ==_super_klass) ? REF_NONE : _super_klass->reference_type();
+}
 
+void ClassFileParser::compute_itable_size() {
+  // Size of Java itable (in words)
+  if (_access_flags.is_interface() || _access_flags.is_abstract()) {
+    _itable_size = 0;
+    return;
+  }
+
+  _itable_size = klassItable::compute_itable_size_words(_itable_seed, _transitive_interfaces);
 }
 
 void ClassFileParser::set_klass(InstanceKlass* klass) {

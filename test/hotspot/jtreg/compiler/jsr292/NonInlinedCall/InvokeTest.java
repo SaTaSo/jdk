@@ -200,8 +200,6 @@ public class InvokeTest {
         r.run();
         doDeopt = false;
 
-        WB.clearInlineCaches();
-
         for (int i = 0; i < 20_000; i++) {
             r.run();
         }

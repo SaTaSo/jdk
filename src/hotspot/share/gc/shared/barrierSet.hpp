@@ -98,12 +98,7 @@ protected:
              BarrierSetC1* barrier_set_c1,
              BarrierSetC2* barrier_set_c2,
              BarrierSetNMethod* barrier_set_nmethod,
-             const FakeRtti& fake_rtti) :
-    _fake_rtti(fake_rtti),
-    _barrier_set_assembler(barrier_set_assembler),
-    _barrier_set_c1(barrier_set_c1),
-    _barrier_set_c2(barrier_set_c2),
-    _barrier_set_nmethod(barrier_set_nmethod) {}
+             const FakeRtti& fake_rtti);
   ~BarrierSet() { }
 
   template <class BarrierSetAssemblerT>
@@ -119,6 +114,11 @@ protected:
   template <class BarrierSetC2T>
   static BarrierSetC2* make_barrier_set_c2() {
     return COMPILER2_PRESENT(new BarrierSetC2T()) NOT_COMPILER2(NULL);
+  }
+
+  template <class BarrierSetNMethodT>
+  static BarrierSetNMethod* make_barrier_set_nmethod() {
+    return COMPILER2_PRESENT(new BarrierSetNMethodT()) NOT_COMPILER1(NULL);
   }
 
 public:

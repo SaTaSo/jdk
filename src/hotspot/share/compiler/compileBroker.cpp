@@ -262,7 +262,9 @@ CompileTaskWrapper::~CompileTaskWrapper() {
   CompileLog*  log  = thread->log();
   if (log != NULL && !task->is_unloaded())  task->log_task_done(log);
   thread->set_task(NULL);
-  task->set_code_handle(NULL);
+  if (task->code() != NULL) {
+    task->set_code(NULL);
+  }
   thread->set_env(NULL);
   if (task->is_blocking()) {
     bool free_task = false;
@@ -1677,7 +1679,7 @@ void CompileBroker::wait_for_completion(CompileTask* task) {
     // It is harmless to check this status without the lock, because
     // completion is a stable property (until the task object is recycled).
     assert(task->is_complete(), "Compilation should have completed");
-    assert(task->code_handle() == NULL, "must be reset");
+    assert(task->code() == NULL, "must be reset");
 
     // By convention, the waiter is responsible for recycling a
     // blocking CompileTask. Since there is only one waiter ever
@@ -1888,8 +1890,6 @@ void CompileBroker::compiler_thread_loop() {
       // CompileTaskWrapper also keeps the Method* from being deallocated if redefinition
       // occurs after fetching the compile task off the queue.
       CompileTaskWrapper ctw(task);
-      nmethodLocker result_handle;  // (handle for the nmethod produced by this task)
-      task->set_code_handle(&result_handle);
       methodHandle method(thread, task->method());
 
       // Never compile a method if breakpoints are present in it
@@ -2461,7 +2461,8 @@ void CompileBroker::collect_statistics(CompilerThread* thread, elapsedTimer time
   nmethod* code = task->code();
   CompilerCounters* counters = thread->counters();
 
-  assert(code == NULL || code->is_locked_by_vm(), "will survive the MutexLocker");
+  assert(code == NULL || thread->compiled_method() == code,
+         "will survive the MutexLocker");
   MutexLocker locker(CompileStatistics_lock);
 
   // _perf variables are production performance counters which are
@@ -2782,17 +2783,18 @@ void CompileBroker::print_heapinfo(outputStream* out, const char* function, size
     print_info(out);
   }
 
-  // We hold the CodeHeapStateAnalytics_lock all the time, from here until we leave this function.
-  // That prevents another thread from destroying our view on the CodeHeap.
+  // We hold the Compile_lock all the time, from here until we leave this function.
+  // That prevents another thread from destroying our view on the CodeHeap. It also makes
+  // sure that nmethods are installed when traversed by the analytics.
   // When we request individual parts of the analysis via the jcmd interface, it is possible
   // that in between another thread (another jcmd user or the vm running into CodeCache OOM)
   // updated the aggregated data. That's a tolerable tradeoff because we can't hold a lock
   // across user interaction.
   // Acquire this lock before acquiring the CodeCache_lock.
-  // CodeHeapStateAnalytics_lock could be held by a concurrent thread for a long time,
+  // Compile_lock could be held by a concurrent thread for a long time,
   // leading to an unnecessarily long hold time of the CodeCache_lock.
   ts.update(); // record starting point
-  MutexLocker mu1(CodeHeapStateAnalytics_lock, Mutex::_no_safepoint_check_flag);
+  MutexLocker mu1(Compile_lock);
   out->print_cr("\n__ CodeHeapStateAnalytics lock wait took %10.3f seconds _________\n", ts.seconds());
 
   // If we serve an "allFun" call, it is beneficial to hold the CodeCache_lock

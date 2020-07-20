@@ -134,7 +134,7 @@ void BarrierSetNMethod::deoptimize(nmethod* nm, address* return_address_ptr) {
     ResourceMark mark;
     log_trace(nmethod, barrier)("deoptimize(nmethod: %p, return_addr: %p, osr: %d, thread: %p(%s), making rsp: %p) -> %p",
                                nm, (address *) return_address_ptr, nm->is_osr_method(), jth,
-                               jth->get_thread_name(), callers_rsp, nm->verified_entry_point());
+                               jth->get_thread_name(), callers_rsp, nm->entry_point());
   }
 
   assert(nm->frame_size() >= 3, "invariant");
@@ -149,7 +149,7 @@ void BarrierSetNMethod::deoptimize(nmethod* nm, address* return_address_ptr) {
   // In the slot that used to be the callers rbp we put the address that our stub needs to jump to at the end.
   // Overwriting the caller rbp should be okay since our stub rbp has the same value.
   address* jmp_addr_ptr = callers_rbp;
-  *jmp_addr_ptr = SharedRuntime::get_handle_wrong_method_stub();
+  *jmp_addr_ptr = SharedRuntime::get_bad_call_stub();
 }
 
 // This is the offset of the entry barrier from where the frame is completed.
@@ -167,13 +167,28 @@ static NativeNMethodCmpBarrier* native_nmethod_barrier(nmethod* nm) {
   return barrier;
 }
 
-void BarrierSetNMethod::disarm(nmethod* nm) {
+void BarrierSetNMethod::arm(nmethod* nm) {
   if (!supports_entry_barrier(nm)) {
     return;
   }
 
   NativeNMethodCmpBarrier* cmp = native_nmethod_barrier(nm);
-  cmp->set_immediate(disarmed_value());
+  cmp->set_immediate(0xFFFFFFFF);
+}
+
+void BarrierSetNMethod::disarm(nmethod* nm) {
+  if (!supports_entry_barrier(nm)) {
+    return;
+  }
+
+  bool in_use = nm->is_in_use();
+  NativeNMethodCmpBarrier* cmp = native_nmethod_barrier(nm);
+  MutexLocker ml(CompiledMethod_lock, Mutex::_no_safepoint_check_flag);
+  if (in_use) {
+    cmp->set_immediate(disarmed_value());
+  } else {
+    cmp->set_immediate(0xFFFFFFFF);
+  }
 }
 
 bool BarrierSetNMethod::is_armed(nmethod* nm) {

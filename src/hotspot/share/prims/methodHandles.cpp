@@ -226,22 +226,22 @@ oop MethodHandles::init_method_MemberName(Handle mname, CallInfo& info, TRAPS) {
   assert(info.resolved_appendix().is_null(), "only normal methods here");
   methodHandle m(Thread::current(), info.resolved_method());
   assert(m.not_null(), "null method handle");
-  InstanceKlass* m_klass = m->method_holder();
+  Klass* m_klass = info.resolved_klass();
   assert(m_klass != NULL, "null holder for method handle");
   int flags = (jushort)( m->access_flags().as_short() & JVM_RECOGNIZED_METHOD_MODIFIERS );
-  int vmindex = Method::invalid_vtable_index;
+  intptr_t vmindex = Method::invalid_vtable_index;
   LogTarget(Debug, methodhandles, indy) lt_indy;
 
   switch (info.call_kind()) {
   case CallInfo::itable_call:
-    vmindex = info.itable_index();
+    vmindex = info.itable_selector();
     // More importantly, the itable index only works with the method holder.
-    assert(m_klass->verify_itable_index(vmindex), "");
+    //assert(m_klass->verify_itable_index(vmindex), "");
     flags |= IS_METHOD | (JVM_REF_invokeInterface << REFERENCE_KIND_SHIFT);
     if (lt_indy.is_enabled()) {
       ResourceMark rm;
       LogStream ls(lt_indy);
-      ls.print_cr("memberName: invokeinterface method_holder::method: %s, itableindex: %d, access_flags:",
+      ls.print_cr("memberName: invokeinterface method_holder::method: %s, itableindex: " INTPTR_FORMAT ", access_flags:",
                   Method::name_and_sig_as_C_string(m->method_holder(), m->name(), m->signature()),
                   vmindex);
        m->access_flags().print_on(&ls);
@@ -273,7 +273,7 @@ oop MethodHandles::init_method_MemberName(Handle mname, CallInfo& info, TRAPS) {
         { ResourceMark rm;
           Method* m2 = m_klass_non_interface->vtable().method_at(vmindex);
           assert(m->name() == m2->name() && m->signature() == m2->signature(),
-                 "at %d, %s != %s", vmindex,
+                 "at " INTPTR_FORMAT ", %s != %s", vmindex,
                  m->name_and_sig_as_C_string(), m2->name_and_sig_as_C_string());
         }
 #endif //ASSERT
@@ -288,7 +288,7 @@ oop MethodHandles::init_method_MemberName(Handle mname, CallInfo& info, TRAPS) {
     if (lt_indy.is_enabled()) {
       ResourceMark rm;
       LogStream ls(lt_indy);
-      ls.print_cr("memberName: invokevirtual method_holder::method: %s, receiver: %s, vtableindex: %d, access_flags:",
+      ls.print_cr("memberName: invokevirtual method_holder::method: %s, receiver: %s, vtableindex: " INTPTR_FORMAT ", access_flags:",
                   Method::name_and_sig_as_C_string(m->method_holder(), m->name(), m->signature()),
                   m_klass->internal_name(), vmindex);
        m->access_flags().print_on(&ls);
@@ -321,13 +321,9 @@ oop MethodHandles::init_method_MemberName(Handle mname, CallInfo& info, TRAPS) {
     flags |= CALLER_SENSITIVE;
   }
 
-  Handle resolved_method = info.resolved_method_name();
-  assert(java_lang_invoke_ResolvedMethodName::vmtarget(resolved_method()) == m() || m->is_old(),
-         "Should not change after link resolution");
-
   oop mname_oop = mname();
   java_lang_invoke_MemberName::set_flags  (mname_oop, flags);
-  java_lang_invoke_MemberName::set_method (mname_oop, resolved_method());
+  java_lang_invoke_MemberName::set_method (mname_oop, m->selector());
   java_lang_invoke_MemberName::set_vmindex(mname_oop, vmindex);   // vtable/itable index
   java_lang_invoke_MemberName::set_clazz  (mname_oop, m_klass->java_mirror());
   // Note:  name and type can be lazily computed by resolve_MemberName,
@@ -348,7 +344,7 @@ oop MethodHandles::init_field_MemberName(Handle mname, fieldDescriptor& fd, bool
 
   oop mname_oop = mname();
   java_lang_invoke_MemberName::set_flags  (mname_oop, flags);
-  java_lang_invoke_MemberName::set_method (mname_oop, NULL);
+  java_lang_invoke_MemberName::set_method (mname_oop, 0);
   java_lang_invoke_MemberName::set_vmindex(mname_oop, vmindex);
   java_lang_invoke_MemberName::set_clazz  (mname_oop, ik->java_mirror());
 
@@ -787,7 +783,6 @@ Handle MethodHandles::resolve_MemberName(Handle mname, Klass* caller,
         // Caller is responsible to prevent this from happening.
         THROW_MSG_(vmSymbols::java_lang_InternalError(), "appendix", empty);
       }
-      result.set_resolved_method_name(CHECK_(empty));
       oop mname2 = init_method_MemberName(mname, result, THREAD);
       return Handle(THREAD, mname2);
     }
@@ -810,7 +805,6 @@ Handle MethodHandles::resolve_MemberName(Handle mname, Klass* caller,
         }
       }
       assert(result.is_statically_bound(), "");
-      result.set_resolved_method_name(CHECK_(empty));
       oop mname2 = init_method_MemberName(mname, result, THREAD);
       return Handle(THREAD, mname2);
     }

@@ -25,6 +25,7 @@
 #ifndef SHARE_CODE_OOPRECORDER_HPP
 #define SHARE_CODE_OOPRECORDER_HPP
 
+#include "code/lazyInvocation.hpp"
 #include "runtime/handles.hpp"
 #include "utilities/growableArray.hpp"
 
@@ -177,11 +178,14 @@ class ObjectLookup : public ResourceObj {
 
 class OopRecorder : public ResourceObj {
  private:
-  ValueRecorder<jobject>      _oops;
-  ValueRecorder<Metadata*>    _metadata;
-  ObjectLookup*               _object_lookup;
+  ValueRecorder<jobject>        _oops;
+  ValueRecorder<Metadata*>      _metadata;
+  ObjectLookup*                 _object_lookup;
  public:
-  OopRecorder(Arena* arena = NULL, bool deduplicate = false): _oops(arena), _metadata(arena) {
+  OopRecorder(Arena* arena = NULL, bool deduplicate = false)
+    : _oops(arena),
+      _metadata(arena)
+  {
     if (deduplicate) {
       _object_lookup = new ObjectLookup();
     } else {

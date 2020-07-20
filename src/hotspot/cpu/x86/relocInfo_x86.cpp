@@ -40,6 +40,7 @@ void Relocation::pd_set_data_value(address x, intptr_t o, bool verify_only) {
   typedef Assembler::WhichOperand WhichOperand;
   WhichOperand which = (WhichOperand) format(); // that is, disp32 or imm, call32, narrow oop
   assert(which == Assembler::disp32_operand ||
+         which == Assembler::call32_operand ||
          which == Assembler::narrow_oop_operand ||
          which == Assembler::imm_operand, "format unpacks ok");
   if (which == Assembler::imm_operand) {

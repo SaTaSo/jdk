@@ -26,12 +26,9 @@
 #include "asm/assembler.hpp"
 #include "assembler_arm.inline.hpp"
 #include "code/debugInfoRec.hpp"
-#include "code/icBuffer.hpp"
-#include "code/vtableStubs.hpp"
 #include "interpreter/interpreter.hpp"
 #include "logging/log.hpp"
 #include "memory/resourceArea.hpp"
-#include "oops/compiledICHolder.hpp"
 #include "oops/klass.inline.hpp"
 #include "runtime/sharedRuntime.hpp"
 #include "runtime/safepointMechanism.hpp"
@@ -449,27 +446,6 @@ int SharedRuntime::java_calling_convention(const BasicType *sig_bt,
   return slot;
 }
 
-static void patch_callers_callsite(MacroAssembler *masm) {
-  Label skip;
-
-  __ ldr(Rtemp, Address(Rmethod, Method::code_offset()));
-  __ cbz(Rtemp, skip);
-
-  // Pushing an even number of registers for stack alignment.
-  // Selecting R9, which had to be saved anyway for some platforms.
-  __ push(RegisterSet(R0, R3) | R9 | LR);
-  __ fpush_hardfp(FloatRegisterSet(D0, 8));
-
-  __ mov(R0, Rmethod);
-  __ mov(R1, LR);
-  __ call(CAST_FROM_FN_PTR(address, SharedRuntime::fixup_callers_callsite));
-
-  __ fpop_hardfp(FloatRegisterSet(D0, 8));
-  __ pop(RegisterSet(R0, R3) | R9 | LR);
-
-  __ bind(skip);
-}
-
 void SharedRuntime::gen_i2c_adapter(MacroAssembler *masm,
                                     int total_args_passed, int comp_args_on_stack,
                                     const BasicType *sig_bt, const VMRegPair *regs) {
@@ -562,9 +538,6 @@ static void gen_c2i_adapter(MacroAssembler *masm,
   // TODO: ARM - May be can use stm to deoptimize arguments
   const Register tmp = Rtemp;
 
-  patch_callers_callsite(masm);
-  __ bind(skip_fixup);
-
   __ mov(Rsender_sp, SP); // not yet saved
 
 
@@ -628,20 +601,6 @@ AdapterHandlerEntry* SharedRuntime::generate_i2c2i_adapters(MacroAssembler *masm
   gen_i2c_adapter(masm, total_args_passed, comp_args_on_stack, sig_bt, regs);
 
   address c2i_unverified_entry = __ pc();
-  Label skip_fixup;
-  const Register receiver       = R0;
-  const Register holder_klass   = Rtemp; // XXX should be OK for C2 but not 100% sure
-  const Register receiver_klass = R4;
-
-  __ load_klass(receiver_klass, receiver);
-  __ ldr(holder_klass, Address(Ricklass, CompiledICHolder::holder_klass_offset()));
-  __ ldr(Rmethod, Address(Ricklass, CompiledICHolder::holder_metadata_offset()));
-  __ cmp(receiver_klass, holder_klass);
-
-  __ ldr(Rtemp, Address(Rmethod, Method::code_offset()), eq);
-  __ cmp(Rtemp, 0, eq);
-  __ b(skip_fixup, eq);
-  __ jump(SharedRuntime::get_ic_miss_stub(), relocInfo::runtime_call_type, noreg, ne);
 
   address c2i_entry = __ pc();
   gen_c2i_adapter(masm, total_args_passed, comp_args_on_stack, sig_bt, regs, skip_fixup);
@@ -828,19 +787,8 @@ nmethod* SharedRuntime::generate_native_wrapper(MacroAssembler* masm,
 
   // Unverified entry point
   address start = __ pc();
+  // TODO: put new entries here
 
-  // Inline cache check, same as in C1_MacroAssembler::inline_cache_check()
-  const Register receiver = R0; // see receiverOpr()
-  __ load_klass(Rtemp, receiver);
-  __ cmp(Rtemp, Ricklass);
-  Label verified;
-
-  __ b(verified, eq); // jump over alignment no-ops too
-  __ jump(SharedRuntime::get_ic_miss_stub(), relocInfo::runtime_call_type, Rtemp);
-  __ align(CodeEntryAlignment);
-
-  // Verified entry point
-  __ bind(verified);
   int vep_offset = __ pc() - start;
 
 

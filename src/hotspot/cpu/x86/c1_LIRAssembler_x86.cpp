@@ -32,7 +32,9 @@
 #include "c1/c1_ValueStack.hpp"
 #include "ci/ciArrayKlass.hpp"
 #include "ci/ciInstance.hpp"
+#include "classfile/verifier.hpp"
 #include "gc/shared/collectedHeap.hpp"
+#include "logging/log.hpp"
 #include "nativeInst_x86.hpp"
 #include "oops/objArrayKlass.hpp"
 #include "runtime/frame.inline.hpp"
@@ -329,28 +331,6 @@ void LIR_Assembler::osr_entry() {
   }
 }
 
-
-// inline cache check; done before the frame is built.
-int LIR_Assembler::check_icache() {
-  Register receiver = FrameMap::receiver_opr->as_register();
-  Register ic_klass = IC_Klass;
-  const int ic_cmp_size = LP64_ONLY(10) NOT_LP64(9);
-  const bool do_post_padding = VerifyOops || UseCompressedClassPointers;
-  if (!do_post_padding) {
-    // insert some nops so that the verified entry point is aligned on CodeEntryAlignment
-    __ align(CodeEntryAlignment, __ offset() + ic_cmp_size);
-  }
-  int offset = __ offset();
-  __ inline_cache_check(receiver, IC_Klass);
-  assert(__ offset() % CodeEntryAlignment == 0 || do_post_padding, "alignment must be correct");
-  if (do_post_padding) {
-    // force alignment after the cache check.
-    // It's been verified to be aligned if !VerifyOops
-    __ align(CodeEntryAlignment);
-  }
-  return offset;
-}
-
 void LIR_Assembler::clinit_barrier(ciMethod* method) {
   assert(VM_Version::supports_fast_class_init_checks(), "sanity");
   assert(!method->holder()->is_not_initialized(), "initialization should have been started");
@@ -363,7 +343,7 @@ void LIR_Assembler::clinit_barrier(ciMethod* method) {
   __ mov_metadata(klass, method->holder()->constant_encoding());
   __ clinit_barrier(klass, thread, &L_skip_barrier /*L_fast_path*/);
 
-  __ jump(RuntimeAddress(SharedRuntime::get_handle_wrong_method_stub()));
+  __ jump(RuntimeAddress(SharedRuntime::get_bad_call_stub()));
 
   __ bind(L_skip_barrier);
 }
@@ -2873,81 +2853,60 @@ void LIR_Assembler::comp_fl2i(LIR_Code code, LIR_Opr left, LIR_Opr right, LIR_Op
   }
 }
 
-
-void LIR_Assembler::align_call(LIR_Code code) {
-  // make sure that the displacement word of the call ends up word aligned
-  int offset = __ offset();
-  switch (code) {
-  case lir_static_call:
-  case lir_optvirtual_call:
-  case lir_dynamic_call:
-    offset += NativeCall::displacement_offset;
-    break;
-  case lir_icvirtual_call:
-    offset += NativeCall::displacement_offset + NativeMovConstReg::instruction_size;
-    break;
-  case lir_virtual_call:  // currently, sparc-specific for niagara
-  default: ShouldNotReachHere();
+void LIR_Assembler::direct_call(LIR_OpJavaCall* op) {
+  if (op->receiver() != LIR_OprFact::illegalOpr) {
+    add_debug_info_for_null_check_here(op->info_for_exception());
+    __ null_check(op->receiver()->as_register());
   }
-  __ align(BytesPerWord, offset);
-}
+  if (!op->method()->is_loaded()) {
+    LazyInvocation* lazy = Compilation::current()->create_lazy_invocation(LazyInvocation::direct_call);
+    __ compiled_lazy_call(lazy);
+    lazy->set_pc_offset(code_offset());
+  } else {
+    __ compiled_direct_call(op->method());
+  }
 
-
-void LIR_Assembler::call(LIR_OpJavaCall* op, relocInfo::relocType rtype) {
-  assert((__ offset() + NativeCall::displacement_offset) % BytesPerWord == 0,
-         "must be aligned");
-  __ call(AddressLiteral(op->addr(), rtype));
   add_call_info(code_offset(), op->info());
 }
 
-
-void LIR_Assembler::ic_call(LIR_OpJavaCall* op) {
-  __ ic_call(op->addr());
-  add_call_info(code_offset(), op->info());
-  assert((__ offset() - NativeCall::instruction_size + NativeCall::displacement_offset) % BytesPerWord == 0,
-         "must be aligned");
-}
-
-
-/* Currently, vtable-dispatch is only enabled for sparc platforms */
 void LIR_Assembler::vtable_call(LIR_OpJavaCall* op) {
-  ShouldNotReachHere();
-}
+  int vtable_index = op->vtable_index();
 
-
-void LIR_Assembler::emit_static_call_stub() {
-  address call_pc = __ pc();
-  address stub = __ start_a_stub(call_stub_size());
-  if (stub == NULL) {
-    bailout("static call stub overflow");
-    return;
+  add_debug_info_for_null_check_here(op->info_for_exception());
+  __ load_klass(r11, op->receiver()->as_register(), rax);
+  if (vtable_index < 0) {
+    LazyInvocation* lazy = Compilation::current()->create_lazy_invocation(LazyInvocation::vtable_call);
+    __ compiled_lazy_call(lazy);
+    lazy->set_pc_offset(code_offset());
+  } else {
+    __ compiled_vtable_call(vtable_index);
   }
 
-  int start = __ offset();
-
-  // make sure that the displacement word of the call ends up word aligned
-  __ align(BytesPerWord, __ offset() + NativeMovConstReg::instruction_size + NativeCall::displacement_offset);
-  __ relocate(static_stub_Relocation::spec(call_pc, false /* is_aot */));
-  __ mov_metadata(rbx, (Metadata*)NULL);
-  // must be set to -1 at code generation time
-  assert(((__ offset() + 1) % BytesPerWord) == 0, "must be aligned");
-  // On 64bit this will die since it will take a movq & jmp, must be only a jmp
-  __ jump(RuntimeAddress(__ pc()));
-
-  if (UseAOT) {
-    // Trampoline to aot code
-    __ relocate(static_stub_Relocation::spec(call_pc, true /* is_aot */));
-#ifdef _LP64
-    __ mov64(rax, CONST64(0));  // address is zapped till fixup time.
-#else
-    __ movl(rax, 0xdeadffff);  // address is zapped till fixup time.
-#endif
-    __ jmp(rax);
-  }
-  assert(__ offset() - start <= call_stub_size(), "stub too big");
-  __ end_a_stub();
+  add_call_info(code_offset(), op->info());
 }
 
+void LIR_Assembler::itable_call(LIR_OpJavaCall* op) {
+  ciMethod* method = op->method();
+  uint32_t selector = 0;
+  add_debug_info_for_null_check_here(op->info_for_exception());
+  __ load_klass(r11, op->receiver()->as_register(), rax);
+  if (!method->is_loaded() || !op->refc()->is_loaded()) {
+    LazyInvocation* lazy = Compilation::current()->create_lazy_invocation(LazyInvocation::itable_call);
+    __ compiled_lazy_call(lazy);
+    lazy->set_pc_offset(code_offset());
+  } else {
+    selector = method->get_Method()->selector();
+    __ movl(rax, (int)selector);
+    Register rrefc = noreg;
+    if (!Verifier::interfaces_are_sane()) {
+      rrefc = rbx;
+      __ mov_metadata(rrefc, op->refc()->constant_encoding());
+    }
+    __ compiled_itable_call(rax, rrefc, method);
+  }
+
+  add_call_info(code_offset(), op->info());
+}
 
 void LIR_Assembler::throw_op(LIR_Opr exceptionPC, LIR_Opr exceptionOop, CodeEmitInfo* info) {
   assert(exceptionOop->as_register() == rax, "must match");

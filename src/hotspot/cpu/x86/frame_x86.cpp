@@ -169,7 +169,7 @@ bool frame::safe_for_sender(JavaThread *thread) {
     }
 
     // Could be a zombie method
-    if (sender_blob->is_zombie() || sender_blob->is_unloaded()) {
+    if (!sender_blob->is_alive()) {
       return false;
     }
 

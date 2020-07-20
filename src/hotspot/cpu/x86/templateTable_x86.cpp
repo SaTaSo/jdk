@@ -2800,7 +2800,7 @@ void TemplateTable::load_field_cp_cache_entry(Register obj,
 
 void TemplateTable::load_invoke_cp_cache_entry(int byte_no,
                                                Register method,
-                                               Register itable_index,
+                                               Register itable_selector,
                                                Register flags,
                                                bool is_invokevirtual,
                                                bool is_invokevfinal, /*unused*/
@@ -2810,8 +2810,8 @@ void TemplateTable::load_invoke_cp_cache_entry(int byte_no,
   const Register index = rdx;
   assert_different_registers(method, flags);
   assert_different_registers(method, cache, index);
-  assert_different_registers(itable_index, flags);
-  assert_different_registers(itable_index, cache, index);
+  assert_different_registers(itable_selector, flags);
+  assert_different_registers(itable_selector, cache, index);
   // determine constant pool cache field offsets
   assert(is_invokevirtual == (byte_no == f2_byte), "is_invokevirtual flag redundant");
   const int flags_offset = in_bytes(ConstantPoolCache::base_offset() +
@@ -2824,9 +2824,9 @@ void TemplateTable::load_invoke_cp_cache_entry(int byte_no,
   resolve_cache_and_index(byte_no, cache, index, index_size);
   __ load_resolved_method_at_index(byte_no, method, cache, index);
 
-  if (itable_index != noreg) {
+  if (itable_selector != noreg) {
     // pick up itable or appendix index from f2 also:
-    __ movptr(itable_index, Address(cache, index, Address::times_ptr, index_offset));
+    __ movptr(itable_selector, Address(cache, index, Address::times_ptr, index_offset));
   }
   __ movl(flags, Address(cache, index, Address::times_ptr, flags_offset));
 }
@@ -3747,7 +3747,7 @@ void TemplateTable::invokevirtual_helper(Register index,
   // profile this call
   __ profile_virtual_call(rax, rlocals, rdx);
   // get target Method* & entry point
-  __ lookup_virtual_method(rax, index, method);
+  __ lookup_virtual_method(method, rax, rscratch1, rscratch2);
 
   __ profile_arguments_type(rdx, method, rbcp, true);
   __ jump_from_interpreted(method, rdx);
@@ -3758,7 +3758,7 @@ void TemplateTable::invokevirtual(int byte_no) {
   assert(byte_no == f2_byte, "use this argument");
   prepare_invoke(byte_no,
                  rbx,    // method or vtable index
-                 noreg,  // unused itable index
+                 noreg,  // unused itable selector
                  rcx, rdx); // recv, flags
 
   // rbx: index
@@ -3798,7 +3798,6 @@ void TemplateTable::fast_invokevfinal(int byte_no) {
   __ stop("fast_invokevfinal not used on x86");
 }
 
-
 void TemplateTable::invokeinterface(int byte_no) {
   transition(vtos, vtos);
   assert(byte_no == f1_byte, "use this argument");
@@ -3826,19 +3825,13 @@ void TemplateTable::invokeinterface(int byte_no) {
   Label no_such_interface; // for receiver subtype check
   Register recvKlass; // used for exception processing
 
-  // Check for private method invocation - indicated by vfinal
-  Label notVFinal;
-  __ movl(rlocals, rdx);
-  __ andl(rlocals, (1 << ConstantPoolCacheEntry::is_vfinal_shift));
-  __ jcc(Assembler::zero, notVFinal);
-
   // Get receiver klass into rlocals - also a null check
   __ null_check(rcx, oopDesc::klass_offset_in_bytes());
   Register tmp_load_klass = LP64_ONLY(rscratch1) NOT_LP64(noreg);
   __ load_klass(rlocals, rcx, tmp_load_klass);
 
   Label subtype;
-  __ check_klass_subtype(rlocals, rax, rbcp, subtype);
+  __ check_klass_subtype(rlocals, rax, rscratch2, subtype);
   // If we get here the typecheck failed
   recvKlass = rdx;
   __ mov(recvKlass, rlocals); // shuffle receiver class for exception use
@@ -3846,10 +3839,16 @@ void TemplateTable::invokeinterface(int byte_no) {
 
   __ bind(subtype);
 
+  // Check for private method invocation - indicated by vfinal
+  Label notVFinal;
+  __ movl(rlocals, rdx);
+  __ andl(rlocals, (1 << ConstantPoolCacheEntry::is_vfinal_shift));
+  __ jcc(Assembler::zero, notVFinal);
+
   // do the call - rbx is actually the method to call
 
   __ profile_final_call(rdx);
-  __ profile_arguments_type(rdx, rbx, rbcp, true);
+  __ profile_arguments_type(rdx, rbx, rscratch2, true);
 
   __ jump_from_interpreted(rbx, rdx);
   // no return from above
@@ -3864,32 +3863,18 @@ void TemplateTable::invokeinterface(int byte_no) {
 
   // Preserve method for throw_AbstractMethodErrorVerbose.
   __ mov(rcx, rbx);
-  // Receiver subtype check against REFC.
-  // Superklass in rax. Subklass in rdx. Blows rcx, rdi.
-  __ lookup_interface_method(// inputs: rec. class, interface, itable index
-                             rdx, rax, noreg,
-                             // outputs: scan temp. reg, scan temp. reg
-                             rbcp, rlocals,
-                             no_such_interface,
-                             /*return_method=*/false);
 
   // profile this call
-  __ restore_bcp(); // rbcp was destroyed by receiver type check
-  __ profile_virtual_call(rdx, rbcp, rlocals);
+  __ profile_virtual_call(rdx, rscratch2, rlocals);
 
-  // Get declaring interface class from method, and itable index
-  __ load_method_holder(rax, rbx);
-  __ movl(rbx, Address(rbx, Method::itable_index_offset()));
-  __ subl(rbx, Method::itable_index_max);
-  __ negl(rbx);
+  // Get declaring interface method selector
+  __ movl(rbx, Address(rcx, Method::selector_offset()));
 
   // Preserve recvKlass for throw_AbstractMethodErrorVerbose.
   __ mov(rlocals, rdx);
-  __ lookup_interface_method(// inputs: rec. class, interface, itable index
-                             rlocals, rax, rbx,
-                             // outputs: method, scan temp. reg
-                             rbx, rbcp,
-                             no_such_interface);
+  __ lookup_interface_method(// inputs: itable selector, rec. class
+                             rbx, rlocals,
+                             rscratch2, rax);
 
   // rbx: Method* to call
   // rcx: receiver

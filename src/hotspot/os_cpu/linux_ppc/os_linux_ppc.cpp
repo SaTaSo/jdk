@@ -30,8 +30,8 @@
 #include "classfile/systemDictionary.hpp"
 #include "classfile/vmSymbols.hpp"
 #include "code/codeCache.hpp"
-#include "code/icBuffer.hpp"
-#include "code/vtableStubs.hpp"
+
+
 #include "interpreter/interpreter.hpp"
 #include "memory/allocation.inline.hpp"
 #include "nativeInst_ppc.hpp"
@@ -399,16 +399,7 @@ JVM_handle_linux_signal(int sig,
       }
 
       CodeBlob *cb = NULL;
-      int stop_type = -1;
-      // Handle signal from NativeJump::patch_verified_entry().
-      if (sig == SIGILL && nativeInstruction_at(pc)->is_sigill_zombie_not_entrant()) {
-        if (TraceTraps) {
-          tty->print_cr("trap: zombie_not_entrant");
-        }
-        stub = SharedRuntime::get_handle_wrong_method_stub();
-      }
-
-      else if ((sig == USE_POLL_BIT_ONLY ? SIGTRAP : SIGSEGV) &&
+      else if (sig == (USE_POLL_BIT_ONLY ? SIGTRAP : SIGSEGV) &&
                // A linux-ppc64 kernel before 2.6.6 doesn't set si_addr on some segfaults
                // in 64bit mode (cf. http://www.kernel.org/pub/linux/kernel/v2.6/ChangeLog-2.6.6),
                // especially when we try to read from the safepoint polling page. So the check
@@ -423,15 +414,6 @@ JVM_handle_linux_signal(int sig,
                         USE_POLL_BIT_ONLY ? "SIGTRAP" : "SIGSEGV");
         }
         stub = SharedRuntime::get_poll_stub(pc);
-      }
-
-      // SIGTRAP-based ic miss check in compiled code.
-      else if (sig == SIGTRAP && TrapBasedICMissChecks &&
-               nativeInstruction_at(pc)->is_sigtrap_ic_miss_check()) {
-        if (TraceTraps) {
-          tty->print_cr("trap: ic_miss_check at " INTPTR_FORMAT " (SIGTRAP)", p2i(pc));
-        }
-        stub = SharedRuntime::get_ic_miss_stub();
       }
 
       // SIGTRAP-based implicit null check in compiled code.

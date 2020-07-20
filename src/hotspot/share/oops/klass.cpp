@@ -191,8 +191,8 @@ Method* Klass::uncached_lookup_method(const Symbol* name, const Symbol* signatur
   return NULL;
 }
 
-void* Klass::operator new(size_t size, ClassLoaderData* loader_data, size_t word_size, TRAPS) throw() {
-  return Metaspace::allocate(loader_data, word_size, MetaspaceObj::ClassType, THREAD);
+void* Klass::operator new(size_t size, ClassLoaderData* loader_data, size_t word_size, size_t prefix_word_size, TRAPS) throw() {
+  return Metaspace::allocate(loader_data, word_size, MetaspaceObj::ClassType, THREAD) + prefix_word_size;
 }
 
 // "Normal" instantiation is preceeded by a MetaspaceObj allocation
@@ -467,7 +467,7 @@ void Klass::clean_subklass() {
 }
 
 void Klass::clean_weak_klass_links(bool unloading_occurred, bool clean_alive_klasses) {
-  if (!ClassUnloading || !unloading_occurred) {
+  if (!ClassUnloading) {
     return;
   }
 
@@ -524,11 +524,6 @@ void Klass::metaspace_pointers_do(MetaspaceClosure* it) {
   it->push((Klass**)&_subklass);
   it->push((Klass**)&_next_sibling);
   it->push(&_next_link);
-
-  vtableEntry* vt = start_of_vtable();
-  for (int i=0; i<vtable_length(); i++) {
-    it->push(vt[i].method_addr());
-  }
 }
 
 void Klass::remove_unshareable_info() {
@@ -847,6 +842,14 @@ bool Klass::is_valid(Klass* k) {
   return ClassLoaderDataGraph::is_valid(k->class_loader_data());
 }
 
+klassVtable Klass::vtable() const {
+  return klassVtable(const_cast<Klass*>(this));
+}
+
+ptrdiff_t Klass::vtable_start_offset() {
+  return -(ptrdiff_t)sizeof(tableEntry) * 2;
+}
+
 Method* Klass::method_at_vtable(int index)  {
 #ifndef PRODUCT
   assert(index >= 0, "valid vtable index");
@@ -854,14 +857,14 @@ Method* Klass::method_at_vtable(int index)  {
     verify_vtable_index(index);
   }
 #endif
-  return start_of_vtable()[index].method();
+  return klassVtable(this).unchecked_method_at(index);
 }
 
 
 #ifndef PRODUCT
 
 bool Klass::verify_vtable_index(int i) {
-  int limit = vtable_length()/vtableEntry::size();
+  int limit = vtable_length() / (sizeof(tableEntry) / wordSize) - 1;
   assert(i >= 0 && i < limit, "index %d out of bounds %d", i, limit);
   return true;
 }

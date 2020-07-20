@@ -71,14 +71,14 @@ void CallInfo::set_static(Klass* resolved_klass, const methodHandle& resolved_me
 void CallInfo::set_interface(Klass* resolved_klass,
                              const methodHandle& resolved_method,
                              const methodHandle& selected_method,
-                             int itable_index, TRAPS) {
+                             uint32_t itable_selector, TRAPS) {
   // This is only called for interface methods. If the resolved_method
   // comes from java/lang/Object, it can be the subject of a virtual call, so
   // we should pick the vtable index from the resolved method.
   // In that case, the caller must call set_virtual instead of set_interface.
   assert(resolved_method->method_holder()->is_interface(), "");
-  assert(itable_index == resolved_method()->itable_index(), "");
-  set_common(resolved_klass, resolved_method, selected_method, CallInfo::itable_call, itable_index, CHECK);
+  assert(itable_selector == resolved_method()->selector(), "");
+  set_common(resolved_klass, resolved_method, selected_method, CallInfo::itable_call, itable_selector, CHECK);
 }
 
 void CallInfo::set_virtual(Klass* resolved_klass,
@@ -171,22 +171,14 @@ CallInfo::CallInfo(Method* resolved_method, Klass* resolved_klass, TRAPS) {
   } else {
     // A regular interface call.
     kind = CallInfo::itable_call;
-    index = resolved_method->itable_index();
+    index = resolved_method->selector();
   }
   assert(index == Method::nonvirtual_vtable_index || index >= 0, "bad index %d", index);
   _call_kind  = kind;
   _call_index = index;
   _resolved_appendix = Handle();
-  // Find or create a ResolvedMethod instance for this Method*
-  set_resolved_method_name(CHECK);
 
   DEBUG_ONLY(verify());
-}
-
-void CallInfo::set_resolved_method_name(TRAPS) {
-  assert(_resolved_method() != NULL, "Should already have a Method*");
-  oop rmethod_name = java_lang_invoke_ResolvedMethodName::find_resolved_method(_resolved_method, CHECK);
-  _resolved_method_name = Handle(THREAD, rmethod_name);
 }
 
 #ifdef ASSERT
@@ -199,7 +191,7 @@ void CallInfo::verify() {
     assert(resolved_klass()->verify_vtable_index(_call_index), "");
     break;
   case CallInfo::itable_call:
-    assert(resolved_method()->method_holder()->verify_itable_index(_call_index), "");
+    //assert(resolved_method()->method_holder()->verify_itable_index(_call_index), "");
     break;
   case CallInfo::unknown_kind:
     assert(call_kind() != CallInfo::unknown_kind, "CallInfo must be set");
@@ -1519,9 +1511,9 @@ void LinkResolver::runtime_resolve_interface_method(CallInfo& result,
     assert(vtable_index == selected_method->vtable_index(), "sanity check");
     result.set_virtual(resolved_klass, resolved_method, selected_method, vtable_index, CHECK);
   } else if (resolved_method->has_itable_index()) {
-    int itable_index = resolved_method()->itable_index();
-    log_develop_trace(itables)("  -- itable index: %d", itable_index);
-    result.set_interface(resolved_klass, resolved_method, selected_method, itable_index, CHECK);
+    uint32_t itable_selector = resolved_method()->selector();
+    log_develop_trace(itables)("  -- itable index: %d", itable_selector);
+    result.set_interface(resolved_klass, resolved_method, selected_method, itable_selector, CHECK);
   } else {
     int index = resolved_method->vtable_index();
     log_develop_trace(itables)("  -- non itable/vtable index: %d", index);

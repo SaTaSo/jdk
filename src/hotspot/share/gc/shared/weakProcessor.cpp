@@ -33,7 +33,6 @@
 #include "gc/shared/weakProcessorPhaseTimes.hpp"
 #include "memory/allocation.inline.hpp"
 #include "memory/iterator.hpp"
-#include "prims/resolvedMethodTable.hpp"
 #include "runtime/globals.hpp"
 #include "utilities/macros.hpp"
 

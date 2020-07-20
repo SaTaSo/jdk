@@ -146,14 +146,6 @@ public class RedefineTest {
             }
         }
 
-        WB.clearInlineCaches();
-
-        for (int i = 0; i < 20_000; i++) {
-            if (invokeExact() != exp) {
-                throw new Error();
-            }
-        }
-
         // WB.ensureCompiled();
     }
 

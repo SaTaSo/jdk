@@ -336,8 +336,9 @@ void ConstantPoolCacheEntry::set_vtable_call(Bytecodes::Code invoke_code, const 
 
 void ConstantPoolCacheEntry::set_itable_call(Bytecodes::Code invoke_code,
                                              Klass* referenced_klass,
-                                             const methodHandle& method, int index) {
-  assert(method->method_holder()->verify_itable_index(index), "");
+                                             const methodHandle& method) {
+  // TODO: insert reasonable verification code
+  //assert(method->method_holder()->verify_itable_index(index), "");
   assert(invoke_code == Bytecodes::_invokeinterface, "");
   InstanceKlass* interf = method->method_holder();
   assert(interf->is_interface(), "must be an interface");
@@ -669,7 +670,7 @@ ConstantPoolCache* ConstantPoolCache::allocate(ClassLoaderData* loader_data,
   const int length = index_map.length() + invokedynamic_index_map.length();
   int size = ConstantPoolCache::size(length);
 
-  return new (loader_data, size, MetaspaceObj::ConstantPoolCacheType, THREAD)
+  return new (loader_data, size, 0, MetaspaceObj::ConstantPoolCacheType, THREAD)
     ConstantPoolCache(length, index_map, invokedynamic_index_map, invokedynamic_map);
 }
 

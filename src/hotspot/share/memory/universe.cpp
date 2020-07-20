@@ -31,7 +31,6 @@
 #include "classfile/symbolTable.hpp"
 #include "classfile/systemDictionary.hpp"
 #include "classfile/vmSymbols.hpp"
-#include "code/codeBehaviours.hpp"
 #include "code/codeCache.hpp"
 #include "code/dependencies.hpp"
 #include "gc/shared/collectedHeap.inline.hpp"
@@ -62,7 +61,6 @@
 #include "oops/oop.inline.hpp"
 #include "oops/oopHandle.inline.hpp"
 #include "oops/typeArrayKlass.hpp"
-#include "prims/resolvedMethodTable.hpp"
 #include "runtime/arguments.hpp"
 #include "runtime/atomic.hpp"
 #include "runtime/deoptimization.hpp"
@@ -128,6 +126,7 @@ LatestMethodCache* Universe::_finalizer_register_cache = NULL;
 LatestMethodCache* Universe::_loader_addClass_cache    = NULL;
 LatestMethodCache* Universe::_throw_illegal_access_error_cache = NULL;
 LatestMethodCache* Universe::_throw_no_such_method_error_cache = NULL;
+LatestMethodCache* Universe::_throw_abstract_method_error_cache = NULL;
 LatestMethodCache* Universe::_do_stack_walk_cache     = NULL;
 
 bool Universe::_verify_in_progress                    = false;
@@ -150,7 +149,7 @@ int             Universe::_verify_count = 0;
 uintptr_t       Universe::_verify_oop_mask = 0;
 uintptr_t       Universe::_verify_oop_bits = (uintptr_t) -1;
 
-int             Universe::_base_vtable_size = 0;
+int             Universe::_base_vtable_size = 6;
 bool            Universe::_bootstrapping = false;
 bool            Universe::_module_initialized = false;
 bool            Universe::_fully_initialized = false;
@@ -250,6 +249,7 @@ void Universe::metaspace_pointers_do(MetaspaceClosure* it) {
   _loader_addClass_cache->metaspace_pointers_do(it);
   _throw_illegal_access_error_cache->metaspace_pointers_do(it);
   _throw_no_such_method_error_cache->metaspace_pointers_do(it);
+  _throw_abstract_method_error_cache->metaspace_pointers_do(it);
   _do_stack_walk_cache->metaspace_pointers_do(it);
 }
 
@@ -293,6 +293,7 @@ void Universe::serialize(SerializeClosure* f) {
   _loader_addClass_cache->serialize(f);
   _throw_illegal_access_error_cache->serialize(f);
   _throw_no_such_method_error_cache->serialize(f);
+  _throw_abstract_method_error_cache->serialize(f);
   _do_stack_walk_cache->serialize(f);
 }
 
@@ -331,9 +332,6 @@ void Universe::genesis(TRAPS) {
     { MutexLocker mc(THREAD, Compile_lock);
 
       java_lang_Class::allocate_fixup_lists();
-
-      // determine base vtable size; without that we cannot create the array klasses
-      compute_base_vtable_size();
 
       if (!UseSharedSpaces) {
         for (int i = T_BOOLEAN; i < T_LONG+1; i++) {
@@ -736,10 +734,6 @@ void* Universe::non_oop_word() {
   return (void*)_non_oop_bits;
 }
 
-static void initialize_global_behaviours() {
-  CompiledICProtectionBehaviour::set_current(new DefaultICProtectionBehaviour());
-}
-
 jint universe_init() {
   assert(!Universe::_fully_initialized, "called after initialize_vtables");
   guarantee(1 << LogHeapWordSize == sizeof(HeapWord),
@@ -749,8 +743,6 @@ jint universe_init() {
             "oop size is not not a multiple of HeapWord size");
 
   TraceTime timer("Genesis", TRACETIME_LOG(Info, startuptime));
-
-  initialize_global_behaviours();
 
   GCLogPrecious::initialize();
 
@@ -786,6 +778,7 @@ jint universe_init() {
   Universe::_loader_addClass_cache    = new LatestMethodCache();
   Universe::_throw_illegal_access_error_cache = new LatestMethodCache();
   Universe::_throw_no_such_method_error_cache = new LatestMethodCache();
+  Universe::_throw_abstract_method_error_cache = new LatestMethodCache();
   Universe::_do_stack_walk_cache = new LatestMethodCache();
 
 #if INCLUDE_CDS
@@ -813,8 +806,6 @@ jint universe_init() {
   if (strlen(VerifySubSet) > 0) {
     Universe::initialize_verify_flags();
   }
-
-  ResolvedMethodTable::create_table();
 
   return JNI_OK;
 }
@@ -944,6 +935,11 @@ void Universe::initialize_known_methods(TRAPS) {
                           "throwNoSuchMethodError",
                           vmSymbols::void_method_signature(), true, CHECK);
 
+  initialize_known_method(_throw_abstract_method_error_cache,
+                          SystemDictionary::internal_Unsafe_klass(),
+                          "throwAbstractMethodError",
+                          vmSymbols::void_method_signature(), true, CHECK);
+
   // Set up method for registering loaded classes in class loader vector
   initialize_known_method(_loader_addClass_cache,
                           SystemDictionary::ClassLoader_klass(),
@@ -1039,11 +1035,6 @@ bool universe_post_init() {
   return true;
 }
 
-
-void Universe::compute_base_vtable_size() {
-  _base_vtable_size = ClassLoader::compute_Object_vtable();
-}
-
 void Universe::print_on(outputStream* st) {
   GCMutexLocker hl(Heap_lock); // Heap_lock might be locked by caller thread.
   st->print_cr("Heap");
@@ -1109,8 +1100,6 @@ void Universe::initialize_verify_flags() {
       verify_flags |= Verify_JNIHandles;
     } else if (strcmp(token, "codecache_oops") == 0) {
       verify_flags |= Verify_CodeCacheOops;
-    } else if (strcmp(token, "resolved_method_table") == 0) {
-      verify_flags |= Verify_ResolvedMethodTable;
     } else {
       vm_exit_during_initialization(err_msg("VerifySubSet: \'%s\' memory sub-system is unknown, please correct it", token));
     }
@@ -1187,10 +1176,6 @@ void Universe::verify(VerifyOption option, const char* prefix) {
   if (should_verify_subset(Verify_CodeCacheOops)) {
     log_debug(gc, verify)("CodeCache Oops");
     CodeCache::verify_oops();
-  }
-  if (should_verify_subset(Verify_ResolvedMethodTable)) {
-    log_debug(gc, verify)("ResolvedMethodTable Oops");
-    ResolvedMethodTable::verify();
   }
 
   _verify_in_progress = false;

@@ -96,7 +96,6 @@ class Runtime1: public AllStatic {
 #ifndef PRODUCT
   static int _resolve_invoke_cnt;
   static int _handle_wrong_method_cnt;
-  static int _ic_miss_cnt;
   static int _generic_arraycopy_cnt;
   static int _generic_arraycopystub_cnt;
   static int _arraycopy_slowcase_cnt;

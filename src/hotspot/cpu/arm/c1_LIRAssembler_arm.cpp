@@ -159,17 +159,6 @@ void LIR_Assembler::osr_entry() {
 }
 
 
-int LIR_Assembler::check_icache() {
-  Register receiver = LIR_Assembler::receiverOpr()->as_register();
-  int offset = __ offset();
-  __ inline_cache_check(receiver, Ricklass);
-  return offset;
-}
-
-void LIR_Assembler::clinit_barrier(ciMethod* method) {
-  ShouldNotReachHere(); // not implemented
-}
-
 void LIR_Assembler::jobject2reg_with_patching(Register reg, CodeEmitInfo* info) {
   jobject o = (jobject)Universe::non_oop_word();
   int index = __ oop_recorder()->allocate_oop_index(o);
@@ -1887,99 +1876,15 @@ void LIR_Assembler::comp_fl2i(LIR_Code code, LIR_Opr left, LIR_Opr right, LIR_Op
 }
 
 
-void LIR_Assembler::align_call(LIR_Code code) {
-  // Not needed
-}
-
-
 void LIR_Assembler::call(LIR_OpJavaCall *op, relocInfo::relocType rtype) {
   int ret_addr_offset = __ patchable_call(op->addr(), rtype);
   assert(ret_addr_offset == __ offset(), "embedded return address not allowed");
   add_call_info_here(op->info());
 }
 
-
-void LIR_Assembler::ic_call(LIR_OpJavaCall *op) {
-  bool near_range = __ cache_fully_reachable();
-  address oop_address = pc();
-
-  bool use_movw = VM_Version::supports_movw();
-
-  // Ricklass may contain something that is not a metadata pointer so
-  // mov_metadata can't be used
-  InlinedAddress value((address)Universe::non_oop_word());
-  InlinedAddress addr(op->addr());
-  if (use_movw) {
-    __ movw(Ricklass, ((unsigned int)Universe::non_oop_word()) & 0xffff);
-    __ movt(Ricklass, ((unsigned int)Universe::non_oop_word()) >> 16);
-  } else {
-    // No movw/movt, must be load a pc relative value but no
-    // relocation so no metadata table to load from.
-    // Use a b instruction rather than a bl, inline constant after the
-    // branch, use a PC relative ldr to load the constant, arrange for
-    // the call to return after the constant(s).
-    __ ldr_literal(Ricklass, value);
-  }
-  __ relocate(virtual_call_Relocation::spec(oop_address));
-  if (near_range && use_movw) {
-    __ bl(op->addr());
-  } else {
-    Label call_return;
-    __ adr(LR, call_return);
-    if (near_range) {
-      __ b(op->addr());
-    } else {
-      __ indirect_jump(addr, Rtemp);
-      __ bind_literal(addr);
-    }
-    if (!use_movw) {
-      __ bind_literal(value);
-    }
-    __ bind(call_return);
-  }
-  add_call_info(code_offset(), op->info());
-}
-
-
 /* Currently, vtable-dispatch is only enabled for sparc platforms */
 void LIR_Assembler::vtable_call(LIR_OpJavaCall* op) {
   ShouldNotReachHere();
-}
-
-void LIR_Assembler::emit_static_call_stub() {
-  address call_pc = __ pc();
-  address stub = __ start_a_stub(call_stub_size());
-  if (stub == NULL) {
-    BAILOUT("static call stub overflow");
-  }
-
-  DEBUG_ONLY(int offset = code_offset();)
-
-  InlinedMetadata metadata_literal(NULL);
-  __ relocate(static_stub_Relocation::spec(call_pc));
-  // If not a single instruction, NativeMovConstReg::next_instruction_address()
-  // must jump over the whole following ldr_literal.
-  // (See CompiledStaticCall::set_to_interpreted())
-#ifdef ASSERT
-  address ldr_site = __ pc();
-#endif
-  __ ldr_literal(Rmethod, metadata_literal);
-  assert(nativeMovConstReg_at(ldr_site)->next_instruction_address() == __ pc(), "Fix ldr_literal or its parsing");
-  bool near_range = __ cache_fully_reachable();
-  InlinedAddress dest((address)-1);
-  if (near_range) {
-    address branch_site = __ pc();
-    __ b(branch_site); // b to self maps to special NativeJump -1 destination
-  } else {
-    __ indirect_jump(dest, Rtemp);
-  }
-  __ bind_literal(metadata_literal); // includes spec_for_immediate reloc
-  if (!near_range) {
-    __ bind_literal(dest); // special NativeJump -1 destination
-  }
-
-  assert(code_offset() - offset <= call_stub_size(), "overflow");
-  __ end_a_stub();
 }
 
 void LIR_Assembler::throw_op(LIR_Opr exceptionPC, LIR_Opr exceptionOop, CodeEmitInfo* info) {

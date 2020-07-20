@@ -102,6 +102,7 @@
   template(JVMCIResizeCounters)                   \
   template(ClassLoaderStatsOperation)             \
   template(ClassLoaderHierarchyOperation)         \
+  template(DeoptimizeInvokeinterfaceVMOperation)  \
   template(DumpHashtable)                         \
   template(DumpTouchedMethods)                    \
   template(PrintCompileQueue)                     \
@@ -189,15 +190,6 @@ class VM_Cleanup: public VM_Operation {
  public:
   VMOp_Type type() const { return VMOp_Cleanup; }
   void doit() {};
-};
-
-class VM_ClearICs: public VM_Operation {
- private:
-  bool _preserve_static_stubs;
- public:
-  VM_ClearICs(bool preserve_static_stubs) { _preserve_static_stubs = preserve_static_stubs; }
-  void doit();
-  VMOp_Type type() const { return VMOp_ClearICs; }
 };
 
 // empty vm op, evaluated just to force a safepoint

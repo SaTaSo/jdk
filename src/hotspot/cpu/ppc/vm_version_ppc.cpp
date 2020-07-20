@@ -101,10 +101,8 @@ void VM_Version::initialize() {
   }
 
   if (!UseSIGTRAP) {
-    MSG(TrapBasedICMissChecks);
     MSG(TrapBasedNullChecks);
     FLAG_SET_ERGO(TrapBasedNullChecks,       false);
-    FLAG_SET_ERGO(TrapBasedICMissChecks,     false);
   }
 
 #ifdef COMPILER2

@@ -147,11 +147,16 @@ class Thread: public ThreadShadow {
   // Thread local data area available to the GC. The internal
   // structure and contents of this data area is GC-specific.
   // Only GC and GC barrier code should access this data area.
+  int               _nmethod_entry_data;
   GCThreadLocalData _gc_data;
 
  public:
   static ByteSize gc_data_offset() {
     return byte_offset_of(Thread, _gc_data);
+  }
+
+  static ByteSize nmethod_entry_data_offset() {
+    return byte_offset_of(Thread, _nmethod_entry_data);
   }
 
   template <typename T> T* gc_data() {
@@ -1069,6 +1074,14 @@ class JavaThread: public Thread {
 
   Method*       _callee_target;
 
+  // Context information used when defining an unsafe anonymous class.
+  InstanceKlass* _unsafe_anonymous_def;
+
+ public:
+  InstanceKlass* unsafe_anonymous_def() const { return _unsafe_anonymous_def; }
+  void set_unsafe_anonymous_def(InstanceKlass* def) { _unsafe_anonymous_def = def; }
+
+ private:
   // Used to pass back results to the interpreter or generated code running Java code.
   oop           _vm_result;    // oop result is GC-preserved
   Metadata*     _vm_result_2;  // non-oop result
@@ -1961,9 +1974,13 @@ class JavaThread: public Thread {
 
  private:
   GrowableArray<oop>* _array_for_gc;
- public:
+  CompiledMethod*     _compiled_method; // Prevent this compiled method from getting deleted
 
+ public:
   void register_array_for_gc(GrowableArray<oop>* array) { _array_for_gc = array; }
+
+  void set_compiled_method(CompiledMethod* compiled_method);
+  CompiledMethod* compiled_method() const;
 
  public:
   // Thread local information maintained by JVMTI.
@@ -2128,30 +2145,20 @@ inline CompilerThread* JavaThread::as_CompilerThread() {
 
 // Dedicated thread to sweep the code cache
 class CodeCacheSweeperThread : public JavaThread {
-  CompiledMethod*       _scanned_compiled_method; // nmethod being scanned by the sweeper
  public:
   CodeCacheSweeperThread();
-  // Track the nmethod currently being scanned by the sweeper
-  void set_scanned_compiled_method(CompiledMethod* cm) {
-    assert(_scanned_compiled_method == NULL || cm == NULL, "should reset to NULL before writing a new value");
-    _scanned_compiled_method = cm;
-  }
 
   // Hide sweeper thread from external view.
   bool is_hidden_from_external_view() const { return true; }
 
   bool is_Code_cache_sweeper_thread() const { return true; }
-
-  // Prevent GC from unloading _scanned_compiled_method
-  void oops_do(OopClosure* f, CodeBlobClosure* cf);
-  void nmethods_do(CodeBlobClosure* cf);
 };
 
 // A thread used for Compilation.
 class CompilerThread : public JavaThread {
   friend class VMStructs;
  private:
-  CompilerCounters* _counters;
+  CompilerCounters*     _counters;
 
   ciEnv*                _env;
   CompileLog*           _log;

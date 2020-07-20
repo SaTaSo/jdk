@@ -673,10 +673,11 @@ class MacroAssembler: public Assembler {
            is_tdi(x, traptoGreaterThanUnsigned, -1/*any reg*/, 0);
   }
 
-  inline void trap_ic_miss_check(Register a, Register b);
-  static bool is_trap_ic_miss_check(int x) {
-    return is_td(x, traptoGreaterThanUnsigned | traptoLessThanUnsigned, -1/*any reg*/, -1/*any reg*/);
-  }
+  inline void trap_zombie_not_entrant();
+  static bool is_trap_zombie_not_entrant(int x) { return is_tdi(x, traptoUnconditional, 0/*reg 0*/, 1); }
+
+  inline void trap_should_not_reach_here();
+  static bool is_trap_should_not_reach_here(int x) { return is_tdi(x, traptoUnconditional, 0/*reg 0*/, 2); }
 
   // Implicit or explicit null check, jumps to static address exception_entry.
   inline void null_check_throw(Register a, int offset, Register temp_reg, address exception_entry);
