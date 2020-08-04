@@ -262,9 +262,7 @@ CompileTaskWrapper::~CompileTaskWrapper() {
   CompileLog*  log  = thread->log();
   if (log != NULL && !task->is_unloaded())  task->log_task_done(log);
   thread->set_task(NULL);
-  if (task->code() != NULL) {
-    task->set_code(NULL);
-  }
+  task->set_code(NULL);
   thread->set_env(NULL);
   if (task->is_blocking()) {
     bool free_task = false;

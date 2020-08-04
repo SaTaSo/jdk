@@ -2975,9 +2975,6 @@ class RememberProcessedThread: public StackObj {
 };
 
 void JavaThread::set_compiled_method(CompiledMethod* compiled_method) {
-  if (compiled_method != NULL) {
-    assert(_compiled_method == NULL, "overwriting existing compiled method");
-  }
   _compiled_method = compiled_method;
 }
 

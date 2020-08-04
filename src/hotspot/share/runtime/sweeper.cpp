@@ -491,9 +491,7 @@ void NMethodSweeper::report_state_change(nmethod* nm) {
 NMethodSweeper::MethodStateChange NMethodSweeper::process_compiled_method(CompiledMethod* cm) {
   assert(cm != NULL, "sanity");
   assert(!CodeCache_lock->owned_by_self(), "just checking");
-  // Make sure this nmethod doesn't get unloaded during the scan,
-  // since safepoints may happen during acquired below locks.
-  CompiledMethodMarker nmm(cm);
+
   SWEEP(cm);
 
   if (cm->is_not_entrant()) {
