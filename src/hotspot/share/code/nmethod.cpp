@@ -1349,7 +1349,6 @@ void nmethod::post_compiled_method_load_event(JvmtiThreadState* state) {
 
   if (JvmtiExport::should_post_compiled_method_load()) {
     // Only post unload events if load events are found.
-    _jmethod_id = m->jmethod_id();
     set_load_reported();
     // If a JavaThread hasn't been passed in, let the Service thread
     // (which is a real Java thread) post the event
@@ -1380,7 +1379,7 @@ void nmethod::post_compiled_method_unload() {
   if (load_reported() && JvmtiExport::should_post_compiled_method_unload()) {
     JvmtiDeferredEvent event =
       JvmtiDeferredEvent::compiled_method_unload_event(
-          _jmethod_id, insts_begin());
+          method()->jmethod_id(), insts_begin());
     ServiceThread::enqueue_deferred_event(&event);
   }
 }

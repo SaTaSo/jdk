@@ -227,7 +227,6 @@ class nmethod : public CompiledMethod {
   bool _has_flushed_dependencies;            // Used for maintenance of dependencies (CodeCache_lock)
 
   // used by jvmti to track if an event has been posted for this nmethod.
-  jmethodID _jmethod_id;
   bool _unload_reported;
   bool _load_reported;
 
