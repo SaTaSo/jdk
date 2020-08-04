@@ -995,8 +995,16 @@ bool InstanceKlass::link_class_impl(TRAPS) {
       // initialize_vtable and initialize_itable need to be rerun for
       // a shared class if the class is not loaded by the NULL classloader.
       ClassLoaderData * loader_data = class_loader_data();
-      // if (!(is_shared() && loader_data->is_the_null_class_loader_data())) {
-      if (true) {
+      // initialize_vtable and initialize_itable need to be rerun
+      // for a shared class if
+      // 1) the class is loaded by custom class loader or
+      // 2) the class is loaded by built-in class loader but failed to add archived loader constraints
+      bool need_init_table = true;
+      // TODO: Can we do something smart here to pre-initialize tables with CDS?
+      //if (is_shared() && SystemDictionaryShared::check_linking_constraints(this, THREAD)) {
+      //  need_init_table = false;
+      //}
+      if (need_init_table) {
         vtable().initialize_vtable(true, CHECK_false);
         itable().initialize_itable(true, CHECK_false);
       }

@@ -3458,8 +3458,6 @@ void MacroAssembler::compiled_lazy_call(LazyInvocation* lazy) {
 
 void MacroAssembler::compiled_direct_call(ciMethod* method) {
   assert(method != NULL && method->is_loaded(), "sanity");
-  assert(!method->is_abstract(), "sanity");
-  assert(!method->is_overpass(), "sanity");
   mov_metadata(rbx, method->get_Method());
   Assembler::call(Address(rbx, in_bytes(Method::from_compiled_offset())));
 }
