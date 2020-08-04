@@ -229,6 +229,8 @@ CodeBlobClosure* NMethodSweeper::prepare_mark_active_nmethods() {
 /**
   * This function triggers a VM operation that does stack scanning of active
   * methods. Stack scanning is mandatory for the sweeper to make progress.
+  * It also cleans out code tables for code that points to not entrant
+  * code that can get flushed the next sweeper cycle.
   */
 void NMethodSweeper::do_stack_scanning() {
   assert(!CodeCache_lock->owned_by_self(), "just checking");
@@ -239,10 +241,10 @@ void NMethodSweeper::do_stack_scanning() {
       code_cl = prepare_mark_active_nmethods();
     }
     if (code_cl != NULL) {
+      clean_code_tables();
       NMethodMarkingClosure nm_cl(code_cl);
       Handshake::execute(&nm_cl);
     }
-    clean_code_tables();
   }
 }
 
