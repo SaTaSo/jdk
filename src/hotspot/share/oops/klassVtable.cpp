@@ -1623,15 +1623,13 @@ void klassItable::initialize_itable_for_interface(InstanceKlass* interf,
     // the cached itable.
     target = LinkResolver::lookup_instance_method_in_klasses(_klass, m->name(), m->signature(),
                                                              Klass::skip_private, CHECK);
-    if (target == NULL) {
-      continue;
-    }
-    if (!target->is_public() || target->is_abstract() || target->is_overpass()) {
-      assert(!target->is_overpass() || target->is_public(),
+    if (target == NULL || !target->is_public() || target->is_abstract() || target->is_overpass()) {
+      assert(target == NULL || !target->is_overpass() || target->is_public(),
              "Non-public overpass method!");
       // Entry does not resolve.
-      if (!target->is_public()) {
-        // Stuff an IllegalAccessError throwing method in there instead.
+      if (target == NULL) {
+        selector_map.set(m->selector(), 0);
+      } else if (!target->is_public()) {
         selector_map.set(m->selector(), Universe::throw_illegal_access_error()->selector());
       } else if (target->is_abstract()) {
         selector_map.set(m->selector(), Universe::throw_abstract_method_error()->selector());
