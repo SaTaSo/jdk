@@ -118,10 +118,6 @@ void Method::compute_selector() {
 
     global_rand = rand;
 
-    // Make some extra room for code pointer bits.
-    uint32_t code_bit_mask = ~0u >> CodeCache::code_pointer_shift();
-    selector &= code_bit_mask;
-
     if (selector == 0 || selector == 0xFFFFFFFF) {
       continue;
     }
@@ -1279,18 +1275,6 @@ void Method::make_adapters(const methodHandle& mh, TRAPS) {
 
 void Method::restore_unshareable_info(TRAPS) {
   assert(is_method() && is_valid_method(this), "ensure C++ vtable is restored");
-
-  if (_selector != 0) {
-    // TODO: The real solution for CDS is to store the method_selector_map in the archive.
-    // Since I don't now, it is possible that somebody else stole the selector used by this
-    // method at dump time. I will go with this for now because it happens rarely and allows
-    // testing of more things, while waiting for the proper solution.
-    SelectorMap<Method*> method_map = SystemDictionary::method_selector_map();
-    if (!method_map.set(_selector, this)) {
-      Method* what_else = method_map.get(_selector);
-      assert(what_else == this, "expected %lx, found %lx", p2i(this), p2i(what_else));
-    }
-  }
 
   // Since restore_unshareable_info can be called more than once for a method, don't
   // redo any work.

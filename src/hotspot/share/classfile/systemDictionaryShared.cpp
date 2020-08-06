@@ -605,10 +605,14 @@ private:
   // building a new hashtable.
   //
   //  info_pointer_addr(klass) --> 0x0100   RunTimeSharedClassInfo*
-  //  InstanceKlass* klass     --> 0x0108   <C++ vtbl>
-  //                               0x0110   fields from Klass ...
+  //                                        <Java vtbl>
+  //  InstanceKlass* klass     --> 0x0110   <C++ vtbl>
+  //                               0x0116   fields from Klass ...
   static RunTimeSharedClassInfo** info_pointer_addr(InstanceKlass* klass) {
-    return &((RunTimeSharedClassInfo**)klass)[-1];
+    uintptr_t addr = (uintptr_t)klass;
+    addr -= klass->vtable_length() * BytesPerWord; // move past Java vtable
+    addr -= sizeof(void*); // one pointer before the vtable
+    return (RunTimeSharedClassInfo**)addr;
   }
 
 public:

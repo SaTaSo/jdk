@@ -3426,11 +3426,9 @@ void MacroAssembler::lookup_itable_selector(Register rselector, Register rtmp_kl
 
 void MacroAssembler::unpack_table_entry(Register rmethod, Register rentry) {
   movl(rmethod, rentry);
-  shrq(rentry, 32 - CodeCache::code_pointer_shift());
-  if (!CodeCache::supports_32_bit_code_pointers()) {
-    movptr(r14, (intptr_t)CodeCache::low_bound());
-    addptr(rentry, r14);
-  }
+  shrq(rentry, 32);
+  movptr(r14, (intptr_t)SharedRuntime::get_bad_call_stub());
+  addptr(rentry, r14);
 }
 
 void MacroAssembler::compiled_lazy_call(LazyInvocation* lazy) {

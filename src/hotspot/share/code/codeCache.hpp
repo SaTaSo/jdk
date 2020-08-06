@@ -95,8 +95,6 @@ class CodeCache : AllStatic {
 
   static address _low_bound;                            // Lower bound of CodeHeap addresses
   static address _high_bound;                           // Upper bound of CodeHeap addresses
-  static int _code_pointer_shift;
-  static bool _supports_32_bit_code_pointers;
   static int _number_of_nmethods_with_dependencies;     // Total number of nmethods with dependencies
   static uint8_t _unloading_cycle;                      // Global state for recognizing old nmethods that need to be unloaded
   static CompiledMethod* volatile _purge_head;
@@ -212,12 +210,6 @@ class CodeCache : AllStatic {
   static address low_bound(int code_blob_type);
   static address high_bound()                         { return _high_bound; }
   static address high_bound(int code_blob_type);
-
-  // Can we encode code heap pointers with 32 bits?
-  static bool supports_32_bit_code_pointers() { return _supports_32_bit_code_pointers; }
-  // Steal some bits from selector IDs and use them for slightly larger code pointers
-  // for itables and vtables
-  static int code_pointer_shift() { vmassert(_code_pointer_shift != -1, "sanity"); return _code_pointer_shift; }
 
   // Have to use far call instructions to call this pc.
   static bool is_far_target(address pc);

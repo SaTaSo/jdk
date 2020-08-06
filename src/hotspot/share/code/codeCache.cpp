@@ -145,8 +145,6 @@ class CodeBlob_sizes {
 
 address  CodeCache::_low_bound = 0;
 address  CodeCache::_high_bound = 0;
-int      CodeCache::_code_pointer_shift = -1;
-bool     CodeCache::_supports_32_bit_code_pointers = false;
 int      CodeCache::_number_of_nmethods_with_dependencies = 0;
 
 ExceptionCache* volatile CodeCache::_exception_cache_purge_list = NULL;
@@ -331,8 +329,6 @@ size_t CodeCache::page_size(bool aligned, size_t min_pages) {
 }
 
 ReservedCodeSpace CodeCache::reserve_heap_memory(size_t size) {
-  _code_pointer_shift = MIN2(log2_int(CodeEntryAlignment), 4);
-
   // Align and reserve space for code cache
   const size_t rs_ps = page_size();
   const size_t rs_align = MAX2(rs_ps, (size_t) os::vm_allocation_granularity());
@@ -348,12 +344,6 @@ ReservedCodeSpace CodeCache::reserve_heap_memory(size_t size) {
   _high_bound = _low_bound + rs.size();
 
   intptr_t bound = (intptr_t)high_bound();
-  if (bound < ((intptr_t(1) << (32 + _code_pointer_shift + 1)) - 1)) {
-    _supports_32_bit_code_pointers = true;
-  } else {
-    _supports_32_bit_code_pointers = false;
-    _code_pointer_shift = 0;
-  }
 
   return rs;
 }

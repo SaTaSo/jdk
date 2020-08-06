@@ -54,12 +54,8 @@ static inline tableEntry make_entry(uint32_t selector, address code_addr) {
   tableEntry entry;
   uintptr_t code_intptr = reinterpret_cast<uintptr_t>(code_addr);
   if (code_addr != NULL) {
-    if (CodeCache::supports_32_bit_code_pointers()) {
-      code_intptr <<= (32 - CodeCache::code_pointer_shift());
-    } else {
-      uintptr_t code_base = (uintptr_t)CodeCache::low_bound();
-      code_intptr = (code_intptr - code_base) << 32;
-    }
+    uintptr_t code_base = (uintptr_t)SharedRuntime::get_bad_call_stub();
+    code_intptr = (code_intptr - code_base) << 32;
   }
   entry._entry = code_intptr | selector;
   assert(selector == 0 || entry.method() != NULL, "sanity");
@@ -130,7 +126,7 @@ void klassVtable::link_code(bool bootstrapping) {
   MutexLocker ml(CompiledMethod_lock, Mutex::_no_safepoint_check_flag);
   Method** st = scratch_table();
   for (int32_t vtable_index = 0; vtable_index < (int32_t)length(); ++vtable_index) {
-    Method* vtable_method = st[-vtable_index];
+    Method* vtable_method = _klass->is_shared() ? _table[-vtable_index].method() : st[-vtable_index];
     if (vtable_method == NULL) {
       _table[-vtable_index] = make_entry(0, SharedRuntime::get_bad_call_stub());
     } else {
@@ -1059,7 +1055,7 @@ void klassVtable::copy_vtable_to(klassVtable* target) {
 }
 
 void klassVtable::remove_unshareable_info() {
-  MutexLocker ml(CompiledMethod_lock, Mutex::_no_safepoint_check_flag);
+  assert(SafepointSynchronize::is_at_safepoint(), "not safe");
   for (int32_t vtable_index = 0; vtable_index < (int32_t)length(); ++vtable_index) {
     _table[-vtable_index] = make_entry(_table[-vtable_index].selector(), SharedRuntime::get_bad_call_stub());
   }
@@ -1703,11 +1699,11 @@ int klassItable::compute_itable_size_words(uint32_t seed, Array<InstanceKlass*>*
 }
 
 void klassItable::remove_unshareable_info() {
+  assert(SafepointSynchronize::is_at_safepoint(), "not safe");
   if (!_klass->has_itable()) {
     return;
   }
 
-  MutexLocker ml(CompiledMethod_lock, Mutex::_no_safepoint_check_flag);
   SelectorMap<Method*> method_selector_map = SystemDictionary::method_selector_map();
   SelectorMap<uint32_t> itable_selector_map(_klass->interpreter_itable_selector_addr());
 
@@ -1721,9 +1717,6 @@ void klassItable::remove_unshareable_info() {
 
   for (uint32_t i = 0; i < size; ++i) {
     tableEntry entry = blob_table[i];
-    if (entry.selector() == 0) {
-      continue;
-    }
     blob_table[i] = make_entry(entry.selector(), SharedRuntime::get_bad_call_stub());
   }
 }
@@ -1809,13 +1802,11 @@ uint32_t tableEntry::selector() const {
 }
 
 address tableEntry::code() const {
-  uint64_t code_64 = _entry >> (32 - CodeCache::code_pointer_shift());
+  uint64_t code_64 = _entry >> 32;
   uintptr_t code_intptr = static_cast<uintptr_t>(code_64);
 
-  if (!CodeCache::supports_32_bit_code_pointers()) {
-    uintptr_t code_base = (uintptr_t)CodeCache::low_bound();
-    code_intptr += code_base;
-  }
+  uintptr_t code_base = (uintptr_t)SharedRuntime::get_bad_call_stub();
+  code_intptr += code_base;
 
   return reinterpret_cast<address>(code_intptr);
 }
