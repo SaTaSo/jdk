@@ -338,8 +338,7 @@ static void post_sweep_event(EventSweepCodeCache* event,
                              const Ticks& end,
                              s4 traversals,
                              int swept,
-                             int flushed,
-                             int zombified) {
+                             int flushed) {
   assert(event != NULL, "invariant");
   assert(event->should_commit(), "invariant");
   event->set_starttime(start);
@@ -347,7 +346,6 @@ static void post_sweep_event(EventSweepCodeCache* event,
   event->set_sweepId(traversals);
   event->set_sweptCount(swept);
   event->set_flushedCount(flushed);
-  event->set_zombifiedCount(zombified);
   event->commit();
 }
 
@@ -359,7 +357,6 @@ void NMethodSweeper::sweep_code_cache() {
   log_debug(codecache, sweep, start)("CodeCache flushing");
 
   int flushed_count                = 0;
-  int zombified_count              = 0;
   int flushed_c2_count     = 0;
 
   if (PrintMethodFlushing && Verbose) {
@@ -429,7 +426,7 @@ void NMethodSweeper::sweep_code_cache() {
 
   EventSweepCodeCache event(UNTIMED);
   if (event.should_commit()) {
-    post_sweep_event(&event, sweep_start_counter, sweep_end_counter, (s4)_traversals, swept_count, flushed_count, zombified_count);
+    post_sweep_event(&event, sweep_start_counter, sweep_end_counter, (s4)_traversals, swept_count, flushed_count);
   }
 
 #ifdef ASSERT

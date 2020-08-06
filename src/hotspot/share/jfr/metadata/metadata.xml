@@ -527,7 +527,6 @@
     <Field type="int" name="sweepId" label="Sweep Identifier" relation="SweepId" />
     <Field type="uint" name="sweptCount" label="Methods Swept" />
     <Field type="uint" name="flushedCount" label="Methods Flushed" />
-    <Field type="uint" name="zombifiedCount" label="Methods Zombified" />
   </Event>
 
   <Event name="CodeCacheFull" category="Java Virtual Machine, Code Cache" label="Code Cache Full" thread="true" startTime="false">
