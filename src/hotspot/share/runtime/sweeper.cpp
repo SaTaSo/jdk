@@ -141,7 +141,7 @@ void NMethodSweeper::init_sweeper_log() {
 #define SWEEP(nm)
 #endif
 
-CompiledMethodIterator NMethodSweeper::_current;               // Current compiled method
+NMethodIterator NMethodSweeper::_current;                      // Current nmethod
 long     NMethodSweeper::_traversals                   = 0;    // Stack scan count, also sweep ID.
 long     NMethodSweeper::_total_nof_code_cache_sweeps  = 0;    // Total number of full sweeps of the code cache
 int      NMethodSweeper::_seen                         = 0;    // Nof. nmethod we have currently processed in current pass of CodeCache
@@ -180,9 +180,6 @@ int NMethodSweeper::hotness_counter_reset_val() {
   }
   return _hotness_counter_reset_val;
 }
-bool NMethodSweeper::wait_for_stack_scanning() {
-  return _current.end();
-}
 
 class NMethodMarkingClosure : public HandshakeClosure {
 private:
@@ -211,10 +208,9 @@ CodeBlobClosure* NMethodSweeper::prepare_mark_active_nmethods() {
 
   // Check for restart
   assert(_current.method() == NULL, "should only happen between sweeper cycles");
-  assert(wait_for_stack_scanning(), "should only happen between sweeper cycles");
 
   _seen = 0;
-  _current = CompiledMethodIterator();
+  _current = NMethodIterator();
   // Initialize to first nmethod
   _current.next();
   _traversals += 1;
@@ -234,17 +230,15 @@ CodeBlobClosure* NMethodSweeper::prepare_mark_active_nmethods() {
   */
 void NMethodSweeper::do_stack_scanning() {
   assert(!CodeCache_lock->owned_by_self(), "just checking");
-  if (wait_for_stack_scanning()) {
-    CodeBlobClosure* code_cl;
-    {
-      MutexLocker ccl(CodeCache_lock, Mutex::_no_safepoint_check_flag);
-      code_cl = prepare_mark_active_nmethods();
-    }
-    if (code_cl != NULL) {
-      clean_code_tables();
-      NMethodMarkingClosure nm_cl(code_cl);
-      Handshake::execute(&nm_cl);
-    }
+  CodeBlobClosure* code_cl;
+  {
+    MutexLocker ccl(CodeCache_lock, Mutex::_no_safepoint_check_flag);
+    code_cl = prepare_mark_active_nmethods();
+  }
+  if (code_cl != NULL) {
+    clean_code_tables();
+    NMethodMarkingClosure nm_cl(code_cl);
+    Handshake::execute(&nm_cl);
   }
 }
 
@@ -385,15 +379,14 @@ void NMethodSweeper::sweep_code_cache() {
       // Since we will give up the CodeCache_lock, always skip ahead
       // to the next nmethod.  Other blobs can be deleted by other
       // threads but nmethods are only reclaimed by the sweeper.
-      CompiledMethod* nm = _current.method();
+      nmethod* nm = _current.method();
       _current.next();
 
       // Now ready to process nmethod and give up CodeCache_lock
       {
         MutexUnlocker mu(CodeCache_lock, Mutex::_no_safepoint_check_flag);
         // Save information before potentially flushing the nmethod
-        // Only flushing nmethods so size only matters for them.
-        int size = nm->is_nmethod() ? ((nmethod*)nm)->total_size() : 0;
+        int size = nm->total_size();
         bool is_c2_method = nm->is_compiled_by_c2();
         bool is_osr = nm->is_osr_method();
         int compile_id = nm->compile_id();
@@ -401,23 +394,16 @@ void NMethodSweeper::sweep_code_cache() {
         const char* state_before = nm->state();
         const char* state_after = "";
 
-        MethodStateChange type = process_compiled_method(nm);
-        switch (type) {
-          case Flushed:
-            state_after = "flushed";
-            freed_memory += size;
-            ++flushed_count;
-            if (is_c2_method) {
-              ++flushed_c2_count;
-            }
-            break;
-          case None:
-            break;
-          default:
-           ShouldNotReachHere();
-        }
-        if (PrintMethodFlushing && Verbose && type != None) {
-          tty->print_cr("### %s nmethod %3d/" PTR_FORMAT " (%s) %s", is_osr ? "osr" : "", compile_id, address, state_before, state_after);
+        if (process_nmethod(nm)) {
+          state_after = "flushed";
+          freed_memory += size;
+          ++flushed_count;
+          if (is_c2_method) {
+            ++flushed_c2_count;
+          }
+          if (PrintMethodFlushing && Verbose) {
+            tty->print_cr("### %s nmethod %3d/" PTR_FORMAT " (%s) %s", is_osr ? "osr" : "", compile_id, address, state_before, state_after);
+          }
         }
       }
 
@@ -488,29 +474,20 @@ void NMethodSweeper::report_state_change(nmethod* nm) {
   }
 }
 
-NMethodSweeper::MethodStateChange NMethodSweeper::process_compiled_method(CompiledMethod* cm) {
-  assert(cm != NULL, "sanity");
+bool NMethodSweeper::process_nmethod(nmethod* nm) {
+  assert(nm != NULL, "sanity");
   assert(!CodeCache_lock->owned_by_self(), "just checking");
 
-  SWEEP(cm);
+  SWEEP(nm);
 
-  if (cm->is_not_entrant()) {
-    // If there are no current activations of this method on the
-    // stack we can safely convert it to a zombie method
-    OrderAccess::loadload(); // _stack_traversal_mark and _state
-    if (cm->can_delete()) {
-      // If a JVMTI agent has enabled the CompiledMethodUnload
-      // event and it hasn't already been reported for this nmethod then
-      // report it now. The event might safepoint.
-      cm->as_nmethod()->post_compiled_method_unload();
-      cm->flush();
-      SWEEP(cm);
-      return Flushed;
-    }
-  } else if (cm->is_nmethod()) {
-    possibly_flush((nmethod*)cm);
+  if (nm->can_delete()) {
+    nm->post_compiled_method_unload();
+    nm->flush();
+    SWEEP(nm);
+    return true;
   }
-  return None;
+  possibly_flush(nm);
+  return false;
 }
 
 

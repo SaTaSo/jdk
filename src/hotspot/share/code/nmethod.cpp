@@ -1066,10 +1066,16 @@ void nmethod::mark_as_seen_on_stack() {
 // there are no activations on the stack, not in use by the VM,
 // and not in use by the ServiceThread)
 bool nmethod::can_delete() {
+  if (_state != not_entrant) {
+    return false;
+  }
+  // If there are no current activations of this method on the
+  // stack we can safely convert it to a zombie method
+  OrderAccess::loadload(); // _stack_traversal_mark and _state
   // Since the nmethod sweeper only does partial sweep the sweeper's traversal
   // count can be greater than the stack traversal count before it hits the
   // nmethod for the second time.
-  return _state == not_entrant && stack_traversal_mark() < NMethodSweeper::traversal_count() - 1;
+  return stack_traversal_mark() < NMethodSweeper::traversal_count() - 1;
 }
 
 void nmethod::inc_decompile_count() {

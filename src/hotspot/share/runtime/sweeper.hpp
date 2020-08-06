@@ -61,13 +61,9 @@ class CodeBlobClosure;
 
 class NMethodSweeper : public AllStatic {
  private:
-  enum MethodStateChange {
-    None,
-    Flushed
-  };
   static long      _traversals;                   // Stack scan count, also sweep ID.
   static long      _total_nof_code_cache_sweeps;  // Total number of full sweeps of the code cache
-  static CompiledMethodIterator _current;         // Current compiled method
+  static NMethodIterator _current;                // Current nmethod
   static int       _seen;                         // Nof. nmethod we have currently processed in current pass of CodeCache
   static size_t    _sweep_threshold_bytes;        // The threshold for when to invoke sweeps
 
@@ -87,10 +83,9 @@ class NMethodSweeper : public AllStatic {
   static Tickspan  _peak_sweep_time;              // Peak time for a full sweep
   static Tickspan  _peak_sweep_fraction_time;     // Peak time sweeping one fraction
 
-  static MethodStateChange process_compiled_method(CompiledMethod *nm);
+  static bool process_nmethod(nmethod *nm);
 
   static void init_sweeper_log() NOT_DEBUG_RETURN;
-  static bool wait_for_stack_scanning();
   static void sweep_code_cache();
   static void handle_safepoint_request();
   static void do_stack_scanning();
