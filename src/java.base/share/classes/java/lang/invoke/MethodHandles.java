@@ -4520,9 +4520,6 @@ return invoker;
      * Given types <em>T0</em>, <em>T1</em>, one of the following conversions is applied
      * if possible, before or instead of any conversions done by {@code asType}:
      * <ul>
-     * <li>If <em>T0</em> and <em>T1</em> are references, and <em>T1</em> is an interface type,
-     *     then the value of type <em>T0</em> is passed as a <em>T1</em> without a cast.
-     *     (This treatment of interfaces follows the usage of the bytecode verifier.)
      * <li>If <em>T0</em> is boolean and <em>T1</em> is another primitive,
      *     the boolean is converted to a byte value, 1 for true, 0 for false.
      *     (This treatment follows the usage of the bytecode verifier.)

@@ -1020,7 +1020,7 @@ class MethodType
             return false;
         } else {
             // R->R always works, but we have to avoid a check-cast to an interface.
-            return !dst.isInterface() || dst.isAssignableFrom(src);
+            return dst.isAssignableFrom(src);
         }
     }
 
