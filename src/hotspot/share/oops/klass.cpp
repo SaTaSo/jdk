@@ -535,6 +535,8 @@ void Klass::remove_unshareable_info() {
     log_trace(cds, unshareable)("remove: %s", external_name());
   }
 
+  vtable().remove_unshareable_info();
+
   set_subklass(NULL);
   set_next_sibling(NULL);
   set_next_link(NULL);

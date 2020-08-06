@@ -653,7 +653,7 @@ MemRegion ReservedHeapSpace::region() const {
 ReservedCodeSpace::ReservedCodeSpace(size_t r_size,
                                      size_t rs_align,
                                      bool large) :
-  ReservedSpace(r_size, rs_align, large, /*executable*/ true, (char*)(intptr_t(1) << (CodeCache::code_pointer_shift() + 32)) - 0x10000000) {
+  ReservedSpace(r_size, rs_align, large, /*executable*/ true, NULL) {
   MemTracker::record_virtual_memory_type((address)base(), mtCode);
 }
 

@@ -996,10 +996,8 @@ void DynamicArchiveBuilder::sort_methods(InstanceKlass* ik) const {
   if (ik->default_methods() != NULL) {
     Method::sort_methods(ik->default_methods(), /*set_idnums=*/false, dynamic_dump_method_comparator);
   }
-  // The vtable and itable can't be reinitialized here.  Because their adapters point outside the code cache.
-  // Right now, they're reinitialized at runtime.
-  // ik->vtable().initialize_vtable(true, THREAD); assert(!HAS_PENDING_EXCEPTION, "cannot fail");
-  // ik->itable().initialize_itable(true, THREAD); assert(!HAS_PENDING_EXCEPTION, "cannot fail");
+  ik->vtable().initialize_vtable(true, THREAD); assert(!HAS_PENDING_EXCEPTION, "cannot fail");
+  ik->itable().initialize_itable(true, THREAD); assert(!HAS_PENDING_EXCEPTION, "cannot fail");
 }
 
 void DynamicArchiveBuilder::set_symbols_permanent() {

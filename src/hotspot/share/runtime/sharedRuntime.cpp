@@ -92,8 +92,8 @@ UncommonTrapBlob*   SharedRuntime::_uncommon_trap_blob;
 
 //----------------------------generate_stubs-----------------------------------
 void SharedRuntime::generate_stubs() {
-  _wrong_method_abstract_blob          = generate_resolve_blob(CAST_FROM_FN_PTR(address, SharedRuntime::handle_wrong_method_abstract), "wrong_method_abstract_stub");
   _resolve_bad_call_blob               = generate_resolve_blob(CAST_FROM_FN_PTR(address, SharedRuntime::resolve_bad_call_C),           "resolve_bad_call");
+  _wrong_method_abstract_blob          = generate_resolve_blob(CAST_FROM_FN_PTR(address, SharedRuntime::handle_wrong_method_abstract), "wrong_method_abstract_stub");
 
 #if COMPILER2_OR_JVMCI
   // Vectors are generated only by C2 and JVMCI.

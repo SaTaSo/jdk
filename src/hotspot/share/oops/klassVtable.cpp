@@ -164,9 +164,7 @@ inline InstanceKlass* klassVtable::ik() const {
 }
 
 bool klassVtable::is_preinitialized_vtable() {
-  return false;
-  // TODO: Should support preinitialized vtables
-  //return _klass->is_shared() && !MetaspaceShared::remapped_readwrite();
+  return _klass->is_shared() && !MetaspaceShared::remapped_readwrite();
 }
 
 
@@ -332,7 +330,7 @@ void klassVtable::initialize_vtable(bool checkconstraints, TRAPS) {
       if (len > 0) {
         Array<int>* def_vtable_indices = NULL;
         if ((def_vtable_indices = ik()->default_vtable_indices()) == NULL) {
-          //assert(!is_shared, "shared class def_vtable_indices does not exist"); // TODO: Reenable assert when CDS support is done
+          assert(!is_shared, "shared class def_vtable_indices does not exist");
           def_vtable_indices = ik()->create_new_default_vtable_indices(len, CHECK);
         } else {
           assert(def_vtable_indices->length() == len, "reinit vtable len?");
@@ -1060,6 +1058,13 @@ void klassVtable::copy_vtable_to(klassVtable* target) {
   }
 }
 
+void klassVtable::remove_unshareable_info() {
+  MutexLocker ml(CompiledMethod_lock, Mutex::_no_safepoint_check_flag);
+  for (int32_t vtable_index = 0; vtable_index < (int32_t)length(); ++vtable_index) {
+    _table[-vtable_index] = make_entry(_table[-vtable_index].selector(), SharedRuntime::get_bad_call_stub());
+  }
+}
+
 //-----------------------------------------------------------------------------------------
 // Itable code
 
@@ -1695,6 +1700,32 @@ int klassItable::compute_itable_size_words(uint32_t seed, Array<InstanceKlass*>*
   // This stinks that we have to compute this twice
   itableHashTableBuilder itable(seed, transitive_interfaces);
   return (int)itable.compute_itable_size_words();
+}
+
+void klassItable::remove_unshareable_info() {
+  if (!_klass->has_itable()) {
+    return;
+  }
+
+  MutexLocker ml(CompiledMethod_lock, Mutex::_no_safepoint_check_flag);
+  SelectorMap<Method*> method_selector_map = SystemDictionary::method_selector_map();
+  SelectorMap<uint32_t> itable_selector_map(_klass->interpreter_itable_selector_addr());
+
+  uint32_t* blob_int32 = (uint32_t*)_klass->start_of_itable();
+  tableEntry* blob_table = _klass->itable_table();
+  uint32_t mask = *blob_int32;
+  uint32_t size = mask + 1;
+  if (mask == 0) {
+    return;
+  }
+
+  for (uint32_t i = 0; i < size; ++i) {
+    tableEntry entry = blob_table[i];
+    if (entry.selector() == 0) {
+      continue;
+    }
+    blob_table[i] = make_entry(entry.selector(), SharedRuntime::get_bad_call_stub());
+  }
 }
 
 void klassVtable::verify(outputStream* st, bool forced) {

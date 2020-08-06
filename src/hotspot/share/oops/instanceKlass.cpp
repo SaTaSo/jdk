@@ -1000,10 +1000,9 @@ bool InstanceKlass::link_class_impl(TRAPS) {
       // 1) the class is loaded by custom class loader or
       // 2) the class is loaded by built-in class loader but failed to add archived loader constraints
       bool need_init_table = true;
-      // TODO: Can we do something smart here to pre-initialize tables with CDS?
-      //if (is_shared() && SystemDictionaryShared::check_linking_constraints(this, THREAD)) {
-      //  need_init_table = false;
-      //}
+      if (is_shared() && SystemDictionaryShared::check_linking_constraints(this, THREAD)) {
+        need_init_table = false;
+      }
       if (need_init_table) {
         vtable().initialize_vtable(true, CHECK_false);
         itable().initialize_itable(true, CHECK_false);
@@ -2510,10 +2509,7 @@ void InstanceKlass::remove_unshareable_info() {
   // being added to class hierarchy (see SystemDictionary:::add_to_hierarchy()).
   _init_state = allocated;
 
-  // TODO: ...and this too.
-  set_default_vtable_indices(NULL);
-  // TODO: ...and this.
-  memset(start_of_itable(), 0, itable_length() * wordSize);
+  itable().remove_unshareable_info();
 
   { // Otherwise this needs to take out the Compile_lock.
     assert(SafepointSynchronize::is_at_safepoint(), "only called at safepoint");

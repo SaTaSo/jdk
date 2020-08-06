@@ -92,6 +92,8 @@ class klassVtable {
   Method* method_at(int i) const;
   Method* unchecked_method_at(int i) const;
 
+  void remove_unshareable_info();
+
   // flat vtable support
   int length() const;
   void link_table_code();
@@ -218,6 +220,8 @@ class klassItable {
 
   void link_table_code();
   void link_code(Method* method);
+
+  void remove_unshareable_info();
 
   // Debugging/Statistics
   static void print_statistics() PRODUCT_RETURN;
