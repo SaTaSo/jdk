@@ -2062,16 +2062,20 @@ encode %{
     MacroAssembler _masm(&cbuf);
     uintptr_t start = (uintptr_t)__ pc();
     ciMethod* method = (ciMethod*)_method;
-    if (_vtable_index < 0)  {
-      // itable call
+    if (_vtable_index >= 0) {
+      __ compiled_vtable_call(_vtable_index);
+    } else if (!klassItable::interface_method_needs_itable_index(method->get_Method())) {
+      // Interface call to presumably statically bound method, not part of the itable
+      __ mov_metadata(rbx, method->get_Method());
+      __ movptr(r10, Address(rbx, in_bytes(Method::from_compiled_offset())));
+    } else {
       uint32_t selector = method->get_Method()->selector();
       __ movl(rax, (int)selector);
       // In C2, the REFC check is performed with an uncommon trap in the call generator,
       // when interfaces are insane.
-      __ compiled_itable_call(rax, noreg, method);
-    } else {
-      __ compiled_vtable_call(_vtable_index);
+      __ compiled_itable_call(rax);
     }
+    __ call(r10);
     if (_override_symbolic_info && !Compile::current()->output()->in_scratch_emit_size()) {
       LazyInvocation::CallKind call_kind = _vtable_index < 0 ? LazyInvocation::itable_call : LazyInvocation::vtable_call;
       LazyInvocation* lazy = Compile::current()->create_lazy_invocation(call_kind);

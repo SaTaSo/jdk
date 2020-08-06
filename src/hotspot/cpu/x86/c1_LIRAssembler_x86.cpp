@@ -2854,15 +2854,15 @@ void LIR_Assembler::comp_fl2i(LIR_Code code, LIR_Opr left, LIR_Opr right, LIR_Op
 }
 
 void LIR_Assembler::direct_call(LIR_OpJavaCall* op) {
-  if (op->receiver() != LIR_OprFact::illegalOpr) {
-    add_debug_info_for_null_check_here(op->info_for_exception());
-    __ null_check(op->receiver()->as_register());
-  }
   if (!op->method()->is_loaded()) {
     LazyInvocation* lazy = Compilation::current()->create_lazy_invocation(LazyInvocation::direct_call);
     __ compiled_lazy_call(lazy);
     lazy->set_pc_offset(code_offset());
   } else {
+    if (op->receiver() != LIR_OprFact::illegalOpr) {
+      add_debug_info_for_null_check_here(op->info_for_exception());
+      __ null_check(op->receiver()->as_register());
+    }
     __ compiled_direct_call(op->method());
   }
 
@@ -2872,14 +2872,15 @@ void LIR_Assembler::direct_call(LIR_OpJavaCall* op) {
 void LIR_Assembler::vtable_call(LIR_OpJavaCall* op) {
   int vtable_index = op->vtable_index();
 
-  add_debug_info_for_null_check_here(op->info_for_exception());
-  __ load_klass(r11, op->receiver()->as_register(), rax);
   if (vtable_index < 0) {
     LazyInvocation* lazy = Compilation::current()->create_lazy_invocation(LazyInvocation::vtable_call);
     __ compiled_lazy_call(lazy);
     lazy->set_pc_offset(code_offset());
   } else {
+    add_debug_info_for_null_check_here(op->info_for_exception());
+    __ load_klass(r11, op->receiver()->as_register(), rax);
     __ compiled_vtable_call(vtable_index);
+    __ call(r10);
   }
 
   add_call_info(code_offset(), op->info());
@@ -2887,22 +2888,47 @@ void LIR_Assembler::vtable_call(LIR_OpJavaCall* op) {
 
 void LIR_Assembler::itable_call(LIR_OpJavaCall* op) {
   ciMethod* method = op->method();
-  uint32_t selector = 0;
-  add_debug_info_for_null_check_here(op->info_for_exception());
-  __ load_klass(r11, op->receiver()->as_register(), rax);
   if (!method->is_loaded() || !op->refc()->is_loaded()) {
     LazyInvocation* lazy = Compilation::current()->create_lazy_invocation(LazyInvocation::itable_call);
     __ compiled_lazy_call(lazy);
     lazy->set_pc_offset(code_offset());
   } else {
-    selector = method->get_Method()->selector();
+    Label dispatch;
+    add_debug_info_for_null_check_here(op->info_for_exception());
+    __ load_klass(r11, op->receiver()->as_register(), rax);
+    uint32_t selector = method->get_Method()->selector();
     __ movl(rax, (int)selector);
-    Register rrefc = noreg;
+
     if (!Verifier::interfaces_are_sane()) {
-      rrefc = rbx;
+      Register rrefc = rbx;
       __ mov_metadata(rrefc, op->refc()->constant_encoding());
+      // Only when the verifier can't prove that data flow does not admit non-REFC
+      // targets for interface invocations, do we have to check REFC. This should
+      // almost never happen. When it does, we bring a larger hammer. You deserve
+      // to run slower, if you spin bytecodes that violate type safety of the program.
+      Label isa_refc;
+      __ check_klass_subtype(r11,
+                             rrefc,
+                             r10,
+                             isa_refc);
+      __ lea(r10, RuntimeAddress(StubRoutines::throw_IncompatibleClassChangeError_entry()));
+      __ jmp(dispatch);
+      __ bind(isa_refc);
     }
-    __ compiled_itable_call(rax, rrefc, method);
+
+    if (method->get_Method()->vtable_index() >= 0) {
+      // Interface call to java.lang.Object methods that require vtable dispatch
+      __ compiled_vtable_call(method->get_Method()->vtable_index());
+    } else if (!klassItable::interface_method_needs_itable_index(method->get_Method())) {
+      // Interface call to presumably statically bound method, not part of the itable
+      __ mov_metadata(rbx, method->get_Method());
+      __ movptr(r10, Address(rbx, in_bytes(Method::from_compiled_offset())));
+    } else {
+      // Normal interface call
+      __ compiled_itable_call(rax);
+    }
+    __ bind(dispatch);
+    __ call(r10);
   }
 
   add_call_info(code_offset(), op->info());

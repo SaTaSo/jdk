@@ -543,7 +543,7 @@ class MacroAssembler: public Assembler {
   void compiled_lazy_call(LazyInvocation* lazy);
   void compiled_direct_call(ciMethod* method);
   void compiled_vtable_call(int vtable_index);
-  void compiled_itable_call(Register rselector, Register rrefc, ciMethod* method);
+  void compiled_itable_call(Register rselector);
 
   // Entries
   void c2i_itable_entry();

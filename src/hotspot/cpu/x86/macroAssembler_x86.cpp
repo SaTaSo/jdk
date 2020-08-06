@@ -3437,23 +3437,49 @@ void MacroAssembler::compiled_lazy_call(LazyInvocation* lazy) {
   if (lazy->call_kind() == LazyInvocation::direct_call) {
     movptr(rbx, ExternalAddress(lazy->value_addr()));  // rbx = Method*
     Assembler::call(Address(rbx, in_bytes(Method::from_compiled_offset())));
-  } else if (lazy->call_kind() == LazyInvocation::vtable_call) {
+    return;
+  }
+  Label not_null;
+  Label dispatch;
+
+  cmpptr(j_rarg0, 0);
+  jcc(Assembler::notEqual, not_null);
+  lea(r10, RuntimeAddress(SharedRuntime::get_bad_call_stub()));
+  jmp(dispatch);
+  bind(not_null);
+  load_klass(r11, j_rarg0, rax);
+
+  if (lazy->call_kind() == LazyInvocation::vtable_call) {
     movptr(rax, ExternalAddress(lazy->value_addr()));
     lookup_vtable_entry(r10, r11, rax);
     unpack_table_entry(rbx, r10);
-    Assembler::call(r10);
+    bind(dispatch);
   } else {
     assert(lazy->call_kind() == LazyInvocation::itable_call, "must be");
     movptr(rax, ExternalAddress(lazy->value_addr()));
-    Register refc = noreg;
     if (!Verifier::interfaces_are_sane()) {
-      refc = rbx;
+      // Only when the verifier can't prove that data flow does not admit non-REFC
+      // targets for interface invocations, do we have to check REFC. This should
+      // almost never happen. When it does, we bring a larger hammer. You deserve
+      // to run slower, if you spin bytecodes that violate type safety of the program.
+      Register refc = rbx;
       movptr(refc, ExternalAddress(lazy->refc_addr()));
       testptr(refc, refc);
       cmovptr(Assembler::zero, refc, r11);
+
+      Label isa_refc;
+      check_klass_subtype(r11,
+                          refc,
+                          r10,
+                          isa_refc);
+      lea(r10, RuntimeAddress(StubRoutines::throw_IncompatibleClassChangeError_entry()));
+      jmp(dispatch);
+      bind(isa_refc);
     }
-    compiled_itable_call(rax, refc, NULL);
+    compiled_itable_call(rax);
   }
+  bind(dispatch);
+  Assembler::call(r10);
 }
 
 void MacroAssembler::compiled_direct_call(ciMethod* method) {
@@ -3466,7 +3492,6 @@ void MacroAssembler::compiled_vtable_call(int vtable_index) {
   Register rklass = r11;
   lookup_vtable_entry(r10, rklass, vtable_index);
   unpack_table_entry(rbx, r10);
-  Assembler::call(r10);
 }
 
 void MacroAssembler::lookup_itable_entry(Register rselector, Register rklass, Register rentry, Label& dispatch_to_entry) {
@@ -3490,53 +3515,23 @@ void MacroAssembler::lookup_itable_entry(Register rselector, Register rklass, Re
   jcc(Assembler::equal, dispatch_to_entry);
 }
 
-void MacroAssembler::compiled_itable_call(Register rselector, Register rrefc, ciMethod* method) {
-  assert_different_registers(rselector, rrefc);
+void MacroAssembler::compiled_itable_call(Register rselector) {
   Register rklass = r11;
   Label dispatch;
 
-  if (rrefc != noreg) {
-    // Only when the verifier can't prove that data flow does not admit non-REFC
-    // targets for interface invocations, do we have to check REFC. This should
-    // almost never happen. When it does, we bring a larger hammer. You deserve
-    // to run slower, if you spin bytecodes that violate type safety of the program.
-    Label isa_refc;
-    check_klass_subtype(rklass,
-                        rrefc,
-                        r10,
-                        isa_refc);
-    lea(r10, RuntimeAddress(StubRoutines::throw_IncompatibleClassChangeError_entry()));
-    jmp(dispatch);
-    bind(isa_refc);
-  }
+  // The normal case: an actual itable dispatch
+  Label dispatch_to_entry;
+  lookup_itable_entry(rselector, rklass, r10, dispatch_to_entry);
 
-  if (method != NULL && method->get_Method()->vtable_index() >= 0) {
-    // Interface call to java.lang.Object methods that require vtable dispatch
-    lookup_vtable_entry(r10, rklass, method->get_Method()->vtable_index());
-    unpack_table_entry(rbx, r10);
-  } else if (method != NULL && !klassItable::interface_method_needs_itable_index(method->get_Method())) {
-    // Interface call to presumably statically bound method, not part of the itable
-    assert(method != NULL && method->is_loaded(), "sanity");
-    assert(!method->is_abstract(), "sanity");
-    assert(!method->is_overpass(), "sanity");
-    mov_metadata(rbx, method->get_Method());
-    movptr(r10, Address(rbx, in_bytes(Method::from_compiled_offset())));
-  } else {
-    // The normal case: an actual itable dispatch
-    Label dispatch_to_entry;
-    lookup_itable_entry(rselector, rklass, r10, dispatch_to_entry);
+  // Unfortunate race where buckets are being shuffled around concurrently to optimize call
+  // patterns. This happens very rarely; take a slow path and perform the lookup under a lock.
+  lea(r10, RuntimeAddress(SharedRuntime::get_bad_call_stub()));
+  jmp(dispatch);
 
-    // Unfortunate race where buckets are being shuffled around concurrently to optimize call
-    // patterns. This happens very rarely; take a slow path and perform the lookup under a lock.
-    lea(r10, RuntimeAddress(SharedRuntime::get_bad_call_stub()));
-    jmp(dispatch);
-
-    // Unpack and call primary bucket
-    bind(dispatch_to_entry);
-    unpack_table_entry(rbx, r10);
-  }
+  // Unpack and call primary bucket
+  bind(dispatch_to_entry);
+  unpack_table_entry(rbx, r10);
   bind(dispatch);
-  Assembler::call(r10);
 }
 
 
