@@ -1116,7 +1116,6 @@ JRT_BLOCK_ENTRY(address, SharedRuntime::handle_wrong_method_abstract(JavaThread*
   return res;
 JRT_END
 
-// resolve virtual call and update inline cache to monomorphic
 JRT_BLOCK_ENTRY(address, SharedRuntime::resolve_bad_call_C(JavaThread *thread ))
   // 6243940 We might end up in here if the callee is deoptimized
   // as we race to call it.  We don't want to take a safepoint if
