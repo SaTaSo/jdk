@@ -900,7 +900,6 @@ AdapterHandlerEntry* SharedRuntime::generate_i2c2i_adapters(MacroAssembler *masm
 
   address c2i_entry = __ pc();
 
-  Label got_code;
   // If code got installed, we don't want to jump into the interpreter.
   __ cmpptr(Address(rbx, in_bytes(Method::code_offset())), (int32_t)NULL_WORD);
   __ jcc(Assembler::notEqual, ExternalAddress(SharedRuntime::get_bad_call_stub()));

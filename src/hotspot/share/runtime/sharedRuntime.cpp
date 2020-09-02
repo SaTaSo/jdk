@@ -942,15 +942,15 @@ void SharedRuntime::find_callee_info(JavaThread* thread,
 
   // This register map must be update since we need to find the receiver for
   // compiled frames. The receiver might be in a register.
-  RegisterMap reg_map(thread);
-  frame stubFrame   = thread->last_frame();
-  // Caller-frame is a compiled frame
-  frame callerFrame = stubFrame.sender(&reg_map);
+  RegisterMap reg_map(thread, true /* update */);
+  frame stub_frame   = thread->last_frame();
+  frame caller_frame = stub_frame.sender(&reg_map);
 
   // Find lazy resolution
-  address pc = callerFrame.pc();
-  CompiledMethod* cm = CodeCache::find_compiled(pc);
-  LazyInvocation* lazy = cm->lazy_invocation_at(pc);
+  address pc = caller_frame.pc();
+  CodeBlob* cb = CodeCache::find_blob(pc);
+  CompiledMethod* cm = cb->as_compiled_method_or_null();
+  LazyInvocation* lazy = cm == NULL ? NULL : cm->lazy_invocation_at(pc);
   methodHandle attached_method(THREAD, lazy == NULL ? NULL : lazy->attached_method());
 
   if (attached_method.not_null()) {
@@ -998,7 +998,7 @@ void SharedRuntime::find_callee_info(JavaThread* thread,
     }
 
     // Retrieve from a compiled argument list
-    receiver = Handle(THREAD, callerFrame.retrieve_receiver(&reg_map));
+    receiver = Handle(THREAD, caller_frame.retrieve_receiver(&reg_map));
 
     if (receiver.is_null()) {
       THROW(vmSymbols::java_lang_NullPointerException());
@@ -1042,9 +1042,10 @@ void SharedRuntime::find_callee_info(JavaThread* thread,
 
   // If this call has a MemberName argument, we might want to link the receiver
   // code tables to make sure calls make progress.
-  if (callinfo.resolved_method()->intrinsic_id() == vmIntrinsics::_linkToVirtual ||
-      callinfo.resolved_method()->intrinsic_id() == vmIntrinsics::_linkToInterface) {
-    Handle receiver = Handle(THREAD, callerFrame.retrieve_receiver(&reg_map));
+  if (callinfo.selected_method()->intrinsic_id() == vmIntrinsics::_linkToVirtual ||
+      callinfo.selected_method()->intrinsic_id() == vmIntrinsics::_linkToInterface) {
+    RegisterMap reg_map(thread, true /* update */);
+    Handle receiver = thread->last_java_vframe(&reg_map)->locals()->at(0)->get_obj();
     klassVtable vtable = receiver->klass()->vtable();
     vtable.link_table_code();
 
@@ -1146,9 +1147,9 @@ JRT_BLOCK_ENTRY(address, SharedRuntime::resolve_bad_call_C(JavaThread *thread ))
       // JVM upcalls may land here as well, but there's a proper check present in
       // LinkResolver::resolve_static_call (called from JavaCalls::call_static),
       // so bypassing it in c2i adapter is benign.
+      assert(!caller_frame.is_interpreted_frame() || !callee->method_holder()->should_be_initialized(),
+             "interpreted calls should already have initialized the class during cpCache resolution");
       return callee->get_c2i_no_clinit_check_entry();
-    } else {
-      return callee->get_c2i_entry();
     }
   }
 
