@@ -1044,8 +1044,30 @@ void SharedRuntime::find_callee_info(JavaThread* thread,
   // code tables to make sure calls make progress.
   if (callinfo.selected_method()->intrinsic_id() == vmIntrinsics::_linkToVirtual ||
       callinfo.selected_method()->intrinsic_id() == vmIntrinsics::_linkToInterface) {
-    RegisterMap reg_map(thread, true /* update */);
-    Handle receiver = thread->last_java_vframe(&reg_map)->locals()->at(0)->get_obj();
+    ResourceMark rm;
+
+    SimpleScopeDesc ssd(cm, pc);
+    Bytecode_invoke call(methodHandle(Thread::current(), ssd.method()), ssd.bci());
+    bool has_receiver = call.has_receiver();
+    bool has_appendix = call.has_appendix();
+    Symbol* signature = call.signature();
+
+    // The method attached by JIT-compilers should be used, if present.
+    // Bytecode can be inaccurate in such case.
+    Method* callee = attached_method();
+    if (callee != NULL) {
+      has_receiver = !(callee->access_flags().is_static());
+      has_appendix = false;
+      signature = callee->signature();
+    }
+
+    int arg_size  = ArgumentSizeComputer(signature).size() + (has_receiver ? 1 : 0) + (has_appendix ? 1 : 0);
+    VMRegPair* regs = SharedRuntime::find_callee_arguments(signature, has_receiver, has_appendix, &arg_size);
+    VMReg reg = regs[0].first();
+    oop* loc = caller_frame.oopmapreg_to_location(reg, &reg_map);
+
+    oop receiver = *loc;
+
     klassVtable vtable = receiver->klass()->vtable();
     vtable.link_table_code();
 
