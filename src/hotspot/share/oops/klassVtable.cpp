@@ -130,7 +130,7 @@ void klassVtable::link_code(bool bootstrapping) {
     if (vtable_method == NULL) {
       _table[-vtable_index] = make_entry(0, SharedRuntime::get_bad_call_stub());
     } else {
-      _table[-vtable_index] = make_vtable_entry(vtable_method);
+      _table[-vtable_index] = make_entry(vtable_method->selector(), SharedRuntime::get_bad_call_stub());
     }
   }
 }
@@ -1201,7 +1201,7 @@ void itableHashTableBuilder::create_itable() {
 
   for (uint32_t i = 0; i < _capacity; i++) {
     Entry entry = _table[i];
-    blob_table[i] = make_itable_entry(entry._selector, entry._target);
+    blob_table[i] = make_entry(entry._selector, SharedRuntime::get_bad_call_stub());
   }
   blob_table[0] = make_itable_entry(0, NULL);
   blob_int32[0] = _capacity - 1; // mask
