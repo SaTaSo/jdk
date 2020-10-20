@@ -506,7 +506,8 @@ void vframeStreamCommon::found_bad_method_frame() const {
 
 // top-frame will be skipped
 vframeStream::vframeStream(JavaThread* thread, frame top_frame,
-  bool stop_at_java_call_stub) : vframeStreamCommon(RegisterMap(thread, true, true)) {
+                          bool stop_at_java_call_stub) : 
+    vframeStreamCommon(RegisterMap(thread, true, true, true)) {
   _stop_at_java_call_stub = stop_at_java_call_stub;
 
   // skip top frame, as it may not be at safepoint
