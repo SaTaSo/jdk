@@ -35,12 +35,12 @@ ZGeneration::ZGeneration(ZGenerationId generation_id, ZPageAge age) :
 
 void ZGeneration::increase_used(size_t size) {
   // Update atomically since we have concurrent readers
-  Atomic::add(&_used, size);
+  Atomic::add(&_used, size, memory_order_relaxed);
 }
 
 void ZGeneration::decrease_used(size_t size) {
   // Update atomically since we have concurrent readers
-  Atomic::sub(&_used, size);
+  Atomic::sub(&_used, size, memory_order_relaxed);
 }
 
 size_t ZGeneration::used_total() const {
@@ -54,7 +54,7 @@ ZYoungGeneration::ZYoungGeneration(ZPageTable* page_table, ZPageAllocator* page_
 }
 
 void ZYoungGeneration::scan_remembered_sets() {
-  ZStatTimerMinor timer(ZSubPhaseConcurrentMinorMarkRootRemset);
+  ZStatTimerYoung timer(ZSubPhaseConcurrentMinorMarkRootRemset);
   _remembered.scan();
 }
 

@@ -298,7 +298,7 @@ zaddress ZRelocate::forward_object(ZForwarding* forwarding, zaddress_unsafe from
   return to_addr;
 }
 
-static ZPage* alloc_page(const ZForwarding* forwarding, ZGenerationId generation, ZPageAge age) {
+static ZPage* alloc_page(const ZForwarding* forwarding, ZGenerationId generation, ZPageAge age, ZCollector* collector) {
   if (ZStressRelocateInPlace) {
     // Simulate failure to allocate a new page. This will
     // cause the page being relocated to be relocated in-place.
@@ -309,7 +309,7 @@ static ZPage* alloc_page(const ZForwarding* forwarding, ZGenerationId generation
   flags.set_non_blocking();
   flags.set_gc_relocation();
 
-  return ZHeap::heap()->alloc_page(forwarding->type(), forwarding->size(), flags, generation, age);
+  return ZHeap::heap()->alloc_page(forwarding->type(), forwarding->size(), flags, generation, age, collector);
 }
 
 static void free_page(ZPage* page, bool reclaimed) {
@@ -329,15 +329,17 @@ private:
   volatile size_t _in_place_count;
   ZGenerationId   _generation;
   ZPageAge        _age;
+  ZCollector*     _collector;
 
 public:
-  ZRelocateSmallAllocator(ZGenerationId generation, ZPageAge age) :
+  ZRelocateSmallAllocator(ZGenerationId generation, ZPageAge age, ZCollector* collector) :
       _in_place_count(0),
       _generation(generation),
-      _age(age) {}
+      _age(age),
+      _collector(collector) {}
 
   ZPage* alloc_target_page(ZForwarding* forwarding, ZPage* target) {
-    ZPage* const page = alloc_page(forwarding, _generation, _age);
+    ZPage* const page = alloc_page(forwarding, _generation, _age, _collector);
     if (page == NULL) {
       Atomic::inc(&_in_place_count);
     }
@@ -380,15 +382,17 @@ private:
   volatile size_t     _in_place_count;
   ZGenerationId       _generation;
   ZPageAge            _age;
+  ZCollector*         _collector;
 
 public:
-  ZRelocateMediumAllocator(ZGenerationId generation, ZPageAge age) :
+  ZRelocateMediumAllocator(ZGenerationId generation, ZPageAge age, ZCollector* collector) :
       _lock(),
       _shared(NULL),
       _in_place(false),
       _in_place_count(0),
       _generation(generation),
-      _age(age) {}
+      _age(age),
+      _collector(collector) {}
 
   ~ZRelocateMediumAllocator() {
     if (should_free_target_page(_shared)) {
@@ -409,7 +413,7 @@ public:
     // current target page if another thread shared a page, or allocated
     // a new page.
     if (_shared == target) {
-      _shared = alloc_page(forwarding, _generation, _age);
+      _shared = alloc_page(forwarding, _generation, _age, _collector);
       if (_shared == NULL) {
         Atomic::inc(&_in_place_count);
         _in_place = true;
@@ -795,10 +799,10 @@ public:
       _iter(relocation_set),
       _collector(relocation_set->collector()),
       _queue(queue),
-      _survivor_small_allocator(ZGenerationId::young, ZPageAge::survivor),
-      _survivor_medium_allocator(ZGenerationId::young, ZPageAge::survivor),
-      _old_small_allocator(ZGenerationId::old, ZPageAge::old),
-      _old_medium_allocator(ZGenerationId::old, ZPageAge::old) {}
+      _survivor_small_allocator(ZGenerationId::young, ZPageAge::survivor, _collector),
+      _survivor_medium_allocator(ZGenerationId::young, ZPageAge::survivor, _collector),
+      _old_small_allocator(ZGenerationId::old, ZPageAge::old, _collector),
+      _old_medium_allocator(ZGenerationId::old, ZPageAge::old, _collector) {}
 
   ~ZRelocateTask() {
     _collector->stat_relocation()->set_at_relocate_end(_survivor_small_allocator.in_place_count() + _old_small_allocator.in_place_count(),
@@ -927,13 +931,13 @@ void ZRelocate::relocate(ZRelocationSet* relocation_set) {
   }
 
   if (relocation_set->collector()->is_minor()) {
-    ZStatTimerMinor timer(ZSubPhaseConcurrentMinorRelocateRemsetFlipPagePromoted);
+    ZStatTimerYoung timer(ZSubPhaseConcurrentMinorRelocateRemsetFlipPagePromoted);
     ZRelocateAddRemsetForInPlacePromoted task(relocation_set->promote_flipped_pages());
     workers()->run(&task);
   }
 
   if (relocation_set->collector()->is_minor() && ZRelocateRemsetStrategy == 2) {
-    ZStatTimerMinor timer(ZSubPhaseConcurrentMinorRelocateRemsetNormalPromoted);
+    ZStatTimerYoung timer(ZSubPhaseConcurrentMinorRelocateRemsetNormalPromoted);
     ZRelocateAddRemsetForNormalPromoted task;
     workers()->run(&task);
   }

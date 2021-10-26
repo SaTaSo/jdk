@@ -67,7 +67,7 @@ protected:
 
   size_t            _used_high;
   size_t            _used_low;
-  ssize_t           _reclaimed;
+  volatile ssize_t  _reclaimed;
 
   Phase             _phase;
   uint32_t          _seqnum;
@@ -120,6 +120,7 @@ public:
   ZStatRelocation* stat_relocation();
 
   void set_at_collection_start();
+  void set_at_generation_collection_start();
 
   // Workers
   ZWorkers* workers();
@@ -157,11 +158,15 @@ public:
 
 class ZMinorCollector : public ZCollector {
 private:
-  bool         _skip_mark_start;
-  ZMinorTracer _tracer;
+  bool              _skip_mark_start;
+  ZMinorTracer      _tracer;
+  ConcurrentGCTimer _minor_timer;
 
 public:
   ZMinorCollector(ZPageTable* page_table, ZPageAllocator* page_allocator);
+
+  // Statistics
+  ConcurrentGCTimer* minor_timer();
 
   // GC operations
   void mark_start();
@@ -191,12 +196,14 @@ private:
   ZUnload             _unload;
   int                 _total_collections_at_end;
   ZMajorTracer        _tracer;
+  ConcurrentGCTimer   _major_timer;
 
 public:
   ZMajorCollector(ZPageTable* page_table, ZPageAllocator* page_allocator);
 
   // Statistics
   void reset_statistics();
+  ConcurrentGCTimer* major_timer();
 
   // Reference processing
   ReferenceDiscoverer* reference_discoverer();

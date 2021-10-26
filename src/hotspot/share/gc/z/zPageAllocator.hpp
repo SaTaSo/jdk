@@ -86,7 +86,7 @@ private:
   size_t increase_capacity(size_t size);
   void decrease_capacity(size_t size, bool set_max_capacity);
 
-  void increase_used(size_t size, bool gc_relocation, ZGenerationId id);
+  void increase_used(size_t size, bool gc_relocation, ZCollector* collector, ZGenerationId id);
   void decrease_used(size_t size, bool reclaimed, ZGenerationId id);
 
   bool commit_page(ZPage* page);
@@ -130,7 +130,7 @@ public:
 
   ZPageAllocatorStats stats(ZCollector* collector) const;
 
-  ZPage* alloc_page(uint8_t type, size_t size, ZAllocationFlags flags, ZGenerationId generation_id, ZPageAge age);
+  ZPage* alloc_page(uint8_t type, size_t size, ZAllocationFlags flags, ZGenerationId generation_id, ZPageAge age, ZCollector* collector);
   void recycle_page(ZPage* page);
   void safe_destroy_page(ZPage* page);
   void free_page(ZPage* page, bool reclaimed);
@@ -159,6 +159,7 @@ private:
   size_t _used;
   size_t _used_high;
   size_t _used_low;
+  size_t _used_generation;
   size_t _reclaimed;
 
 public:
@@ -169,6 +170,7 @@ public:
                       size_t used,
                       size_t used_high,
                       size_t used_low,
+                      size_t used_generation,
                       size_t reclaimed);
 
   size_t min_capacity() const;
@@ -178,6 +180,7 @@ public:
   size_t used() const;
   size_t used_high() const;
   size_t used_low() const;
+  size_t used_generation() const;
   size_t reclaimed() const;
 };
 
