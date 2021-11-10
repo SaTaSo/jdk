@@ -150,6 +150,8 @@ class CodeBlob_sizes {
 address CodeCache::_low_bound = 0;
 address CodeCache::_high_bound = 0;
 int CodeCache::_number_of_nmethods_with_dependencies = 0;
+int CodeCache::_compiled_method_iterators = 0;
+bool CodeCache::_pending_sweep = false;
 ExceptionCache* volatile CodeCache::_exception_cache_purge_list = NULL;
 
 // Initialize arrays of CodeHeap subsets
@@ -456,6 +458,48 @@ CodeHeap* CodeCache::get_code_heap(int code_blob_type) {
     }
   }
   return NULL;
+}
+
+void CodeCache::begin_compiled_method_iteration() {
+  if (!SafepointSynchronize::is_at_safepoint()) {
+    // No concurrent sweeping in safepoints
+    return;
+  }
+  MutexLocker ml(CodeCache_lock, Mutex::_no_safepoint_check_flag);
+  // Reach a state without concurrent sweeping
+  while (_compiled_method_iterators < 0) {
+    CodeCache_lock->wait_without_safepoint_check();
+  }
+  _compiled_method_iterators++;
+}
+
+void CodeCache::end_compiled_method_iteration() {
+  if (!SafepointSynchronize::is_at_safepoint()) {
+    // No concurrent sweeping in safepoints
+    return;
+  }
+  MutexLocker ml(CodeCache_lock, Mutex::_no_safepoint_check_flag);
+  // Let the sweeper run again, if we stalled it
+  _compiled_method_iterators--;
+  if (_pending_sweep) {
+    CodeCache_lock->notify_all();
+  }
+}
+
+void CodeCache::begin_sweep() {
+  assert_locked_or_safepoint(CodeCache_lock);
+  while (_compiled_method_iterators > 0) {
+    _pending_sweep = true;
+    CodeCache_lock->wait_without_safepoint_check();
+  }
+  _pending_sweep = false;
+  _compiled_method_iterators = -1;
+}
+
+void CodeCache::end_sweep() {
+  assert_locked_or_safepoint(CodeCache_lock);
+  _compiled_method_iterators = 0;
+  CodeCache_lock->notify_all();
 }
 
 CodeBlob* CodeCache::first_blob(CodeHeap* heap) {
@@ -1162,8 +1206,7 @@ int CodeCache::mark_for_deoptimization(Method* dependee) {
 }
 
 void CodeCache::make_marked_nmethods_not_entrant() {
-  assert_locked_or_safepoint(CodeCache_lock);
-  CompiledMethodIterator iter(CompiledMethodIterator::only_alive_and_not_unloading);
+  BetterCompiledMethodIterator iter(BetterCompiledMethodIterator::only_alive_and_not_unloading);
   while(iter.next()) {
     CompiledMethod* nm = iter.method();
     if (nm->is_marked_for_deoptimization()) {

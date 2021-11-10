@@ -904,7 +904,6 @@ void Deoptimization::deoptimize_all_marked(nmethod* nmethod_only) {
     nmethod_only->mark_for_deoptimization();
     nmethod_only->make_not_entrant();
   } else {
-    MutexLocker mu(SafepointSynchronize::is_at_safepoint() ? NULL : CodeCache_lock, Mutex::_no_safepoint_check_flag);
     CodeCache::make_marked_nmethods_not_entrant();
   }
 

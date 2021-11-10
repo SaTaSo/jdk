@@ -340,6 +340,7 @@ void NMethodSweeper::sweep_code_cache() {
   int freed_memory = 0;
   {
     MutexLocker mu(CodeCache_lock, Mutex::_no_safepoint_check_flag);
+    CodeCache::begin_sweep();
 
     while (!_current.end()) {
       swept_count++;
@@ -389,6 +390,7 @@ void NMethodSweeper::sweep_code_cache() {
       _seen++;
       handle_safepoint_request();
     }
+    CodeCache::end_sweep();
   }
 
   assert(_current.end(), "must have scanned the whole cache");

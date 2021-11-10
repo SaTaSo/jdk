@@ -80,7 +80,7 @@ class ShenandoahParallelCodeHeapIterator;
 class CodeCache : AllStatic {
   friend class VMStructs;
   friend class JVMCIVMStructs;
-  template <class T, class Filter> friend class CodeBlobIterator;
+  template <class T, class Filter, bool is_compiled_method> friend class CodeBlobIterator;
   friend class WhiteBox;
   friend class CodeCacheLoader;
   friend class ShenandoahParallelCodeHeapIterator;
@@ -94,6 +94,8 @@ class CodeCache : AllStatic {
   static address _low_bound;                            // Lower bound of CodeHeap addresses
   static address _high_bound;                           // Upper bound of CodeHeap addresses
   static int _number_of_nmethods_with_dependencies;     // Total number of nmethods with dependencies
+  static int _compiled_method_iterators;
+  static bool _pending_sweep;
   static uint8_t _unloading_cycle;                      // Global state for recognizing old nmethods that need to be unloaded
 
   static ExceptionCache* volatile _exception_cache_purge_list;
@@ -115,7 +117,13 @@ class CodeCache : AllStatic {
   static CodeBlob* first_blob(CodeHeap* heap);                // Returns the first CodeBlob on the given CodeHeap
   static CodeBlob* first_blob(int code_blob_type);            // Returns the first CodeBlob of the given type
   static CodeBlob* next_blob(CodeHeap* heap, CodeBlob* cb);   // Returns the next CodeBlob on the given CodeHeap
+  static void begin_compiled_method_iteration();
+  static void end_compiled_method_iteration();
+ public:
+  static void begin_sweep();
+  static void end_sweep();
 
+ private:
   static size_t bytes_allocated_in_freelists();
   static int    allocated_segments();
   static size_t freelists_length();
@@ -301,8 +309,8 @@ class CodeCache : AllStatic {
 };
 
 
-// Iterator to iterate over nmethods in the CodeCache.
-template <class T, class Filter> class CodeBlobIterator : public StackObj {
+// Iterator to iterate over code blobs in the CodeCache.
+template <class T, class Filter, bool is_compiled_method> class CodeBlobIterator : public StackObj {
  public:
   enum LivenessFilter { all_blobs, only_alive, only_alive_and_not_unloading };
 
@@ -313,11 +321,7 @@ template <class T, class Filter> class CodeBlobIterator : public StackObj {
   bool _only_alive;
   bool _only_not_unloading;
 
- public:
-  CodeBlobIterator(LivenessFilter filter, T* nm = NULL)
-    : _only_alive(filter == only_alive || filter == only_alive_and_not_unloading),
-      _only_not_unloading(filter == only_alive_and_not_unloading)
-  {
+  void initialize_iteration(T* nm) {
     if (Filter::heaps() == NULL) {
       return;
     }
@@ -333,10 +337,7 @@ template <class T, class Filter> class CodeBlobIterator : public StackObj {
     }
   }
 
-  // Advance iterator to next blob
-  bool next() {
-    assert_locked_or_safepoint(CodeCache_lock);
-
+  bool next_impl() {
     for (;;) {
       // Walk through heaps as required
       if (!next_blob()) {
@@ -361,6 +362,36 @@ template <class T, class Filter> class CodeBlobIterator : public StackObj {
       }
 
       return true;
+    }
+  }
+
+ public:
+  CodeBlobIterator(LivenessFilter filter, T* nm = NULL)
+    : _only_alive(filter == only_alive || filter == only_alive_and_not_unloading),
+      _only_not_unloading(filter == only_alive_and_not_unloading)
+  {
+    if (is_compiled_method) {
+      CodeCache::begin_compiled_method_iteration();
+      initialize_iteration(nm);
+    } else {
+      initialize_iteration(nm);
+    }
+  }
+
+  ~CodeBlobIterator() {
+    if (is_compiled_method) {
+      CodeCache::end_compiled_method_iteration();
+    }
+  }
+
+  // Advance iterator to next blob
+  bool next() {
+    if (is_compiled_method) {
+      MutexLocker ml(CodeCache_lock, Mutex::_no_safepoint_check_flag);
+      return next_impl();
+    } else {
+      assert_locked_or_safepoint(CodeCache_lock);
+      return next_impl();
     }
   }
 
@@ -393,7 +424,6 @@ private:
   }
 };
 
-
 struct CompiledMethodFilter {
   static bool apply(CodeBlob* cb) { return cb->is_compiled(); }
   static const GrowableArray<CodeHeap*>* heaps() { return CodeCache::compiled_heaps(); }
@@ -410,8 +440,10 @@ struct AllCodeBlobsFilter {
   static const GrowableArray<CodeHeap*>* heaps() { return CodeCache::heaps(); }
 };
 
-typedef CodeBlobIterator<CompiledMethod, CompiledMethodFilter> CompiledMethodIterator;
-typedef CodeBlobIterator<nmethod, NMethodFilter> NMethodIterator;
-typedef CodeBlobIterator<CodeBlob, AllCodeBlobsFilter> AllCodeBlobsIterator;
+typedef CodeBlobIterator<CompiledMethod, CompiledMethodFilter, false /* is_compiled_method */> CompiledMethodIterator;
+typedef CodeBlobIterator<nmethod, NMethodFilter, false /* is_compiled_method */> NMethodIterator;
+typedef CodeBlobIterator<CodeBlob, AllCodeBlobsFilter, false /* is_compiled_method */> AllCodeBlobsIterator;
+
+typedef CodeBlobIterator<CompiledMethod, CompiledMethodFilter, true /* is_compiled_method */> BetterCompiledMethodIterator;
 
 #endif // SHARE_CODE_CODECACHE_HPP
