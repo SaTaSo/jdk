@@ -142,6 +142,7 @@ public:
 
   uint8_t barrier_data() { return _barrier_data; }
   void set_barrier_data(uint8_t barrier_data) { _barrier_data = barrier_data; }
+  void add_barrier_data(uint8_t barrier_data) { _barrier_data |= barrier_data; }
 
   // Search through memory states which precede this node (load or store).
   // Look for an exact match for the address, with no intervening
@@ -855,6 +856,7 @@ public:
 
   uint8_t barrier_data() { return _barrier_data; }
   void set_barrier_data(uint8_t barrier_data) { _barrier_data = barrier_data; }
+  void add_barrier_data(uint8_t barrier_data) { _barrier_data |= barrier_data; }
 };
 
 class LoadStoreConditionalNode : public LoadStoreNode {

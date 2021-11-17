@@ -101,7 +101,10 @@
           "Verify marking stacks")                                          \
                                                                             \
   product(bool, ZVerifyForwarding, false, DIAGNOSTIC,                       \
-          "Verify forwarding tables")
+          "Verify forwarding tables")                                       \
+                                                                            \
+  product(bool, ZVerifyElidedBarriers, false, DIAGNOSTIC,                   \
+          "Verify elided barriers")                                         \
 
 // end of GC_Z_FLAGS
 

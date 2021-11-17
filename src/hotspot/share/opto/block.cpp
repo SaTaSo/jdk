@@ -537,6 +537,11 @@ void PhaseCFG::insert_goto_at(uint block_no, uint succ_no) {
   in->_succs.map(succ_no, block);
   // Set the frequency of the new block
   block->_freq = freq;
+  // Update dominator information
+  // One predeccessor only - that must then be the immediate dominator
+  block->_idom = in;
+  block->_dom_depth = in->_dom_depth; // Use idom as an approximation for _dom_depth
+  // block->_pre_order - will be set later
   // add new basic block to basic block list
   add_block_at(block_no + 1, block);
 }
@@ -934,6 +939,10 @@ void PhaseCFG::fixup_flow() {
       // But we don't need to do anything here
     }
   } // End of for all blocks
+
+#ifdef ASSERT
+  verify_dominator_tree();
+#endif
 }
 
 

@@ -224,6 +224,7 @@ public:
 
   uint8_t barrier_data() const { return _barrier; }
   void set_barrier_data(uint8_t data) { _barrier = data; }
+  void add_barrier_data(uint8_t data) { _barrier |= data; }
 
   // Copy inputs and operands to new node of instruction.
   // Called from cisc_version() and short_branch_version().
@@ -338,6 +339,9 @@ public:
   #define TYPE_PTR_SENTINAL  ((const TypePtr*)-1)
   // Passing TYPE_PTR_SENTINAL as adr_type asks for computation of the adr_type if possible
   const Node* get_base_and_disp(intptr_t &offset, const TypePtr* &adr_type) const;
+
+  // A convenience wrapper of get_base_and_disp
+  const Node* get_base_and_offset(intptr_t& offset);
 
   // Helper for get_base_and_disp: find the base and index input nodes.
   // Returns the MachOper as determined by memory_operand(), for use, if
@@ -824,9 +828,21 @@ public:
   virtual const TypePtr *adr_type() const;
 };
 
+class BarrierRecord : public ResourceObj {
+public:
+  MachNode* _access;
+  Node*     _mem;
+  DEBUG_ONLY(Node* _dom_access);
+
+  BarrierRecord(MachNode* access, Node* mem DEBUG_ONLY(COMMA Node* dom_access)) :
+    _access(access), _mem(mem) DEBUG_ONLY(COMMA _dom_access(dom_access)) {
+  }
+};
+
 //------------------------------MachSafePointNode-----------------------------
 // Machine-specific versions of safepoints
 class MachSafePointNode : public MachReturnNode {
+
 public:
   OopMap*         _oop_map;     // Array of OopMap info (8-bit char) for GC
   JVMState*       _jvms;        // Pointer to list of JVM State Objects
@@ -834,9 +850,40 @@ public:
   bool            _has_ea_local_in_scope; // NoEscape or ArgEscape objects in JVM States
   OopMap*         oop_map() const { return _oop_map; }
   void            set_oop_map(OopMap* om) { _oop_map = om; }
+  GrowableArray<BarrierRecord*>*  _barrier_records;
 
-  MachSafePointNode() : MachReturnNode(), _oop_map(NULL), _jvms(NULL), _jvmadj(0), _has_ea_local_in_scope(false) {
+  MachSafePointNode() : MachReturnNode(), _oop_map(NULL), _jvms(NULL), _jvmadj(0), _has_ea_local_in_scope(false), _barrier_records(NULL) {
     init_class_id(Class_MachSafePoint);
+  }
+
+  void record_barrier(MachNode* access, Node* mem DEBUG_ONLY(COMMA Node* dom_access)) {
+    Arena* arena = Compile::current()->comp_arena();
+    if (_barrier_records == NULL) {
+      _barrier_records = new (arena) GrowableArray<BarrierRecord*>(arena, 4,  0, 0);
+      _barrier_records->push(new (arena) BarrierRecord(access, mem DEBUG_ONLY(COMMA dom_access)));
+      return;
+    }
+
+    // Check for duplicates before adding new record
+    for (GrowableArrayIterator<BarrierRecord*> it = _barrier_records->begin(); it != _barrier_records->end(); ++it) {
+      BarrierRecord* br = *it;
+      if (br->_mem == mem) {
+        intptr_t offset1, offset2;
+        access->get_base_and_offset(offset1);
+        br->_access->get_base_and_offset(offset2);
+        if (offset1 == offset2) {
+          // Found dupe - exit
+          return;
+        }
+      }
+    }
+
+    BarrierRecord* r = new (arena) BarrierRecord(access, mem DEBUG_ONLY(COMMA dom_access));
+    _barrier_records->push(r);
+  }
+
+  GrowableArray<BarrierRecord*>* barrier_records() {
+    return _barrier_records;
   }
 
   virtual JVMState* jvms() const { return _jvms; }

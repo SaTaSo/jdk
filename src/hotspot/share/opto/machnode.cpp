@@ -324,6 +324,17 @@ const Node* MachNode::get_base_and_disp(intptr_t &offset, const TypePtr* &adr_ty
   return base;
 }
 
+const Node* MachNode::get_base_and_offset(intptr_t& offset) {
+  const TypePtr* adr_type = NULL;
+  offset = 0;
+  const Node* base = get_base_and_disp(offset, adr_type);
+
+  if (base == NULL || base == NodeSentinel || offset < 0) {
+    return NULL;
+  }
+
+  return base;
+}
 
 //---------------------------------adr_type---------------------------------
 const class TypePtr *MachNode::adr_type() const {

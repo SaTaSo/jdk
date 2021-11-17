@@ -104,7 +104,7 @@ struct OopFlow : public ResourceObj {
   static OopFlow *make( Arena *A, int max_size, Compile* C );
 
   // Build an oopmap from the current flow info
-  OopMap *build_oop_map( Node *n, int max_reg, PhaseRegAlloc *regalloc, int* live );
+  OopMap *build_oop_map(MachSafePointNode *n, int max_reg, PhaseRegAlloc *regalloc, int* live);
 };
 
 // Given reaching-defs for this block start, compute it for this block end
@@ -119,7 +119,7 @@ void OopFlow::compute_reach( PhaseRegAlloc *regalloc, int max_reg, Dict *safehas
       if( n->is_MachSafePoint() && !n->is_MachCallLeaf() ) {
         int *live = (int*) (*safehash)[n];
         assert( live, "must find live" );
-        n->as_MachSafePoint()->set_oop_map( build_oop_map(n,max_reg,regalloc, live) );
+        n->as_MachSafePoint()->set_oop_map(build_oop_map(n->as_MachSafePoint(), max_reg, regalloc, live));
       }
     }
 
@@ -204,10 +204,11 @@ static int get_live_bit( int *live, int reg ) {
 static void set_live_bit( int *live, int reg ) {
          live[reg>>LogBitsPerInt] |=  (1<<(reg&(BitsPerInt-1))); }
 static void clr_live_bit( int *live, int reg ) {
-         live[reg>>LogBitsPerInt] &= ~(1<<(reg&(BitsPerInt-1))); }
+         live[reg>>LogBitsPerInt] &= ~(1<<(reg&(BitsPerInt-1)));
+}
 
 // Build an oopmap from the current flow info
-OopMap *OopFlow::build_oop_map( Node *n, int max_reg, PhaseRegAlloc *regalloc, int* live ) {
+OopMap *OopFlow::build_oop_map(MachSafePointNode *n, int max_reg, PhaseRegAlloc *regalloc, int* live) {
   int framesize = regalloc->_framesize;
   int max_inarg_slot = OptoReg::reg2stack(regalloc->_matcher._new_SP);
   debug_only( char *dup_check = NEW_RESOURCE_ARRAY(char,OptoReg::stack0());
@@ -355,18 +356,6 @@ OopMap *OopFlow::build_oop_map( Node *n, int max_reg, PhaseRegAlloc *regalloc, i
   }
 
 #ifdef ASSERT
-  /* Nice, Intel-only assert
-  int cnt_callee_saves=0;
-  int reg2 = 0;
-  while (OptoReg::is_reg(reg2)) {
-    if( dup_check[reg2] != 0) cnt_callee_saves++;
-    assert( cnt_callee_saves==3 || cnt_callee_saves==5, "missed some callee-save" );
-    reg2++;
-  }
-  */
-#endif
-
-#ifdef ASSERT
   for( OopMapStream oms1(omap); !oms1.is_done(); oms1.next()) {
     OopMapValue omv1 = oms1.current();
     if (omv1.type() != OopMapValue::derived_oop_value) {
@@ -387,6 +376,36 @@ OopMap *OopFlow::build_oop_map( Node *n, int max_reg, PhaseRegAlloc *regalloc, i
   }
 #endif
 
+  bool trace = C->directive()->TraceBarrierEliminationOption;
+  // Register safepoint attached barriers in oopmap
+  GrowableArray<BarrierRecord*>* barrier_records = n->_barrier_records;
+  if (barrier_records != NULL) {
+    while (barrier_records->is_nonempty()) {
+      BarrierRecord* record = barrier_records->pop();
+      MachNode* access = record->_access;
+      Node* mem        = record->_mem;
+      DEBUG_ONLY(Node* dom_access = record->_dom_access; )
+
+      intptr_t mem_offset;
+      access->get_base_and_offset(mem_offset);
+
+      const OptoReg::Name obase = regalloc->get_reg_first(mem);
+      VMReg base = OptoReg::as_VMReg(OptoReg::Name(obase), framesize, max_inarg_slot);
+
+      omap->set_indirect_oop(base, mem_offset);
+#ifdef ASSERT
+      if (trace) {
+        PhaseCFG* const cfg = C->cfg();
+        tty->print_cr("Sfp %i(b%i) records %i(b%i) for access %i(b%i) with dom %i(b%i) obase %i base " INTPTRNZ_FORMAT " off(" INTPTRNZ_FORMAT ") ",
+                      n->_idx, cfg->get_block_for_node(n)->_pre_order,
+                      mem->_idx, cfg->get_block_for_node(mem)->_pre_order,
+                      access->_idx, cfg->get_block_for_node(access)->_pre_order,
+                      dom_access->_idx, cfg->get_block_for_node(dom_access)->_pre_order,
+                      obase, base->value(), mem_offset);
+      }
+#endif
+    }
+  }
   return omap;
 }
 

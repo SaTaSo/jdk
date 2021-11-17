@@ -67,9 +67,18 @@ static void z_load_barrier(MacroAssembler& _masm, const MachNode* node, Address 
     z_keep_alive_load_barrier(_masm, node, ref_addr, ref);
     return;
   }
-
+  if (ZVerifyElidedBarriers && ((node->barrier_data() & ZBarrierElided) != 0)) {
+    Label good;
+    __ testptr(ref, ZBarrierSetAssembler::load_bad_mask_from_thread(r15_thread));
+    __ jcc(Assembler::zero, good);
+    __ relocate(barrier_Relocation::spec(), ZBarrierRelocationFormatLoadGoodBeforeShl);
+    __ shrq(ref, barrier_Relocation::unpatched);
+    __ jcc(Assembler::zero, good);
+    __ stop("Found bad oop after load with elided barrier");
+    __ bind(good);
+  }
   z_uncolor(_masm, node, ref);
-  if (node->barrier_data() == ZBarrierElided) {
+  if ((node->barrier_data() & ZBarrierElided) != 0) {
     return;
   }
   ZLoadBarrierStubC2* const stub = ZLoadBarrierStubC2::create(node, ref_addr, ref);
@@ -79,7 +88,16 @@ static void z_load_barrier(MacroAssembler& _masm, const MachNode* node, Address 
 }
 
 static void z_store_barrier(MacroAssembler& _masm, const MachNode* node, Address ref_addr, Register rnew_zaddress, Register rnew_zpointer, bool is_atomic) {
-  if (node->barrier_data() == ZBarrierElided) {
+  if ((node->barrier_data() & ZBarrierElided) != 0) {
+    // Test to avoid verifying on uninitialized oop fields
+    if (ZVerifyElidedBarriers && (node->barrier_data() & ZBarrierSABElided) != 0) {
+      Label good;
+      __ movptr(rnew_zpointer, ref_addr);
+      __ testptr(rnew_zpointer, ZBarrierSetAssembler::store_bad_mask_from_thread(r15_thread));
+      __ jcc(Assembler::zero, good);
+      __ stop("Found bad oop after store with elided barrier");
+      __ bind(good);
+    }
     if (rnew_zaddress != noreg) {
       // noreg means null; no need to color
       __ movptr(rnew_zpointer, rnew_zaddress);
@@ -102,7 +120,6 @@ instruct zLoadP(rRegP dst, memory mem, rFlagsReg cr)
   effect(TEMP dst, KILL cr);
 
   ins_cost(125);
-
   format %{ "movq     $dst, $mem" %}
 
   ins_encode %{

@@ -70,6 +70,9 @@ NOT_PRODUCT(cflags(PrintIdeal,          bool, PrintIdeal, PrintIdeal)) \
     cflags(TraceSpilling,           bool, TraceSpilling, TraceSpilling) \
     cflags(Vectorize,               bool, false, Vectorize) \
     cflags(CloneMapDebug,           bool, false, CloneMapDebug) \
+    cflags(UseDomBarrierElimination,       bool, UseDomBarrierElimination, UseDomBarrierElimination) \
+    cflags(UseSafepointAttachedBarriers,   bool, UseSafepointAttachedBarriers, UseSafepointAttachedBarriers) \
+    cflags(TraceBarrierElimination,        bool, TraceBarrierElimination, TraceBarrierElimination) \
 NOT_PRODUCT(cflags(IGVPrintLevel,       intx, PrintIdealGraphLevel, IGVPrintLevel)) \
     cflags(VectorizeDebug,          uintx, 0, VectorizeDebug) \
     cflags(IncrementalInlineForceCleanup, bool, IncrementalInlineForceCleanup, IncrementalInlineForceCleanup) \

@@ -31,6 +31,7 @@ class ZBarrierSetAssemblerBase : public BarrierSetAssembler {
 public:
   static Address load_bad_mask_from_thread(Register thread);
   static Address mark_bad_mask_from_thread(Register thread);
+  static Address store_bad_mask_from_thread(Register thread);
   static Address load_bad_mask_from_jni_env(Register env);
   static Address mark_bad_mask_from_jni_env(Register env);
 };

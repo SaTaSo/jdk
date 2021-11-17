@@ -767,6 +767,15 @@
                                                                             \
   product(bool, VerifyReceiverTypes, trueInDebug, DIAGNOSTIC,               \
           "Verify receiver types at runtime")                               \
+                                                                            \
+  product(bool, UseDomBarrierElimination, true,                             \
+          "Reduce GC barrier cost")                                         \
+                                                                            \
+  product(bool, UseSafepointAttachedBarriers, true,                         \
+          "Reduce GC barrier cost")                                         \
+                                                                            \
+  product(bool, TraceBarrierElimination, false,                             \
+          "Trace safepoint attached barrier optimization")                  \
 
 // end of C2_FLAGS
 

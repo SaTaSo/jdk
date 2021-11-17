@@ -140,7 +140,7 @@ public:
     }
 
     const MachNode* const mach = node->as_Mach();
-    if (mach->barrier_data() == ZBarrierElided) {
+    if ((mach->barrier_data() & ZBarrierElided) != 0) {
       // Don't need liveness data for nodes without barriers
       return NULL;
     }
@@ -318,13 +318,20 @@ int ZBarrierSetC2::estimate_stub_size() const {
   return size;
 }
 
+int ZBarrierSetC2::estimate_mach_node_size(MachNode* mach) const {
+  if (ZVerifyElidedBarriers && (mach->ideal_Opcode() == Op_StoreP) || (mach->ideal_Opcode() == Op_LoadP)) {
+    return 64;
+  }
+  return 0;
+}
+
 static void set_barrier_data(C2Access& access) {
   if (!ZBarrierSet::barrier_needed(access.decorators(), access.type())) {
     return;
   }
 
   if (access.decorators() & C2_TIGHTLY_COUPLED_ALLOC) {
-    access.set_barrier_data(ZBarrierElided);
+    access.add_barrier_data(ZBarrierElided);
     return;
   }
 
@@ -486,24 +493,6 @@ void ZBarrierSetC2::clone_at_expansion(PhaseMacroExpand* phase, ArrayCopyNode* a
 
 #undef XTOP
 
-// == Dominating barrier elision ==
-
-static bool block_has_safepoint(const Block* block, uint from, uint to) {
-  for (uint i = from; i < to; i++) {
-    if (block->get_node(i)->is_MachSafePoint()) {
-      // Safepoint found
-      return true;
-    }
-  }
-
-  // Safepoint not found
-  return false;
-}
-
-static bool block_has_safepoint(const Block* block) {
-  return block_has_safepoint(block, 0, block->number_of_nodes());
-}
-
 static uint block_index(const Block* block, const Node* node) {
   for (uint j = 0; j < block->number_of_nodes(); ++j) {
     if (block->get_node(j) == node) {
@@ -514,8 +503,39 @@ static uint block_index(const Block* block, const Node* node) {
   return 0;
 }
 
+// == Dominating barrier elision ==
+
+static int block_register_safepoints(Block* block, Node* dom_access, uint from, uint to, const Node* mem, GrowableArray<SafepointAccessRecord*>& access_list) {
+  Compile* const C = Compile::current();
+  PhaseCFG* const cfg = C->cfg();
+  Block* const dom_access_block = cfg->get_block_for_node(dom_access);
+  uint dom_access_index = block_index(dom_access_block, dom_access);
+
+  if (!dom_access_block->dominates(block)) {
+    return 0; // the sfp is above the dominating access
+  }
+
+  if (dom_access_block == block) {
+    if (dom_access_index > from) {
+      from = dom_access_index;
+    }
+  }
+
+  int count = 0;
+  for (uint i = from; i < to; i++) {
+    Node* node = block->get_node(i);
+    if (node->is_MachSafePoint() && !node->is_MachCallLeaf()) {
+      // Safepoint found
+      access_list.push(new SafepointAccessRecord(node->as_MachSafePoint(), (Node*)mem));
+      count++;
+    }
+  }
+  return count;
+}
+
 // Look through various node aliases
-static const Node* look_through_node(const Node* node) {
+// If look_through_spill is false - the first spill node will be returned
+static const Node* look_through_node(const Node* node, bool look_through_spill = true) {
   while (node != NULL) {
     const Node* new_node = node;
     if (node->is_Mach()) {
@@ -523,7 +543,7 @@ static const Node* look_through_node(const Node* node) {
       if (node_mach->ideal_Opcode() == Op_CheckCastPP) {
         new_node = node->in(1);
       }
-      if (node_mach->is_SpillCopy()) {
+      if (node_mach->is_SpillCopy() && look_through_spill) {
         new_node = node->in(1);
       }
     }
@@ -533,20 +553,21 @@ static const Node* look_through_node(const Node* node) {
       node = new_node;
     }
   }
-
   return node;
 }
 
-static const Node* get_base_and_offset(const MachNode* mach, intptr_t& offset) {
-  const TypePtr* adr_type = NULL;
-  offset = 0;
-  const Node* base = mach->get_base_and_disp(offset, adr_type);
+// Check the type if the checkcast node to determine the type of the allocation
+static bool is_array_allocation(const Node* node) {
+  precond(node->is_Phi());
 
-  if (base == NULL || base == NodeSentinel || offset < 0) {
-    return NULL;
+  MachNode* cc = node->raw_out(0)->as_Mach();
+  if (cc->ideal_Opcode() == Op_CheckCastPP) {
+    if (cc->get_ptr_type()->isa_aryptr()) {
+      // We must know the offset/index if an oop* array dominates an access
+      return true;
+    }
   }
-
-  return look_through_node(base);
+  return false;
 }
 
 // Match the phi node that connects a TLAB allocation fast path with its slowpath
@@ -558,13 +579,12 @@ static bool is_allocation(const Node* node) {
   if (!fast_node->is_Mach()) {
     return false;
   }
-  const MachNode* fast_mach = fast_node->as_Mach();
+  MachNode* fast_mach = fast_node->as_Mach();
   if (fast_mach->ideal_Opcode() != Op_LoadP) {
     return false;
   }
-  const TypePtr* adr_type = NULL;
   intptr_t offset;
-  const Node* base = get_base_and_offset(fast_mach, offset);
+  const Node* base = look_through_node(fast_mach->get_base_and_offset(offset));
   if (base == NULL || !base->is_Mach()) {
     return false;
   }
@@ -575,8 +595,170 @@ static bool is_allocation(const Node* node) {
   return offset == in_bytes(Thread::tlab_top_offset());
 }
 
-static void elide_mach_barrier(MachNode* mach) {
-  mach->set_barrier_data(ZBarrierElided);
+void ZBarrierSetC2::mark_mach_barrier_dom_elided(MachNode* mach) const{
+  mach->add_barrier_data(ZBarrierElided | ZBarrierDomElided);
+}
+
+void ZBarrierSetC2::mark_mach_barrier_sab_elided(MachNode* mach) const {
+  mach->add_barrier_data(ZBarrierElided | ZBarrierSABElided);
+}
+
+void ZBarrierSetC2::mark_mach_barrier_sab_bailout(MachNode* mach) const {
+  assert((mach->barrier_data() & ZBarrierElided) == 0, "must not have been marked sanity");
+  mach->add_barrier_data(ZBarrierSABBailout);
+}
+
+void ZBarrierSetC2::record_safepoint_attached_barrier(MachNode* const access, Node* mem, MachSafePointNode* sfp DEBUG_ONLY(COMMA Node* dom_access)) const {
+  sfp->record_barrier(access, mem DEBUG_ONLY(COMMA dom_access));
+}
+
+bool access_is_spilled(MachNode* const access, const Node* const access_obj) {
+  intptr_t mem_offset;
+  // The access is spilled if you get different results with look_through true or false.
+  return look_through_node(access->get_base_and_offset(mem_offset), false) != access_obj;
+}
+
+void ZBarrierSetC2::process_access(MachNode* const access, Node* dom_access, GrowableArray<SafepointAccessRecord*> &access_list, intptr_t access_offset) const {
+
+  Compile* const C = Compile::current();
+  PhaseCFG* const cfg = C->cfg();
+
+  bool is_derived      = (access->in(2)->bottom_type()->is_ptr()->_offset != 0);
+  bool offset_is_short = (access_offset >> 16) == 0;
+
+  bool trace = C->directive()->TraceBarrierEliminationOption;
+
+  /* if ((access->ideal_Opcode() != Op_LoadP) && (access->ideal_Opcode() != Op_StoreP)) {
+    // skip all non loads and stores for SABs
+    assert(0, "check"); // TODO verify
+  } else */
+
+  if (access_list.length() == 0) {
+    if (C->directive()->UseDomBarrierEliminationOption) {
+      if (trace) {
+        tty->print_cr("*** dom elided access %i for dom access %i", access->_idx, dom_access->_idx);
+      }
+      mark_mach_barrier_dom_elided(access);
+    } else {
+      if (trace) {
+        tty->print_cr("*** SKIPPED dom elided access %i for dom access %i", access->_idx, dom_access->_idx);
+      }
+    }
+    return;
+  } else if (C->directive()->UseSafepointAttachedBarriersOption) {
+    precond(access_list.length() > 0);
+    if (offset_is_short && !is_derived) {
+      mark_mach_barrier_sab_elided(access);
+      while (access_list.length() > 0) {
+        SafepointAccessRecord* sar = access_list.pop();
+        MachSafePointNode* msfp = sar->_msfp;
+
+#ifdef ASSERT
+        if (ZVerifyElidedBarriers) {
+          // Verify that the dominating access actually dominates all the SAB safepoints
+          Block* dom_access_block = cfg->get_block_for_node(dom_access);
+          Block* msfp_block = cfg->get_block_for_node(msfp);
+          if (dom_access_block == msfp_block) {
+            const uint dom_access_index = block_index(dom_access_block, dom_access);
+            const uint msfp_index = block_index(msfp_block, msfp);
+            assert(dom_access_index < msfp_index, "check");
+          } else {
+            assert(dom_access_block->dominates(msfp_block), "check");
+          }
+        }
+#endif
+        record_safepoint_attached_barrier(access, sar->_mem, msfp DEBUG_ONLY(COMMA dom_access));
+      }
+      postcond(access_list.length() == 0);
+      return;
+    } else { // can't elide accesses with an offset that doesn't fit in oopmap or is dervied
+      assert(access->barrier_data() != 0, "check");
+      if (trace) {
+        tty->print_cr("*** BAILOUT dom elided access %i for dom access %i", access->_idx, dom_access->_idx);
+      }
+      mark_mach_barrier_sab_bailout(access);
+    }
+  }
+
+  //empty list
+  while (access_list.length() > 0) {
+    access_list.pop();
+  }
+}
+
+void ZBarrierSetC2::analyze_dominating_barriers_impl_inner(Block* dom_block, Node* dom_access, Node* const access, const Node* def_mem, GrowableArray<SafepointAccessRecord*> &access_list) const {
+  Compile* const C = Compile::current();
+  PhaseCFG* const cfg = C->cfg();
+
+  Block* const access_block = cfg->get_block_for_node(access);
+  intptr_t access_offset;
+  Block* const def_block = cfg->get_block_for_node(def_mem);
+
+  const uint access_index = block_index(access_block, access);
+  Block* mem_block = cfg->get_block_for_node(def_mem);
+  uint mem_index = block_index(def_block, def_mem);
+
+  assert(dom_block->dominates(def_block), "sanity");
+  assert(dom_block->dominates(access_block), "sanity");
+
+  if (access_block == def_block) {
+    // Earlier accesses in the same block
+    assert(mem_index < access_index, "should already be handled");
+    if (mem_index < access_index) {
+      block_register_safepoints(mem_block, dom_access, mem_index + 1, access_index, def_mem, access_list);
+    }
+  } else if (mem_block->dominates(access_block)) {
+    // Dominating block? Look around for safepoints
+    //ResourceMark rm;
+    Block_List stack;
+    VectorSet visited;
+
+    // Start processing first block - we might come back to it from below if in a loop
+    block_register_safepoints(access_block, dom_access, 0, access_index, def_mem, access_list);
+    // Push predecessor blocks
+    for (uint p = 1; p < access_block->num_preds(); ++p) {
+      Block* pred = cfg->get_block_for_node(access_block->pred(p));
+      stack.push(pred);
+    }
+
+    while (stack.size() > 0) { // must traversal full stack and find all safepoints
+      Block* block = stack.pop();
+      if (visited.test_set(block->_pre_order)) {
+        continue;
+      }
+      if (!dom_block->dominates(block)) {
+        assert(0, "Should not reach here");
+        continue;
+      }
+      if (block == mem_block) {
+        block_register_safepoints(block, dom_access, mem_index, block->number_of_nodes(), def_mem, access_list);
+        continue;
+      }
+
+      block_register_safepoints(block, dom_access, 0, block->number_of_nodes(), def_mem, access_list);
+
+      // Push predecessor blocks
+      for (uint p = 1; p < block->num_preds(); ++p) {
+        Block* pred = cfg->get_block_for_node(block->pred(p));
+        stack.push(pred);
+      }
+    }
+  }
+}
+
+Node* next_def(const Node* node) {
+  precond(node != NULL);
+  if (node->is_Mach()) {
+    const MachNode* node_mach = node->as_Mach();
+    if (node_mach->ideal_Opcode() == Op_CheckCastPP) {
+      return node->in(1);
+    }
+    if (node_mach->is_SpillCopy()) {
+      return node->in(1);
+    }
+  }
+  guarantee(0, "Shouldn't reach here.");
+  return NULL;
 }
 
 void ZBarrierSetC2::analyze_dominating_barriers_impl(Node_List& accesses, Node_List& access_dominators) const {
@@ -586,83 +768,98 @@ void ZBarrierSetC2::analyze_dominating_barriers_impl(Node_List& accesses, Node_L
   PhaseCFG* const cfg = C->cfg();
 
   for (uint i = 0; i < accesses.size(); i++) {
-    MachNode* const access = accesses.at(i)->as_Mach();
     intptr_t access_offset;
-    const Node* const access_obj = get_base_and_offset(access, access_offset);
+    MachNode* const access    = accesses.at(i)->as_Mach();
+    const Node*  access_mem   = look_through_node(access->get_base_and_offset(access_offset));
     Block* const access_block = cfg->get_block_for_node(access);
-    const uint access_index = block_index(access_block, access);
+    const uint   access_index = block_index(access_block, access);
 
-    if (access_obj == NULL) {
+    if ((access->barrier_data() & ZBarrierElided) != 0) {
+       continue; // already elided
+    }
+
+    if (access_mem == NULL) {
       // No information available
       continue;
     }
 
     for (uint j = 0; j < access_dominators.size(); j++) {
-      Node* mem = access_dominators.at(j);
-      if (mem->is_Phi()) {
+      const Node* dom_mem = nullptr;
+      Node* dom = access_dominators.at(j);
+      intptr_t mem_offset;
+      if (dom == access) {
+        continue;
+      }
+      if (dom->is_Phi()) {
         // Allocation node
-        if (mem != access_obj) {
+        if (dom != access_mem) {
           continue;
         }
       } else {
         // Access node
-        MachNode* mem_mach = mem->as_Mach();
-        intptr_t mem_offset;
-        const Node* mem_obj = get_base_and_offset(mem_mach, mem_offset);
+        dom_mem = look_through_node(dom->as_Mach()->get_base_and_offset(mem_offset));
 
-        if (mem_obj == NULL) {
+        if (dom_mem == NULL) {
           // No information available
           continue;
         }
 
-        if (mem_obj != access_obj || mem_offset != access_offset) {
+        if (dom_mem != access_mem || mem_offset != access_offset) {
           // Not the same addresses, not a candidate
           continue;
         }
       }
 
-      Block* mem_block = cfg->get_block_for_node(mem);
-      uint mem_index = block_index(mem_block, mem);
+      Block* dom_block = cfg->get_block_for_node(dom);
+      if (!dom_block->dominates(access_block)) {
+        continue;
+      }
 
-      if (access_block == mem_block) {
-        // Earlier accesses in the same block
-        if (mem_index < access_index && !block_has_safepoint(mem_block, mem_index + 1, access_index)) {
-          elide_mach_barrier(access);
-        }
-      } else if (mem_block->dominates(access_block)) {
-        // Dominating block? Look around for safepoints
-        ResourceMark rm;
-        Block_List stack;
-        VectorSet visited;
-        stack.push(access_block);
-        bool safepoint_found = block_has_safepoint(access_block);
-        while (!safepoint_found && stack.size() > 0) {
-          Block* block = stack.pop();
-          if (visited.test_set(block->_pre_order)) {
-            continue;
-          }
-          if (block_has_safepoint(block)) {
-            safepoint_found = true;
-            break;
-          }
-          if (block == mem_block) {
-            continue;
-          }
-
-          // Push predecessor blocks
-          for (uint p = 1; p < block->num_preds(); ++p) {
-            Block* pred = cfg->get_block_for_node(block->pred(p));
-            stack.push(pred);
-          }
-        }
-
-        if (!safepoint_found) {
-          elide_mach_barrier(access);
+      if (access_block == dom_block) {
+        const uint dom_index = block_index(dom_block, dom);
+        if (access_index < dom_index) {
+          continue;
         }
       }
+
+      Block* dom_mem_block;
+      if (dom_mem != NULL) {
+        dom_mem_block = cfg->get_block_for_node(dom_mem);
+      } else {
+        dom_mem_block = dom_block; // Phis/Allocations don't have mem_obj
+      }
+
+      // Now we have established that we have an access than is dominated by another access or allocation.
+      // Now walk the def chain up until the dominating access, recording any encountered safepoint
+      // with the current def. Then lastly, process all access records.
+
+      ResourceMark rm;
+      GrowableArray<SafepointAccessRecord*> access_list;
+      MachNode* node = access;
+      const Node* node_def = access->get_base_and_offset(access_offset);
+
+      int limit = 0;
+      while (true) {
+        analyze_dominating_barriers_impl_inner(dom_mem_block, dom, node, node_def, access_list);
+        if (node_def->is_Phi()) {
+          break; // allocation - we are done
+        }
+        if (node_def == dom_mem) {
+          break; // reached the end - we are done
+        }
+        node = node_def->as_Mach();
+        node_def = next_def(node_def);
+
+        limit++;
+        guarantee(limit < MaxNodeLimit, "guard against any unlimited searches instead of timing out");
+      }
+
+      process_access(access, dom, access_list, access_offset);
+      assert(access_list.length() == 0, "check");
     }
   }
 }
+
 
 void ZBarrierSetC2::analyze_dominating_barriers() const {
   ResourceMark rm;
@@ -683,8 +880,13 @@ void ZBarrierSetC2::analyze_dominating_barriers() const {
     const Block* const block = cfg->get_block(i);
     for (uint j = 0; j < block->number_of_nodes(); ++j) {
       Node* const node = block->get_node(j);
-      if (node->is_Phi()) {
+      if (node->is_Phi()) { // Change to CheckCastPP with InitalizeNode as ctrl
         if (is_allocation(node)) {
+          if (is_array_allocation(node)) {
+            // We must know the offset/index if an oop* array dominates an access
+            continue;
+          }
+
           load_dominators.push(node);
           store_dominators.push(node);
           // An allocation can't be considered to "dominate" an atomic operation.
@@ -708,7 +910,7 @@ void ZBarrierSetC2::analyze_dominating_barriers() const {
         }
         break;
       case Op_StoreP:
-        if (mach->barrier_data() != 0) {
+        if ((mach->barrier_data() & ZBarrierTypeMask) != 0) {
           stores.push(mach);
           load_dominators.push(mach);
           store_dominators.push(mach);
@@ -718,7 +920,7 @@ void ZBarrierSetC2::analyze_dominating_barriers() const {
       case Op_CompareAndExchangeP:
       case Op_CompareAndSwapP:
       case Op_GetAndSetP:
-        if (mach->barrier_data() != 0) {
+        if ((mach->barrier_data() & ZBarrierTypeMask) != 0) {
           atomics.push(mach);
           load_dominators.push(mach);
           store_dominators.push(mach);
@@ -820,9 +1022,117 @@ void ZBarrierSetC2::eliminate_gc_barrier(PhaseMacroExpand* macro, Node* node) co
 void ZBarrierSetC2::eliminate_gc_barrier_data(Node* node) const {
   if (node->is_Mem()) {
     MemNode* mem = node->as_Mem();
-    mem->set_barrier_data(ZBarrierElided);
+    // Only set barrier bits on ops that can be elided
+    if ((node->Opcode() == Op_StoreP) || (node->Opcode() == Op_LoadP)) {
+      mem->add_barrier_data(ZBarrierElided);
+    }
   } else if (node->is_LoadStore()) {
     LoadStoreNode* loadstore = node->as_LoadStore();
-    loadstore->set_barrier_data(ZBarrierElided);
+    loadstore->add_barrier_data(ZBarrierElided);
   }
 }
+
+enum {
+  LOAD_COUNTER,
+  STORE_COUNTER,
+  ATOMIC_COUNTER,
+  NO_COUNTER
+};
+
+const char* presentation_names[] = {
+  "Loads",
+  "Stores",
+  "Atomics",
+};
+
+struct elision_counter_struct {
+  unsigned int barrier_strong;
+  unsigned int barrier_weak;
+  unsigned int barrier_phantom;
+  unsigned int barrier_nokeepalive;
+  unsigned int barrier_elided;
+  unsigned int barrier_dom_elided;
+  unsigned int barrier_sab_elided;
+};
+
+static elision_counter_struct _elision_counter[3] = {};
+
+void ZBarrierSetC2::gather_stats() const {
+  if (PrintBarrierSetStatistics) {
+    Compile* const C = Compile::current();
+    PhaseCFG* const cfg = C->cfg();
+
+    for (uint i = 0; i < cfg->number_of_blocks(); ++i) {
+      const Block* const block = cfg->get_block(i);
+      for (uint j = 0; j < block->number_of_nodes(); ++j) {
+        Node* const node = block->get_node(j);
+        if (!node->is_Mach()) {
+          continue;
+        }
+        MachNode* const mach = node->as_Mach();
+        uint type;
+        switch (mach->ideal_Opcode()) {
+          case Op_LoadP:
+            type = LOAD_COUNTER;
+            break;
+          case Op_StoreP:
+            type = STORE_COUNTER;
+            break;
+          case Op_CompareAndExchangeP:
+          case Op_CompareAndSwapP:
+          case Op_GetAndSetP:
+            type = ATOMIC_COUNTER;
+            break;
+          default:
+            type = NO_COUNTER;
+            continue;
+        }
+
+        assert(type != NO_COUNTER, "check");
+        uint8_t data = mach->barrier_data();
+        if (data != 0) {
+          if (data & ZBarrierStrong) {
+            _elision_counter[type].barrier_strong++;
+          }
+          if (data & ZBarrierWeak) {
+            _elision_counter[type].barrier_weak++;
+          }
+          if (data & ZBarrierPhantom) {
+            _elision_counter[type].barrier_phantom++;
+          }
+          if (data & ZBarrierNoKeepalive) {
+            _elision_counter[type].barrier_nokeepalive++;
+          }
+          if (data & ZBarrierElided) {
+            _elision_counter[type].barrier_elided++;
+          }
+          if (data & ZBarrierDomElided) {
+            _elision_counter[type].barrier_dom_elided++;
+            assert(data & ZBarrierElided, "inclusive");
+          }
+          if (data & ZBarrierSABElided) {
+            _elision_counter[type].barrier_sab_elided++;
+            assert(data & ZBarrierElided, "inclusive");
+          }
+        }
+      }
+    }
+  }
+}
+
+void ZBarrierSetC2::print_stats() const {
+  for (int i = 0; i <= ATOMIC_COUNTER; i++) {
+    tty->print_cr("%s -----------------------------------", presentation_names[i]);
+    tty->print("strong: %i  ", _elision_counter[i].barrier_strong);
+    tty->print("weak: %i  ", _elision_counter[i].barrier_weak);
+    tty->print("phantom: %i  ", _elision_counter[i].barrier_phantom);
+    tty->print("nokeepalive: %i", _elision_counter[i].barrier_nokeepalive);
+    tty->cr();
+    tty->print_cr("total elided: %i", _elision_counter[i].barrier_elided);
+    unsigned int triv_elided = _elision_counter[i].barrier_elided - _elision_counter[i].barrier_dom_elided;
+    tty->print_cr("- triv. elided: %i", triv_elided);
+    tty->print_cr("- dom elided:   %i", _elision_counter[i].barrier_dom_elided);
+    tty->print_cr("- sab elided:   %i", _elision_counter[i].barrier_sab_elided);
+  }
+}
+

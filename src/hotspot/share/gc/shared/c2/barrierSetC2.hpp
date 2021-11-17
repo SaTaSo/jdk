@@ -131,6 +131,7 @@ public:
 
   uint8_t barrier_data() const        { return _barrier_data; }
   void set_barrier_data(uint8_t data) { _barrier_data = data; }
+  void add_barrier_data(uint8_t data) { _barrier_data |= data; }
 
   void set_raw_access(Node* raw_access) { _raw_access = raw_access; }
   virtual void set_memory() {} // no-op for normal accesses, but not for atomic accesses.
@@ -301,10 +302,14 @@ public:
   virtual bool matcher_is_store_load_barrier(Node* x, uint xop) const { return false; }
 
   virtual void late_barrier_analysis() const { }
-  virtual int estimate_stub_size() const { return 0; }
+  virtual int  estimate_stub_size() const { return 0; }
+  virtual int  estimate_mach_node_size(MachNode* mach) const { return 0; }
   virtual void emit_stubs(CodeBuffer& cb) const { }
 
   static int arraycopy_payload_base_offset(bool is_array);
+
+  virtual void print_stats()  const { tty->print_cr("--- No C2BarrierSet stats ---"); };
+  virtual void gather_stats() const { };
 };
 
 #endif // SHARE_GC_SHARED_C2_BARRIERSETC2_HPP

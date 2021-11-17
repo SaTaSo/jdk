@@ -188,11 +188,18 @@ public:
 
   Block* dom_lca(Block* that);  // Compute LCA in dominator tree.
 
+  // This dominator check must work with the extra blocks inserted in PhaseCFG::fixup_flow
+  // New blocks added will have their single predecessor as idom and use its dom depth
+  // - we should always be able to walk the doom chain
   bool dominates(Block* that) {
-    int dom_diff = this->_dom_depth - that->_dom_depth;
-    if (dom_diff > 0)  return false;
-    for (; dom_diff < 0; dom_diff++)  that = that->_idom;
-    return this == that;
+    if (this->_dom_depth > that->_dom_depth) return false;
+
+    for (Block* b = that; b != nullptr; b = b->_idom) {
+      if (b == this) {
+        return true;
+      }
+    }
+    return false;
   }
 
   // Report the alignment required by this block.  Must be a power of 2.
@@ -409,6 +416,12 @@ class PhaseCFG : public Phase {
 
   // Build the dominator tree so that we know where we can move instructions
   void build_dominator_tree();
+
+#ifdef ASSERT
+  // After gcm and lcm some new blocks have been added
+  // verify that their dom info is good enough for later stages not to break
+  void verify_dominator_tree();
+#endif
 
   // Estimate block frequencies based on IfNode probabilities, so that we know where we want to move instructions
   void estimate_block_frequency();

@@ -58,6 +58,50 @@ struct Tarjan {
 
 };
 
+#ifdef ASSERT
+void PhaseCFG::verify_dominator_tree() {
+  ResourceMark rm;
+  Compile* const C = Compile::current();
+  PhaseCFG* const cfg = C->cfg();
+  VectorSet visited;
+
+  // Check that _pre_order is unique
+  for (uint b = 0; b < cfg->number_of_blocks(); ++b) {
+    Block* block = cfg->get_block(b);
+    if (block == nullptr) {
+      continue;
+    }
+    assert(!visited.test(block->_pre_order), "_pre_order must be unique");
+    visited.set(block->_pre_order);
+  }
+
+  visited.clear();
+  for (uint b = 0; b < cfg->number_of_blocks(); ++b) {
+    Block* block = cfg->get_block(b);
+    if (block == nullptr) {
+      continue;
+    }
+    assert(block->_pre_order < cfg->number_of_blocks(), "sanity");
+    assert(block->_dom_depth <= cfg->number_of_blocks(), "sanity");
+
+    // Verify idom chain
+    if (!visited.test(block->_pre_order)) {
+      // test idom chain
+      Block* next;
+      // This loop test that the idom chain terminates, and that the _idom is valid
+      while (block != nullptr) {
+        next = block->_idom; // Access b2 field first, giving opportunity to crash on bad pointer
+        if (visited.test(block->_pre_order)) {
+          break;
+        }
+        visited.set(block->_pre_order);
+        block = next;
+      }
+    }
+  }
+}
+#endif
+
 // Compute the dominator tree of the CFG.  The CFG must already have been
 // constructed.  This is the Lengauer & Tarjan O(E-alpha(E,V)) algorithm.
 void PhaseCFG::build_dominator_tree() {
