@@ -83,7 +83,7 @@ inline void ZMark::mark_object(zaddress addr) {
 
   assert(ZHeap::heap()->is_young(addr) == _collector->is_young(), "Phase/object mismatch");
 
-  stacks->push(&_allocator, &_stripes, stripe, entry, publish);
+  stacks->push(&_allocator, &_stripes, stripe, entry, publish, &_terminate);
 }
 
 inline void ZMark::mark_follow_invisible_root(zaddress addr, size_t size) {

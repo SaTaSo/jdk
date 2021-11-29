@@ -172,7 +172,7 @@ void ZMark::push_partial_array(uintptr_t addr, size_t size, bool finalizable) {
   log_develop_trace(gc, marking)("Array push partial: " PTR_FORMAT " (" SIZE_FORMAT "), stripe: " SIZE_FORMAT,
                                  addr, size, _stripes.stripe_id(stripe));
 
-  stacks->push(&_allocator, &_stripes, stripe, entry, false /* publish */);
+  stacks->push(&_allocator, &_stripes, stripe, entry, false /* publish */, &_terminate);
 }
 
 static void mark_barrier_on_oop_array(volatile zpointer* p, size_t length, bool finalizable, bool young) {
@@ -471,11 +471,6 @@ bool ZMark::try_steal(ZMarkContext* context) {
   return try_steal_local(context) || try_steal_global(context);
 }
 
-void ZMark::idle() const {
-  SuspendibleThreadSet::yield();
-  os::naked_short_sleep(1);
-}
-
 class ZMarkFlushAndFreeStacksClosure : public HandshakeClosure {
 private:
   ZMark* const _mark;
@@ -572,25 +567,7 @@ bool ZMark::try_proactive_flush() {
 
 bool ZMark::try_terminate() {
   ZStatTimer timer(ZSubPhaseConcurrentMarkTryTerminate);
-  for (;;) {
-    if (_terminate.enter()) {
-      // Last thread entered, terminate
-      return true;
-    }
-
-    // Idle to give the other threads
-    // a chance to enter termination.
-    idle();
-
-    if (ZAbort::should_abort()) {
-      return true;
-    }
-
-    if (!_terminate.try_exit()) {
-      // All workers entered, terminate
-      return true;
-    }
-  }
+  return _terminate.try_terminate() || ZAbort::should_abort();
 }
 
 void ZMark::work() {
@@ -951,7 +928,7 @@ bool ZMark::flush_and_free(Thread* thread) {
     ZThreadLocalData::store_barrier_buffer(thread)->flush();
   }
   ZMarkThreadLocalStacks* const stacks = ZThreadLocalData::mark_stacks(thread, _collector->id());
-  const bool flushed = stacks->flush(&_allocator, &_stripes);
+  const bool flushed = stacks->flush(&_allocator, &_stripes, &_terminate);
   stacks->free(&_allocator);
   return flushed;
 }
