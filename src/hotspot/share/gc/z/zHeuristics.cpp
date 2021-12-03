@@ -74,7 +74,7 @@ static uint nworkers_based_on_ncpus(double cpu_share_in_percent) {
 
 static uint nworkers_based_on_heap_size(double heap_share_in_percent) {
   const int nworkers = (MaxHeapSize * (heap_share_in_percent / 100.0)) / ZPageSizeSmall;
-  return MAX2(nworkers, 1);
+  return MAX2(nworkers, 2);
 }
 
 static uint nworkers(double cpu_share_in_percent) {
