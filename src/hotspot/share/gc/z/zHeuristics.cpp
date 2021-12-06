@@ -74,7 +74,7 @@ static uint nworkers_based_on_ncpus(double cpu_share_in_percent) {
 
 static uint nworkers_based_on_heap_size(double heap_share_in_percent) {
   const int nworkers = (MaxHeapSize * (heap_share_in_percent / 100.0)) / ZPageSizeSmall;
-  return MAX2(nworkers, 1);
+  return MAX2(nworkers, 2);
 }
 
 static uint nworkers(double cpu_share_in_percent) {
@@ -98,7 +98,6 @@ uint ZHeuristics::nconcurrent_workers() {
   // on the type of workload we are running. Using too many threads will have
   // a negative impact on the application throughput, while using too few
   // threads will prolong the GC cycle and we then risk being out-run by the
-  // application. When in dynamic mode, use up to 25% of the active processors.
-  //  When in non-dynamic mode, use 12.5% of the active processors.
-  return nworkers(UseDynamicNumberOfGCThreads ? 25.0 : 12.5);
+  // application.
+  return nworkers(25.0);
 }
