@@ -172,7 +172,8 @@ MetaWord* ZCollectedHeap::satisfy_failed_metadata_allocation(ClassLoaderData* lo
 }
 
 void ZCollectedHeap::collect(GCCause::Cause cause) {
-  _driver_major->collect(cause);
+  ZDriverRequest request(cause, 1, 1);
+  _driver_major->collect(request);
 }
 
 void ZCollectedHeap::collect_as_vm_thread(GCCause::Cause cause) {
