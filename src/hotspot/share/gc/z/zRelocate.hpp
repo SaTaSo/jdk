@@ -43,8 +43,6 @@ private:
   void inc_needs_attention();
   void dec_needs_attention();
 
-  bool is_enabled() const;
-
 public:
   ZRelocateQueue();
 
@@ -53,7 +51,6 @@ public:
 
   void add(ZForwarding* forwarding);
   bool poll(ZForwarding** forwarding, bool* synchronized);
-  void clear();
 
   void synchronize();
   void desynchronize();

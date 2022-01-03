@@ -74,10 +74,6 @@ void ZRelocateQueue::dec_needs_attention() {
   assert(needs_attention == 0 || needs_attention == 1, "Invalid state");
 }
 
-bool ZRelocateQueue::is_enabled() const {
-  return _nworkers != 0;
-}
-
 void ZRelocateQueue::join(uint nworkers) {
   assert(_nworkers == 0, "Invalid state");
   assert(_nsynchronized == 0, "Invalid state");
@@ -95,8 +91,9 @@ void ZRelocateQueue::leave() {
 
 void ZRelocateQueue::add(ZForwarding* forwarding) {
   ZLocker<ZConditionLock> locker(&_lock);
-  if (is_enabled()) {
+  if (forwarding->retain_page()) {
     _queue.append(forwarding);
+    forwarding->release_page();
     if (_queue.length() == 1) {
       // Queue became non-empty
       inc_needs_attention();
@@ -148,14 +145,6 @@ bool ZRelocateQueue::poll(ZForwarding** forwarding, bool* synchronized) {
   }
 
   return true;
-}
-
-void ZRelocateQueue::clear() {
-  assert(!is_enabled(), "Invalid state");
-  if (!_queue.is_empty()) {
-    _queue.clear();
-    dec_needs_attention();
-  }
 }
 
 void ZRelocateQueue::synchronize() {
@@ -985,8 +974,6 @@ void ZRelocate::relocate(ZRelocationSet* relocation_set) {
     ZRelocateAddRemsetForNormalPromoted task;
     workers()->run(&task);
   }
-
-  _queue.clear();
 }
 
 ZPageAge ZRelocate::compute_to_age(ZPageAge from_age, bool promote_all) {
