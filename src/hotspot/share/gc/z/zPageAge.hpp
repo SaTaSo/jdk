@@ -28,8 +28,21 @@
 
 enum class ZPageAge : uint8_t {
   eden,
-  survivor,
-  old
+  survivor1,
+  survivor2,
+  survivor3,
+  survivor4,
+  survivor5,
+  survivor6,
+  survivor7,
+  survivor8,
+  survivor9,
+  survivor10,
+  survivor11,
+  survivor12,
+  survivor13,
+  survivor14,
+  old,
 };
 
 #endif // SHARE_GC_Z_ZPAGEAGE_HPP
