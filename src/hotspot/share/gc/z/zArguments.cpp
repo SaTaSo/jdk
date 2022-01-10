@@ -72,6 +72,17 @@ void ZArguments::initialize() {
     vm_exit_during_initialization("The flag -XX:+UseZGC can not be combined with -XX:ConcGCThreads=0");
   }
 
+  if (FLAG_IS_DEFAULT(InitialTenuringThreshold)) {
+    uint tenuring_threshold;
+    for (tenuring_threshold = 1; tenuring_threshold < InitialTenuringThreshold; ++tenuring_threshold) {
+      // Reduce the number of object ages, if the resulting garbage is too high
+      if (ZPageSizeSmall * ConcGCThreads * tenuring_threshold >= ZHeuristics::significant_heap_overhead()) {
+        break;
+      }
+    }
+    InitialTenuringThreshold = tenuring_threshold;
+  }
+
   // Large page size must match granule size
   if (!FLAG_IS_DEFAULT(LargePageSizeInBytes) && LargePageSizeInBytes != ZGranuleSize) {
     vm_exit_during_initialization(err_msg("Incompatible -XX:LargePageSizeInBytes, only "
