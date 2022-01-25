@@ -353,9 +353,9 @@ void ZGeneration::at_collection_start(ConcurrentGCTimer* gc_timer) {
   workers()->set_active();
 }
 
-void ZGeneration::at_collection_end() {
+void ZGeneration::at_collection_end(bool record_stats) {
   workers()->set_inactive();
-  stat_cycle()->at_end(stat_workers());
+  stat_cycle()->at_end(stat_workers(), record_stats);
   // The heap at collection end data is gathered at relocate end
   clear_gc_timer();
 }
@@ -479,7 +479,9 @@ public:
 
   ~ZGenerationCollectionScopeYoung() {
     // Update statistics and clear the GC timer
-    ZGeneration::young()->at_collection_end();
+    bool record_stats = ZGeneration::young()->type() == ZYoungType::minor ||
+                        ZCollectedHeap::heap()->gc_cause() == GCCause::_z_warmup;
+    ZGeneration::young()->at_collection_end(record_stats);
   }
 };
 
@@ -835,7 +837,7 @@ public:
 
   ~ZGenerationCollectionScopeOld() {
     // Update statistics and clear the GC timer
-    ZGeneration::old()->at_collection_end();
+    ZGeneration::old()->at_collection_end(true /* record_stats */);
   }
 };
 
