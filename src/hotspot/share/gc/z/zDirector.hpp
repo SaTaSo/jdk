@@ -29,6 +29,7 @@
 
 class ZDirector : public ConcurrentGCThread {
 private:
+  static const uint64_t decision_hz = 10;
   ZMetronome _metronome;
 
 protected:
@@ -37,6 +38,8 @@ protected:
 
 public:
   ZDirector();
+
+  void poke();
 };
 
 #endif // SHARE_GC_Z_ZDIRECTOR_HPP

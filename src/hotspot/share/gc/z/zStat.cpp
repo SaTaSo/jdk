@@ -25,6 +25,7 @@
 #include "gc/shared/gc_globals.hpp"
 #include "gc/z/zAbort.inline.hpp"
 #include "gc/z/zCollectedHeap.hpp"
+#include "gc/z/zDirector.hpp"
 #include "gc/z/zDriver.hpp"
 #include "gc/z/zCPU.inline.hpp"
 #include "gc/z/zGeneration.inline.hpp"
@@ -909,33 +910,88 @@ void ZStatInc(const ZStatUnsampledCounter& counter, uint64_t increment) {
 //
 // Stat mutator allocation rate
 //
-const ZStatUnsampledCounter ZStatMutatorAllocRate::_counter("Mutator Allocation Rate");
-TruncatedSeq                ZStatMutatorAllocRate::_samples(ZStatMutatorAllocRate::sample_hz);
-TruncatedSeq                ZStatMutatorAllocRate::_rate(ZStatMutatorAllocRate::sample_hz);
+ZLock*          ZStatMutatorAllocRate::_stat_lock;
+jlong           ZStatMutatorAllocRate::_last_sample_time;
+size_t          ZStatMutatorAllocRate::_sampling_granule;
+volatile size_t ZStatMutatorAllocRate::_allocated_since_sample;
+TruncatedSeq    ZStatMutatorAllocRate::_samples_time(100);
+TruncatedSeq    ZStatMutatorAllocRate::_samples_bytes(100);
+TruncatedSeq    ZStatMutatorAllocRate::_rate(100);
 
-const ZStatUnsampledCounter& ZStatMutatorAllocRate::counter() {
-  return _counter;
+void ZStatMutatorAllocRate::initialize(size_t soft_max_capacity) {
+  const size_t sampling_heap_granule = 128;
+  _sampling_granule = align_up(soft_max_capacity / sampling_heap_granule, ZGranuleSize);
+  _last_sample_time = os::javaTimeNanos();
+  _stat_lock = new ZLock();
 }
 
-uint64_t ZStatMutatorAllocRate::sample_and_reset() {
-  const ZStatCounterData bytes_per_sample = _counter.collect_and_reset();
-  _samples.add(bytes_per_sample._counter);
+void ZStatMutatorAllocRate::sample_allocation(size_t allocation_bytes) {
+  const size_t allocated = Atomic::add(&_allocated_since_sample, allocation_bytes);
 
-  const uint64_t bytes_per_second = _samples.sum();
+  if (allocated < _sampling_granule) {
+    // No need for sampling yet
+    return;
+  }
+
+  if (!_stat_lock->try_lock()) {
+    // Someone beat us to it
+    return;
+  }
+
+  size_t allocated_sample = Atomic::load(&_allocated_since_sample);
+
+  if (allocated_sample < _sampling_granule) {
+    // Someone beat us to it
+    _stat_lock->unlock();
+    return;
+  }
+
+  const jlong now = os::javaTimeNanos();
+  const jlong elapsed_nanos = now - _last_sample_time;
+
+  if (elapsed_nanos <= 0) {
+    // Avoid sampling nonsense allocation rates
+    _stat_lock->unlock();
+    return;
+  }
+
+  Atomic::sub(&_allocated_since_sample, allocated_sample);
+
+  _samples_time.add(elapsed_nanos);
+  _samples_bytes.add(allocated_sample);
+
+  const double last_sample_bytes = _samples_bytes.sum();
+  const double elapsed_time = _samples_time.sum();
+
+  const double elapsed_seconds = elapsed_time / 1000000000.0;
+  const double bytes_per_second = double(last_sample_bytes) / elapsed_seconds;
   _rate.add(bytes_per_second);
 
-  return bytes_per_second;
+  _last_sample_time = now;
+
+  log_debug(gc, alloc)("Mutator Allocation Rate: Predicted: %.1fMB/s, Avg: %.1f(+/-%.1f)MB/s",
+                       ZStatMutatorAllocRate::predict() / M,
+                       ZStatMutatorAllocRate::avg() / M,
+                       ZStatMutatorAllocRate::sd() / M);
+
+  _stat_lock->unlock();
+
+  ZCollectedHeap::heap()->director()->poke();
 }
 
+// TODO: Provide snaphot method with struct
 double ZStatMutatorAllocRate::predict() {
+  ZLocker<ZLock> locker(_stat_lock);
   return _rate.predict_next();
 }
 
 double ZStatMutatorAllocRate::avg() {
+  ZLocker<ZLock> locker(_stat_lock);
   return _rate.avg();
 }
 
 double ZStatMutatorAllocRate::sd() {
+  ZLocker<ZLock> locker(_stat_lock);
   return _rate.sd();
 }
 
@@ -946,6 +1002,8 @@ ZStat::ZStat() :
     _metronome(sample_hz) {
   set_name("ZStat");
   create_and_start();
+  // TODO: Deal with manage aspect of flag
+  ZStatMutatorAllocRate::initialize(SoftMaxHeapSize);
 }
 
 void ZStat::sample_and_collect(ZStatSamplerHistory* history) const {

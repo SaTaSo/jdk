@@ -33,24 +33,11 @@
 #include "logging/log.hpp"
 
 constexpr double one_in_1000 = 3.290527;
-constexpr double sample_interval = 1.0 / ZStatMutatorAllocRate::sample_hz;
 
 ZDirector::ZDirector() :
-    _metronome(ZStatMutatorAllocRate::sample_hz) {
+    _metronome(decision_hz) {
   set_name("ZDirector");
   create_and_start();
-}
-
-static void sample_mutator_allocation_rate() {
-  // Sample allocation rate. This is needed by rule_allocation_rate()
-  // below to estimate the time we have until we run out of memory.
-  const double bytes_per_second = ZStatMutatorAllocRate::sample_and_reset();
-
-  log_debug(gc, alloc)("Mutator Allocation Rate: %.1fMB/s, Predicted: %.1fMB/s, Avg: %.1f(+/-%.1f)MB/s",
-                       bytes_per_second / M,
-                       ZStatMutatorAllocRate::predict() / M,
-                       ZStatMutatorAllocRate::avg() / M,
-                       ZStatMutatorAllocRate::sd() / M);
 }
 
 // Minor GC rules
@@ -99,7 +86,7 @@ static double select_young_gc_workers(double serial_gc_time, double parallelizab
     // next GC cycle will need to increase it again. If so, use the same number of GC workers
     // that will be needed in the next cycle.
     const double gc_duration_delta = (parallelizable_gc_time / actual_gc_workers) - (parallelizable_gc_time / last_gc_workers);
-    const double additional_time_for_allocations = ZGeneration::young()->stat_cycle()->time_since_last() - gc_duration_delta - sample_interval;
+    const double additional_time_for_allocations = ZGeneration::young()->stat_cycle()->time_since_last() - gc_duration_delta;
     const double next_time_until_oom = time_until_oom + additional_time_for_allocations;
     const double next_avoid_oom_gc_workers = estimated_gc_workers(serial_gc_time, parallelizable_gc_time, next_time_until_oom);
 
@@ -166,7 +153,7 @@ ZDriverRequest rule_minor_allocation_rate_dynamic(double serial_gc_time_passed, 
   // Calculate time until GC given the time until OOM and GC duration.
   // We also subtract the sample interval, so that we don't overshoot the
   // target time and end up starting the GC too late in the next interval.
-  const double time_until_gc = time_until_oom - actual_gc_duration - sample_interval;
+  const double time_until_gc = time_until_oom - actual_gc_duration;
 
   log_debug(gc, director)("Rule Minor: Allocation Rate (Dynamic GC Workers), "
                           "MaxAllocRate: %.1fMB/s (+/-%.1f%%), Free: " SIZE_FORMAT "MB, GCCPUTime: %.3f, "
@@ -230,7 +217,7 @@ static bool rule_minor_allocation_rate_static() {
   // Calculate time until GC given the time until OOM and max duration of GC.
   // We also deduct the sample interval, so that we don't overshoot the target
   // time and end up starting the GC too late in the next interval.
-  const double time_until_gc = time_until_oom - gc_duration - sample_interval;
+  const double time_until_gc = time_until_oom - gc_duration;
 
   log_debug(gc, director)("Rule Minor: Allocation Rate (Static GC Workers), MaxAllocRate: %.1fMB/s, Free: " SIZE_FORMAT "MB, GCDuration: %.3fs, TimeUntilGC: %.3fs",
                           max_alloc_rate / M, free / M, gc_duration, time_until_gc);
@@ -713,10 +700,17 @@ static bool start_gc() {
   return false;
 }
 
+void ZDirector::poke() {
+  if (!UseDynamicNumberOfGCThreads) {
+    return;
+  }
+
+  _metronome.poke();
+}
+
 void ZDirector::run_service() {
   // Main loop
   while (_metronome.wait_for_tick()) {
-    sample_mutator_allocation_rate();
     if (!start_gc()) {
       adjust_gc();
     }

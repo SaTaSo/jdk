@@ -30,48 +30,24 @@
 ZMetronome::ZMetronome(uint64_t hz) :
     _monitor(Monitor::nosafepoint, "ZMetronome_lock"),
     _interval_ms(MILLIUNITS / hz),
-    _start_ms(0),
-    _nticks(0),
     _stopped(false) {}
 
 bool ZMetronome::wait_for_tick() {
-  if (_nticks++ == 0) {
-    // First tick, set start time
-    const Ticks now = Ticks::now();
-    _start_ms = TimeHelper::counter_to_millis(now.value());
-  }
-
   MonitorLocker ml(&_monitor, Monitor::_no_safepoint_check_flag);
 
-  while (!_stopped) {
-    // We might wake up spuriously from wait, so always recalculate
-    // the timeout after a wakeup to see if we need to wait again.
-    const Ticks now = Ticks::now();
-    const uint64_t now_ms = TimeHelper::counter_to_millis(now.value());
-    const uint64_t next_ms = _start_ms + (_interval_ms * _nticks);
-    const int64_t timeout_ms = next_ms - now_ms;
-
-    if (timeout_ms > 0) {
-      // Wait
-      ml.wait(timeout_ms);
-    } else {
-      // Tick
-      if (timeout_ms < 0) {
-        const uint64_t overslept = -timeout_ms;
-        if (overslept > _interval_ms) {
-          // Missed one or more ticks. Bump _nticks accordingly to
-          // avoid firing a string of immediate ticks to make up
-          // for the ones we missed.
-          _nticks += overslept / _interval_ms;
-        }
-      }
-
-      return true;
-    }
+  if (_stopped) {
+    // Stopped
+    return false;
   }
 
-  // Stopped
-  return false;
+  // Wait
+  ml.wait(_interval_ms);
+  return true;
+}
+
+void ZMetronome::poke() {
+  MonitorLocker ml(&_monitor, Monitor::_no_safepoint_check_flag);
+  _monitor.notify();
 }
 
 void ZMetronome::stop() {

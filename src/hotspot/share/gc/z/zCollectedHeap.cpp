@@ -310,6 +310,10 @@ void ZCollectedHeap::gc_threads_do(ThreadClosure* tc) const {
   _runtime_workers.threads_do(tc);
 }
 
+ZDirector* ZCollectedHeap::director() {
+  return _director;
+}
+
 VirtualSpaceSummary ZCollectedHeap::create_heap_space_summary() {
   const uintptr_t start = ZAddressHeapBase;
 

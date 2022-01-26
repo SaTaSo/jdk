@@ -373,15 +373,19 @@ void ZStatInc(const ZStatUnsampledCounter& counter, uint64_t increment = 1);
 //
 class ZStatMutatorAllocRate : public AllStatic {
 private:
-  static const ZStatUnsampledCounter _counter;
-  static TruncatedSeq                _samples;
-  static TruncatedSeq                _rate;
+  static ZLock*          _stat_lock;
+  static jlong           _last_sample_time;
+  static size_t          _sampling_granule;
+  static volatile size_t _allocated_since_sample;
+  static TruncatedSeq    _samples_time;
+  static TruncatedSeq    _samples_bytes;
+  static TruncatedSeq    _rate;
 
 public:
-  static const uint64_t sample_hz = 10;
-
   static const ZStatUnsampledCounter& counter();
-  static uint64_t sample_and_reset();
+  static void sample_allocation(size_t allocation_bytes);
+
+  static void initialize(size_t soft_max_capacity);
 
   static double predict();
   static double avg();

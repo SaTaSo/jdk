@@ -31,8 +31,6 @@ class ZMetronome : public StackObj {
 private:
   Monitor        _monitor;
   const uint64_t _interval_ms;
-  uint64_t       _start_ms;
-  uint64_t       _nticks;
   bool           _stopped;
 
 public:
@@ -40,6 +38,7 @@ public:
 
   bool wait_for_tick();
   void stop();
+  void poke();
 };
 
 #endif // SHARE_GC_Z_ZMETRONOME_HPP

@@ -114,6 +114,7 @@ public:
   virtual WorkerThreads* safepoint_workers();
 
   virtual void gc_threads_do(ThreadClosure* tc) const;
+  ZDirector* director();
 
   virtual VirtualSpaceSummary create_heap_space_summary();
 
