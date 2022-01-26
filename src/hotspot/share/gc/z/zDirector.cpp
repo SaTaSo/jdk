@@ -191,7 +191,7 @@ ZDriverRequest rule_minor_allocation_rate_dynamic(double serial_gc_time_passed, 
                           last_gc_workers,
                           actual_gc_workers);
 
-  if ((double)actual_gc_workers <= last_gc_workers && time_until_gc > 0.0) {
+  if (time_until_gc > 0.0) {
     return ZDriverRequest(GCCause::_no_gc, actual_gc_workers, 0);
   }
 
