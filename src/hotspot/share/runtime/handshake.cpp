@@ -23,20 +23,26 @@
  */
 
 #include "precompiled.hpp"
+#include "classfile/vmSymbols.hpp"
 #include "jvm_io.h"
 #include "logging/log.hpp"
 #include "logging/logStream.hpp"
 #include "memory/resourceArea.hpp"
+#include "oops/oopHandle.inline.hpp"
 #include "runtime/atomic.hpp"
+#include "runtime/deoptimization.hpp"
 #include "runtime/handshake.hpp"
 #include "runtime/interfaceSupport.inline.hpp"
+#include "runtime/jniHandles.inline.hpp"
 #include "runtime/os.hpp"
 #include "runtime/osThread.hpp"
 #include "runtime/stackWatermarkSet.hpp"
 #include "runtime/task.hpp"
 #include "runtime/thread.hpp"
 #include "runtime/threadSMR.hpp"
+#include "runtime/vframe.inline.hpp"
 #include "runtime/vmThread.hpp"
+#include "utilities/exceptions.hpp"
 #include "utilities/formatBuffer.hpp"
 #include "utilities/filterQueue.inline.hpp"
 #include "utilities/globalDefinitions.hpp"
@@ -78,6 +84,7 @@ class HandshakeOperation : public CHeapObj<mtThread> {
   const char* name()               { return _handshake_cl->name(); }
   bool is_async()                  { return _handshake_cl->is_async(); }
   bool is_suspend()                { return _handshake_cl->is_suspend(); }
+  bool is_runtime_exit()           { return _handshake_cl->is_runtime_exit(); }
 };
 
 class AsyncHandshakeOperation : public HandshakeOperation {
@@ -427,7 +434,9 @@ HandshakeState::HandshakeState(JavaThread* target) :
   _lock(Monitor::nosafepoint, "HandshakeState_lock"),
   _active_handshaker(),
   _suspended(false),
-  _async_suspend_handshake(false)
+  _async_suspend_handshake(false),
+  _async_bad_access(false),
+  _async_bad_access_exception()
 {
 }
 
@@ -447,13 +456,19 @@ static bool no_suspend_filter(HandshakeOperation* op) {
   return !op->is_suspend();
 }
 
-HandshakeOperation* HandshakeState::get_op_for_self(bool allow_suspend) {
+static bool normal_filter(HandshakeOperation* op) {
+  return !op->is_runtime_exit();
+}
+
+HandshakeOperation* HandshakeState::get_op_for_self(bool allow_suspend, bool runtime_exit) {
   assert(_handshakee == Thread::current(), "Must be called by self");
   assert(_lock.owned_by_self(), "Lock must be held");
-  if (allow_suspend) {
-    return _queue.peek();
-  } else {
+  if (!allow_suspend) {
     return _queue.peek(no_suspend_filter);
+  } else if (!runtime_exit) {
+    return _queue.peek(normal_filter);
+  } else {
+    return _queue.peek();
   }
 }
 
@@ -485,7 +500,7 @@ void HandshakeState::remove_op(HandshakeOperation* op) {
   assert(ret == op, "Popped op must match requested op");
 };
 
-bool HandshakeState::process_by_self(bool allow_suspend) {
+bool HandshakeState::process_by_self(bool allow_suspend, bool runtime_exit) {
   assert(Thread::current() == _handshakee, "should call from _handshakee");
   assert(!_handshakee->is_terminated(), "should not be a terminated thread");
 
@@ -501,7 +516,7 @@ bool HandshakeState::process_by_self(bool allow_suspend) {
   while (has_operation()) {
     MutexLocker ml(&_lock, Mutex::_no_safepoint_check_flag);
 
-    HandshakeOperation* op = get_op_for_self(allow_suspend);
+    HandshakeOperation* op = get_op_for_self(allow_suspend, runtime_exit);
     if (op != NULL) {
       assert(op->_target == NULL || op->_target == Thread::current(), "Wrong thread");
       bool async = op->is_async();
@@ -685,6 +700,105 @@ bool HandshakeState::suspend_with_handshake() {
   ThreadSelfSuspensionHandshake* ts = new ThreadSelfSuspensionHandshake();
   Handshake::execute(ts, _handshakee);
   return true;
+}
+
+class BadAccessHandshake : public AsyncHandshakeClosure {
+  OopHandle _exception;
+
+public:
+  BadAccessHandshake(OopHandle exception)
+    : AsyncHandshakeClosure("BadAccessHandshake"),
+      _exception(exception) {}
+
+  void do_thread(TRAPS) {
+    JavaThread* current = THREAD;
+    assert(current == Thread::current(), "Must be self executed.");
+    JavaThreadState jts = current->thread_state();
+
+    if (!current->handshake_state()->has_async_bad_access()) {
+      // Already handled the problem in deopt
+      return;
+    }
+
+    frame last_frame = current->last_frame();
+    RegisterMap register_map(current, true);
+
+    if (last_frame.is_safepoint_blob_frame() || last_frame.is_runtime_frame()) {
+      last_frame = last_frame.sender(&register_map);
+    }
+
+    if (last_frame.is_compiled_frame()) {
+      if (current->is_at_poll_safepoint()) {
+        // Compiled safepoint polls lack exception table entries randomly,
+        // so we can't throw here. Deopt and let the deopt handler throw
+        // for us instead..
+        if (!last_frame.is_deoptimized_frame()) {
+          assert(last_frame.can_be_deoptimized(), "impossible");
+          Deoptimization::deoptimize_frame(current, last_frame.id());
+        }
+        return;
+      } else if (last_frame.is_deoptimized_frame()) {
+        // If the last frame is deoptimized, we will throw from the deopt
+        // handler instead, into the interpreter
+        return;
+      }
+    }
+
+    // Claim the responsbility to deal with the situation
+    oop exception = _exception.resolve();
+    current->handshake_state()->set_async_bad_access(false);
+    _exception.release(Universe::vm_global());
+
+    ResourceMark rm;
+    const int max_critical_stack_depth = 10;
+    int depth = 0;
+    bool found = false;
+    for (vframeStream stream(current); !stream.at_end(); stream.next()) {
+      Method* m = stream.method();
+      if (m->is_scoped()) {
+        found = true;
+        break;
+      }
+      depth++;
+      if (depth >= max_critical_stack_depth) {
+        break;
+      }
+    }
+
+    if (!found) {
+      // Between the handshake and async handshake activating, we could
+      // have thrown an exception, at which point we have exited the
+      // scoped method. However, if an exception is thrown, we don't
+      // need to interrupt the control flow further.
+      return;
+    }
+
+    // We know we are in the scoped method that caused the original handshake
+    // to trip up. This is a good time to throw an exception.
+    if (!current->has_pending_exception()) {
+      THROW_OOP(exception);
+    }
+  }
+
+  void do_thread(Thread* thr) {
+    return do_thread(JavaThread::cast(thr));
+  }
+
+  // This was built for suspend-resume, so the point before transitioning
+  // to Java is named like this. We'd have to do some renaming here.
+  virtual bool is_runtime_exit() { return true; }
+};
+
+void HandshakeState::install_bad_access_operation(OopHandle exception) {
+  if (has_async_bad_access()) {
+    return;
+  }
+  set_async_bad_access(true);
+  log_trace(thread, suspend)("JavaThread:" INTPTR_FORMAT " installing bad access operation", p2i(_handshakee));
+  OopHandle e(Universe::vm_global(), exception.resolve());
+  _async_bad_access_exception = e;
+  BadAccessHandshake* operation = new BadAccessHandshake(e);
+  Handshake::execute(operation, _handshakee);
 }
 
 // This is the closure that synchronously honors the suspend request.

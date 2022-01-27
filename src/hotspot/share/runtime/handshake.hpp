@@ -27,11 +27,13 @@
 
 #include "memory/allStatic.hpp"
 #include "memory/iterator.hpp"
+#include "oops/oopHandle.hpp"
 #include "runtime/flags/flagSetting.hpp"
 #include "runtime/mutex.hpp"
 #include "runtime/orderAccess.hpp"
 #include "utilities/filterQueue.hpp"
 
+class BadAccessHandshake;
 class HandshakeOperation;
 class JavaThread;
 class SuspendThreadHandshake;
@@ -51,6 +53,7 @@ class HandshakeClosure : public ThreadClosure, public CHeapObj<mtThread> {
   const char* name() const                         { return _name; }
   virtual bool is_async()                          { return false; }
   virtual bool is_suspend()                        { return false; }
+  virtual bool is_runtime_exit()                   { return false; }
   virtual void do_thread(Thread* thread) = 0;
 };
 
@@ -85,6 +88,7 @@ class JvmtiRawMonitor;
 // operation is only done by either VMThread/Handshaker on behalf of the
 // JavaThread or by the target JavaThread itself.
 class HandshakeState {
+  friend BadAccessHandshake;
   friend ThreadSelfSuspensionHandshake;
   friend SuspendThreadHandshake;
   friend JavaThread;
@@ -104,7 +108,7 @@ class HandshakeState {
   bool can_process_handshake();
 
   bool have_non_self_executable_operation();
-  HandshakeOperation* get_op_for_self(bool allow_suspend);
+  HandshakeOperation* get_op_for_self(bool allow_suspend, bool runtime_exit);
   HandshakeOperation* get_op();
   void remove_op(HandshakeOperation* op);
 
@@ -134,7 +138,7 @@ class HandshakeState {
   // If the method returns true we need to check for a possible safepoint.
   // This is due to a suspension handshake which put the JavaThread in blocked
   // state so a safepoint may be in-progress.
-  bool process_by_self(bool allow_suspend);
+  bool process_by_self(bool allow_suspend, bool runtime_exit);
 
   enum ProcessResult {
     _no_operation = 0,
@@ -159,6 +163,9 @@ class HandshakeState {
   // and we have not yet processed it.
   bool _async_suspend_handshake;
 
+  bool _async_bad_access;
+  OopHandle _async_bad_access_exception;
+
   // Called from the suspend handshake.
   bool suspend_with_handshake();
   // Called from the async handshake (the trap)
@@ -170,6 +177,15 @@ class HandshakeState {
   bool has_async_suspend_handshake()        { return _async_suspend_handshake; }
   void set_async_suspend_handshake(bool to) { _async_suspend_handshake = to; }
 
+  // Panama support
+public:
+  void install_bad_access_operation(OopHandle exception);
+
+  bool has_async_bad_access()             { return _async_bad_access; }
+  void set_async_bad_access(bool to)      { _async_bad_access = to; }
+  OopHandle& async_bad_access_exception() { return _async_bad_access_exception; }
+
+private:
   bool suspend();
   bool resume();
 };

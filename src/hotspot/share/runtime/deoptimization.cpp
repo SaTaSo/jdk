@@ -47,6 +47,7 @@
 #include "oops/objArrayKlass.hpp"
 #include "oops/objArrayOop.inline.hpp"
 #include "oops/oop.inline.hpp"
+#include "oops/oopHandle.inline.hpp"
 #include "oops/fieldStreams.inline.hpp"
 #include "oops/typeArrayOop.inline.hpp"
 #include "oops/verifyOopClosure.hpp"
@@ -610,6 +611,17 @@ Deoptimization::UnrollBlock* Deoptimization::fetch_unroll_info_helper(JavaThread
     assert(current->has_pending_exception(), "should have thrown OOME");
     current->set_exception_oop(current->pending_exception());
     current->clear_pending_exception();
+    exec_mode = Unpack_exception;
+  }
+
+  if (current->handshake_state()->has_async_bad_access()) {
+    // Support for shared segment
+    OopHandle& exception = current->handshake_state()->async_bad_access_exception();
+    if (current->exception_oop() == NULL) {
+      current->set_exception_oop(exception.resolve());
+    }
+    exception.release(Universe::vm_global());
+    current->handshake_state()->set_async_bad_access(false);
     exec_mode = Unpack_exception;
   }
 

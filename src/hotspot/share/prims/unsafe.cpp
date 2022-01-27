@@ -72,10 +72,12 @@
 
 
 #define UNSAFE_ENTRY(result_type, header) \
-  JVM_ENTRY(static result_type, header)
+  JVM_ENTRY(static result_type, header) \
+  if (thread->handshake_state()->has_async_bad_access()) return (result_type)0;
 
 #define UNSAFE_LEAF(result_type, header) \
-  JVM_LEAF(static result_type, header)
+  JVM_LEAF(static result_type, header) \
+  if (JavaThread::current()->handshake_state()->has_async_bad_access()) return (result_type)0;
 
 #define UNSAFE_END JVM_END
 

@@ -28,9 +28,12 @@
 #include "classfile/vmSymbols.hpp"
 #include "oops/access.inline.hpp"
 #include "oops/oop.inline.hpp"
+#include "oops/oopHandle.inline.hpp"
+#include "runtime/handles.hpp"
 #include "runtime/jniHandles.inline.hpp"
 #include "runtime/interfaceSupport.inline.hpp"
 #include "runtime/sharedRuntime.hpp"
+#include "runtime/stackFrameStream.inline.hpp"
 #include "runtime/vframe.inline.hpp"
 #include "runtime/deoptimization.hpp"
 #include "prims/stackwalk.hpp"
@@ -70,19 +73,15 @@ public:
 
 class CloseScopedMemoryClosure : public HandshakeClosure {
   jobject _deopt;
-  jobject _exception;
+  OopHandle _exception;
 
 public:
-  jboolean _found;
-
-  CloseScopedMemoryClosure(jobject deopt, jobject exception)
+  CloseScopedMemoryClosure(jobject deopt, OopHandle exception)
     : HandshakeClosure("CloseScopedMemory")
     , _deopt(deopt)
-    , _exception(exception)
-    , _found(false) {}
+    , _exception(exception) {}
 
   void do_thread(Thread* thread) {
-
     JavaThread* jt = (JavaThread*)thread;
 
     if (!jt->has_last_Java_frame()) {
@@ -92,7 +91,7 @@ public:
     frame last_frame = jt->last_frame();
     RegisterMap register_map(jt, true);
 
-    if (last_frame.is_safepoint_blob_frame()) {
+    if (last_frame.is_safepoint_blob_frame() || last_frame.is_runtime_frame()) {
       last_frame = last_frame.sender(&register_map);
     }
 
@@ -122,7 +121,19 @@ public:
           if (var->type() == T_OBJECT) {
             if (var->get_obj() == JNIHandles::resolve(_deopt)) {
               assert(depth < max_critical_stack_depth, "can't have more than %d critical frames", max_critical_stack_depth);
-              _found = true;
+              // Nuke all compiled frames on this thread. It has a serious bug,
+              // and we don't need to be so quick about reporting the error.
+              // By doing this, we always know that at least the method exit
+              // of the outer method of a scoped access, is guaranteed to poll
+              // for safepoints, and find the async handshake operation, which
+              // can deterministically throw in a timely fashion.
+              for (StackFrameStream fst(jt, true /* update */, true /* process_frames */); !fst.is_done(); fst.next()) {
+                frame* frame = fst.current();
+                if (frame->is_compiled_frame() && frame->can_be_deoptimized()) {
+                  Deoptimization::deoptimize(jt, *frame);
+                }
+              }
+              jt->handshake_state()->install_bad_access_operation(_exception);
               return;
             }
           }
@@ -147,10 +158,13 @@ public:
  * a less common slow path instead.
  * Top frames containg obj will be deoptimized.
  */
-JVM_ENTRY(jboolean, ScopedMemoryAccess_closeScope(JNIEnv *env, jobject receiver, jobject deopt, jobject exception))
+JVM_ENTRY(jboolean, ScopedMemoryAccess_closeScope(JNIEnv *env, jobject receiver, jobject deopt, jobject jni_exception))
+  OopHandle exception(Universe::vm_global(), JNIHandles::resolve(jni_exception));
   CloseScopedMemoryClosure cl(deopt, exception);
   Handshake::execute(&cl);
-  return !cl._found;
+  exception.release(Universe::vm_global());
+  // TODO: Remove boolean alltogether
+  return true;
 JVM_END
 
 /// JVM_RegisterUnsafeMethods

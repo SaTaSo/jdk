@@ -49,7 +49,7 @@ class SafepointMechanism : public AllStatic {
 
   static inline bool global_poll();
 
-  static void process(JavaThread *thread, bool allow_suspend);
+  static void process(JavaThread *thread, bool allow_suspend, bool runtime_exit);
 
   static void default_initialize();
 
@@ -80,7 +80,7 @@ class SafepointMechanism : public AllStatic {
   static inline bool should_process(JavaThread* thread, bool allow_suspend = true);
 
   // Processes a pending requested operation.
-  static inline void process_if_requested(JavaThread* thread, bool allow_suspend = true);
+  static inline void process_if_requested(JavaThread* thread, bool allow_suspend, bool runtime_exit);
   static inline void process_if_requested_with_exit_check(JavaThread* thread, bool check_asyncs);
   // Compute what the poll values should be and install them.
   static void update_poll_values(JavaThread* thread);

@@ -88,17 +88,18 @@ bool SafepointMechanism::should_process(JavaThread* thread, bool allow_suspend) 
   return false;
 }
 
-void SafepointMechanism::process_if_requested(JavaThread* thread, bool allow_suspend) {
+void SafepointMechanism::process_if_requested(JavaThread* thread, bool allow_suspend, bool runtime_exit) {
   // Check NoSafepointVerifier. This also clears unhandled oops if CheckUnhandledOops is used.
   thread->check_possible_safepoint();
 
   if (local_poll_armed(thread)) {
-    process(thread, allow_suspend);
+    process(thread, allow_suspend, runtime_exit /* runtime_exit */);
   }
 }
 
 void SafepointMechanism::process_if_requested_with_exit_check(JavaThread* thread, bool check_asyncs) {
-  process_if_requested(thread);
+  // TODO: Fix naming
+  process_if_requested(thread, true /* allow_suspend */, check_asyncs /* runtime_exit */);
   if (thread->has_special_runtime_exit_condition()) {
     thread->handle_special_runtime_exit_condition(check_asyncs);
   }
