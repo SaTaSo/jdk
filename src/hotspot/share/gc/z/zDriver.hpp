@@ -62,6 +62,7 @@ private:
   ConcurrentGCTimer _gc_timer;
   ZMinorTracer      _jfr_tracer;
   size_t            _used_at_start;
+  GCCause::Cause    _gc_cause;
 
   void gc(const ZDriverRequest& request);
   void handle_alloc_stalls() const;
@@ -77,6 +78,9 @@ public:
 
   void collect(const ZDriverRequest& request);
 
+  void set_gc_cause(GCCause::Cause cause);
+  GCCause::Cause gc_cause();
+
   GCTracer* jfr_tracer();
 
   void set_used_at_start(size_t used);
@@ -89,6 +93,7 @@ private:
   ConcurrentGCTimer _gc_timer;
   ZMajorTracer      _jfr_tracer;
   size_t            _used_at_start;
+  GCCause::Cause    _gc_cause;
 
   void gc(const ZDriverRequest& request);
   void handle_alloc_stalls() const;
@@ -103,6 +108,9 @@ public:
   bool is_busy() const;
 
   void collect(const ZDriverRequest& request);
+
+  void set_gc_cause(GCCause::Cause cause);
+  GCCause::Cause gc_cause();
 
   GCTracer* jfr_tracer();
 
