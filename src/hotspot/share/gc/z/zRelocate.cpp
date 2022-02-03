@@ -1032,6 +1032,12 @@ public:
       // Figure out if this is proper promotion
       const bool promotion = to_age == ZPageAge::old;
 
+      if (promotion) {
+        prev_page->object_iterate([&](oop obj) {
+          ZIterator::basic_oop_iterate_safe(obj, ZBarrier::promote_barrier_on_young_oop_field);
+        });
+      }
+
       // Logging
       prev_page->log_msg(promotion ? " (flip promoted)" : " (flip survived)");
 

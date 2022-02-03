@@ -457,12 +457,25 @@ inline bool ZBarrier::is_store_good_fast_path(zpointer ptr) {
   return ZPointer::is_store_good(ptr);
 }
 
+inline bool ZBarrier::is_store_good_or_null_any_fast_path(zpointer ptr) {
+  return is_null_any(ptr) || !ZPointer::is_store_bad(ptr);
+}
+
 inline bool ZBarrier::is_mark_young_good_fast_path(zpointer ptr) {
   return ZPointer::is_load_good(ptr) && ZPointer::is_marked_young(ptr);
 }
 
 inline bool ZBarrier::is_finalizable_good_fast_path(zpointer ptr) {
   return ZPointer::is_load_good(ptr) && ZPointer::is_marked_any_old(ptr);
+}
+
+//
+// Slow paths
+//
+
+inline zaddress ZBarrier::promote_slow_path(zaddress addr) {
+  // No need to do anything
+  return addr;
 }
 
 //
@@ -643,7 +656,12 @@ inline void ZBarrier::mark_barrier_on_oop_field(volatile zpointer* p, bool final
 
 inline void ZBarrier::mark_barrier_on_young_oop_field(volatile zpointer* p) {
   const zpointer o = load_atomic(p);
-  barrier(is_store_good_fast_path, mark_slow_path, color_store_good, p, o);
+  barrier(is_store_good_or_null_any_fast_path, mark_slow_path, color_store_good, p, o);
+}
+
+inline void ZBarrier::promote_barrier_on_young_oop_field(volatile zpointer* p) {
+  const zpointer o = load_atomic(p);
+  barrier(is_store_good_fast_path, promote_slow_path, color_store_good, p, o);
 }
 
 //

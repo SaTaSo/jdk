@@ -50,9 +50,17 @@ private:
     const size_t index = Atomic::fetch_and_add(next, 1u);
     assert(index < _nforwardings, "Invalid index");
 
-    forwarding->page()->log_msg(" (relocation selected)");
+    ZPage* page = forwarding->page();
+
+    page->log_msg(" (relocation selected)");
 
     _forwardings[index] = forwarding;
+
+    if (forwarding->is_promotion()) {
+      page->object_iterate([&](oop obj) {
+        ZIterator::basic_oop_iterate_safe(obj, ZBarrier::promote_barrier_on_young_oop_field);
+      });
+    }
   }
 
   void install_small(ZForwarding* forwarding) {
