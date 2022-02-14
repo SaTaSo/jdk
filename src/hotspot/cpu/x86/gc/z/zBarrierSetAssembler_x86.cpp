@@ -574,14 +574,25 @@ static void load_arraycopy_masks(MacroAssembler* masm) {
   // xmm3: store_bad_mask
   // xmm4: uncolor_mask
   // xmm5: store_good_mask
-  __ lea(r10, ExternalAddress((address)&ZPointerVectorLoadBadMask));
-  __ vmovdqu(xmm2, Address(r10, 0));
-  __ lea(r10, ExternalAddress((address)&ZPointerVectorStoreBadMask));
-  __ vmovdqu(xmm3, Address(r10, 0));
-  __ lea(r10, ExternalAddress((address)&ZPointerVectorUncolorMask));
-  __ vmovdqu(xmm4, Address(r10, 0));
-  __ lea(r10, ExternalAddress((address)&ZPointerVectorStoreGoodMask));
-  __ vmovdqu(xmm5, Address(r10, 0));
+  if (UseAVX >= 2) {
+    __ lea(r10, ExternalAddress((address)&ZPointerVectorLoadBadMask));
+    __ vmovdqu(xmm2, Address(r10, 0));
+    __ lea(r10, ExternalAddress((address)&ZPointerVectorStoreBadMask));
+    __ vmovdqu(xmm3, Address(r10, 0));
+    __ lea(r10, ExternalAddress((address)&ZPointerVectorUncolorMask));
+    __ vmovdqu(xmm4, Address(r10, 0));
+    __ lea(r10, ExternalAddress((address)&ZPointerVectorStoreGoodMask));
+    __ vmovdqu(xmm5, Address(r10, 0));
+  } else {
+    __ lea(r10, ExternalAddress((address)&ZPointerVectorLoadBadMask));
+    __ movdqu(xmm2, Address(r10, 0));
+    __ lea(r10, ExternalAddress((address)&ZPointerVectorStoreBadMask));
+    __ movdqu(xmm3, Address(r10, 0));
+    __ lea(r10, ExternalAddress((address)&ZPointerVectorUncolorMask));
+    __ movdqu(xmm4, Address(r10, 0));
+    __ lea(r10, ExternalAddress((address)&ZPointerVectorStoreGoodMask));
+    __ movdqu(xmm5, Address(r10, 0));
+  }
 }
 
 void ZBarrierSetAssembler::copy_at(MacroAssembler* masm,
