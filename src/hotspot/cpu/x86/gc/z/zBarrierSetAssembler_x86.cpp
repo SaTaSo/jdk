@@ -572,26 +572,21 @@ void ZBarrierSetAssembler::store_at(MacroAssembler* masm,
 static void load_arraycopy_masks(MacroAssembler* masm) {
   // xmm2: load_bad_mask
   // xmm3: store_bad_mask
-  // xmm4: uncolor_mask
-  // xmm5: store_good_mask
+  // xmm4: store_good_mask
   if (UseAVX >= 2) {
     __ lea(r10, ExternalAddress((address)&ZPointerVectorLoadBadMask));
     __ vmovdqu(xmm2, Address(r10, 0));
     __ lea(r10, ExternalAddress((address)&ZPointerVectorStoreBadMask));
     __ vmovdqu(xmm3, Address(r10, 0));
-    __ lea(r10, ExternalAddress((address)&ZPointerVectorUncolorMask));
-    __ vmovdqu(xmm4, Address(r10, 0));
     __ lea(r10, ExternalAddress((address)&ZPointerVectorStoreGoodMask));
-    __ vmovdqu(xmm5, Address(r10, 0));
+    __ vmovdqu(xmm4, Address(r10, 0));
   } else {
     __ lea(r10, ExternalAddress((address)&ZPointerVectorLoadBadMask));
     __ movdqu(xmm2, Address(r10, 0));
     __ lea(r10, ExternalAddress((address)&ZPointerVectorStoreBadMask));
     __ movdqu(xmm3, Address(r10, 0));
-    __ lea(r10, ExternalAddress((address)&ZPointerVectorUncolorMask));
-    __ movdqu(xmm4, Address(r10, 0));
     __ lea(r10, ExternalAddress((address)&ZPointerVectorStoreGoodMask));
-    __ movdqu(xmm5, Address(r10, 0));
+    __ movdqu(xmm4, Address(r10, 0));
   }
 }
 
@@ -640,8 +635,7 @@ void ZBarrierSetAssembler::copy_at(MacroAssembler* masm,
   // Registers set up in the prologue:
   // xmm2: load_bad_mask
   // xmm3: store_bad_mask
-  // xmm4: uncolor_mask
-  // xmm5: store_good_mask
+  // xmm4: store_good_mask
 
   if (bytes == 16) {
     Label done;
@@ -663,11 +657,12 @@ void ZBarrierSetAssembler::copy_at(MacroAssembler* masm,
     }
 
     // Uncolor source
-    __ pand(xmm_tmp1, xmm4);
+    __ movdqu(xmm_tmp2, xmm3);
+    __ pandn(xmm_tmp2, xmm_tmp1);
     // Color source
-    __ por(xmm_tmp1, xmm5);
+    __ por(xmm_tmp2, xmm4);
     // Store source in destination
-    __ movdqu(dst, xmm_tmp1);
+    __ movdqu(dst, xmm_tmp2);
     __ jmp(done);
 
     __ bind(fallback);
@@ -703,9 +698,9 @@ void ZBarrierSetAssembler::copy_at(MacroAssembler* masm,
     }
 
     // Uncolor source
-    __ vpand(xmm_tmp1, xmm_tmp1, xmm4, Assembler::AVX_256bit);
+    __ vpandn(xmm_tmp1, xmm3, xmm_tmp1, Assembler::AVX_256bit);
     // Color source
-    __ vpor(xmm_tmp1, xmm_tmp1, xmm5, Assembler::AVX_256bit);
+    __ vpor(xmm_tmp1, xmm_tmp1, xmm4, Assembler::AVX_256bit);
 
     // Store colored source in destination
     __ vmovdqu(dst, xmm_tmp1);
