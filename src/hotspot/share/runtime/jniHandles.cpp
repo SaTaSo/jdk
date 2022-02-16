@@ -288,17 +288,18 @@ void JNIHandles::print() { print_on(tty); }
 class VerifyJNIHandles: public OopClosure {
 public:
   virtual void do_oop(oop* root) {
-    guarantee(oopDesc::is_oop_or_null(RawAccess<>::oop_load(root)), "Invalid oop");
+    // The oop_load might self heal the provided address. Generally speaking,
+    // we don't want verification code to alter the state of the program.
+    // Therefore, we perform a raw oop_load, followed by a proper NativeAccess
+    // with potential load barriers.
+    oop raw_oop = RawAccess<>::oop_load(root);
+    oop obj = NativeAccess<AS_NO_KEEPALIVE>::oop_load(&raw_oop);
+    guarantee(oopDesc::is_oop_or_null(obj), "Invalid oop");
   }
   virtual void do_oop(narrowOop* root) { ShouldNotReachHere(); }
 };
 
 void JNIHandles::verify() {
-  if (UseZGC) {
-    // FIXME: Need correct load barrier
-    return;
-  }
-
   VerifyJNIHandles verify_handle;
 
   oops_do(&verify_handle);
