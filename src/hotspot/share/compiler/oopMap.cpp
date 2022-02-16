@@ -305,15 +305,15 @@ void OopMapSet::all_do(const frame *fr, const RegisterMap *reg_map,
 #endif // !COMPILER2
       derived_pointer* derived_loc = (derived_pointer*)fr->oopmapreg_to_location(omv.reg(),reg_map);
       guarantee(derived_loc != NULL, "missing saved register");
-      oop* base_loc = fr->oopmapreg_to_oop_location(omv.content_reg(), reg_map);
+      void** base_loc = (void**) fr->oopmapreg_to_location(omv.content_reg(), reg_map);
       // Ignore NULL oops and decoded NULL narrow oops which
       // equal to CompressedOops::base() when a narrow oop
       // implicit null check is used in compiled code.
       // The narrow_oop_base could be NULL or be the address
       // of the page below heap depending on compressed oops mode.
-      // FIXME: Remove the ugly hacks
-      if (base_loc != NULL && *(intptr_t*)base_loc != 0 && (UseZGC || !CompressedOops::is_base(*base_loc))) {
-        derived_oop_fn(base_loc, derived_loc, oop_fn);
+      if (base_loc != NULL && *base_loc != NULL && (!UseCompressedOops || !CompressedOops::is_base(*base_loc))) {
+        oop* base_oop_loc = (oop*)base_loc;
+        derived_oop_fn(base_oop_loc, derived_loc, oop_fn);
       }
     }
   }
@@ -322,14 +322,14 @@ void OopMapSet::all_do(const frame *fr, const RegisterMap *reg_map,
     // We want coop and oop oop_types
     for (OopMapStream oms(map); !oms.is_done(); oms.next()) {
       OopMapValue omv = oms.current();
-      oop* loc = fr->oopmapreg_to_oop_location(omv.reg(),reg_map);
+      void** loc = (void**) fr->oopmapreg_to_location(omv.reg(),reg_map);
       // It should be an error if no location can be found for a
       // register mentioned as contained an oop of some kind.  Maybe
       // this was allowed previously because value_value items might
       // be missing?
       guarantee(loc != NULL, "missing saved register");
       if ( omv.type() == OopMapValue::oop_value ) {
-        void* val = *(void**)loc;
+        void* val = *loc;
         if (val == NULL || CompressedOops::is_base(val)) {
           // Ignore NULL oops and decoded NULL narrow oops which
           // equal to CompressedOops::base() when a narrow oop
@@ -338,7 +338,8 @@ void OopMapSet::all_do(const frame *fr, const RegisterMap *reg_map,
           // of the page below heap depending on compressed oops mode.
           continue;
         }
-        oop_fn->do_oop(loc);
+        oop* oop_loc = (oop*)loc;
+        oop_fn->do_oop(oop_loc);
       } else if ( omv.type() == OopMapValue::narrowoop_value ) {
         narrowOop *nl = (narrowOop*)loc;
 #ifndef VM_LITTLE_ENDIAN
@@ -385,8 +386,8 @@ void OopMapSet::update_register_map(const frame *fr, RegisterMap *reg_map) {
     OopMapValue omv = oms.current();
     if (omv.type() == OopMapValue::callee_saved_value) {
       VMReg reg = omv.content_reg();
-      oop* loc = fr->oopmapreg_to_oop_location(omv.reg(), reg_map);
-      reg_map->set_location(reg, (address) loc);
+      address loc = fr->oopmapreg_to_location(omv.reg(), reg_map);
+      reg_map->set_location(reg, loc);
       DEBUG_ONLY(nof_callee++;)
     }
   }
