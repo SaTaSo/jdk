@@ -332,6 +332,63 @@ void PhaseOutput::perform_mach_node_analysis() {
   bs->late_barrier_analysis();
 
   pd_perform_mach_node_analysis();
+
+  if (UseZGC) {
+    perform_peeping();
+  }
+}
+
+void PhaseOutput::perform_peeping() {
+  Compile* const C = Compile::current();
+  PhaseCFG* const cfg = C->cfg();
+  for (uint i = 0; i < cfg->number_of_blocks(); ++i) {
+    Block* const block = cfg->get_block(i);
+    for (uint j = 0; j < block->number_of_nodes(); ++j) {
+      Node* const node = block->get_node(j);
+      MachNode* mn = node->isa_Mach();
+      if (mn == nullptr) {
+        continue;
+      }
+      if (mn->ideal_Opcode() != Opcodes::Op_LoadP) {
+        continue;
+      }
+      if (strcmp(mn->Name(), "zLoadP") == 0) {
+        if (j >= (block->number_of_nodes() - 2)) {
+          continue; // no room
+        }
+        // Succeeded by a connected MachProj
+        MachProjNode* proj = block->get_node(j + 1)->isa_MachProj();
+        if (proj == nullptr) {
+          continue;
+        }
+        if (proj->in(0) != mn) {
+          continue;
+        }
+        // Succeeded by a connected test node
+        MachNode* const test = block->get_node(j + 2)->isa_Mach();
+        if (test == nullptr) {
+          continue;
+        }
+        if (test->ideal_Opcode() != Opcodes::Op_CmpP) {
+          continue;
+        }
+        if (strcmp(test->Name(), "testP_reg") != 0) {
+          continue;
+        }
+        // Must be connected to load
+        if (test->in(1) != mn) {
+          continue;
+        }
+
+        // Note that the stub need to recreate ZF flag
+        mn->add_barrier_data(ZBarrierNullCheckRemoval);
+
+        // Drop node
+        assert(block->find_node(test) == (j + 2), "check");
+        block->remove_node(j+1);
+      }
+    }
+  }
 }
 
 // Convert Nodes to instruction bits and pass off to the VM
@@ -1694,6 +1751,7 @@ void PhaseOutput::fill_buffer(CodeBuffer* cb, uint* blk_starts) {
       // "Normal" instruction case
       DEBUG_ONLY(uint instr_offset = cb->insts_size());
       n->emit(*cb, C->regalloc());
+
       current_offset = cb->insts_size();
 
       // Above we only verified that there is enough space in the instruction section.

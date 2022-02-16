@@ -310,6 +310,7 @@ public:
 
   virtual void print_stats()  const { tty->print_cr("--- No C2BarrierSet stats ---"); };
   virtual void gather_stats() const { };
+
 };
 
 #endif // SHARE_GC_SHARED_C2_BARRIERSETC2_HPP

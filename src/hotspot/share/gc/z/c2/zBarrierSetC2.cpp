@@ -605,7 +605,6 @@ void ZBarrierSetC2::mark_mach_barrier_sab_elided(MachNode* mach) const {
 
 void ZBarrierSetC2::mark_mach_barrier_sab_bailout(MachNode* mach) const {
   assert((mach->barrier_data() & ZBarrierElided) == 0, "must not have been marked sanity");
-  mach->add_barrier_data(ZBarrierSABBailout);
 }
 
 void ZBarrierSetC2::record_safepoint_attached_barrier(MachNode* const access, Node* mem, MachSafePointNode* sfp DEBUG_ONLY(COMMA Node* dom_access)) const {
@@ -1056,6 +1055,7 @@ struct elision_counter_struct {
 };
 
 static elision_counter_struct _elision_counter[3] = {};
+static int _elided_zf = 0;
 
 void ZBarrierSetC2::gather_stats() const {
   if (PrintBarrierSetStatistics) {
@@ -1074,6 +1074,9 @@ void ZBarrierSetC2::gather_stats() const {
         switch (mach->ideal_Opcode()) {
           case Op_LoadP:
             type = LOAD_COUNTER;
+            if ((mach->barrier_data() & ZBarrierNullCheckRemoval) != 0) {
+              _elided_zf++;
+            }
             break;
           case Op_StoreP:
             type = STORE_COUNTER;
@@ -1133,6 +1136,8 @@ void ZBarrierSetC2::print_stats() const {
     tty->print_cr("- triv. elided: %i", triv_elided);
     tty->print_cr("- dom elided:   %i", _elision_counter[i].barrier_dom_elided);
     tty->print_cr("- sab elided:   %i", _elision_counter[i].barrier_sab_elided);
+    tty->cr();
   }
+  tty->print_cr("Elided zf checks after load barrier: %i", _elided_zf);
 }
 

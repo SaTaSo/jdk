@@ -34,7 +34,7 @@ void C2SafepointPollStubTable::emit_stub_impl(MacroAssembler& masm, C2SafepointP
   assert(SharedRuntime::polling_page_return_handler_blob() != NULL,
          "polling page return stub not created yet");
   address stub = SharedRuntime::polling_page_return_handler_blob()->entry_point();
-
+   __ block_comment("Safepoint stub");
   RuntimeAddress callback_addr(stub);
 
   __ bind(entry->_stub_label);
