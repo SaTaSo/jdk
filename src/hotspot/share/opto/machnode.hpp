@@ -180,10 +180,10 @@ public:
   // Set an integer offset if we have one, or error otherwise
   virtual void set_con( jint c0 ) { ShouldNotReachHere();  }
 
-#ifndef PRODUCT
   // Return name of operand
   virtual const char    *Name() const { return "???";}
 
+#ifndef PRODUCT
   // Methods to output the text version of the operand
   virtual void int_format(PhaseRegAlloc *,const MachNode *node, outputStream *st) const = 0;
   virtual void ext_format(PhaseRegAlloc *,const MachNode *node,int idx, outputStream *st) const=0;
@@ -382,8 +382,8 @@ public:
   void set_removed() { _removed = true; }
   bool get_removed() { return _removed; }
 
+  virtual const char *Name() const = 0;
 #ifndef PRODUCT
-  virtual const char *Name() const = 0; // Machine-specific name
   virtual void dump_spec(outputStream *st) const; // Print per-node info
   void         dump_format(PhaseRegAlloc *ra, outputStream *st) const; // access to virtual
 #endif
@@ -425,8 +425,8 @@ public:
   virtual void emit(CodeBuffer &cbuf, PhaseRegAlloc *ra_) const;
   virtual uint size(PhaseRegAlloc *ra_) const;
 
-#ifndef PRODUCT
   virtual const char *Name() const { return "Breakpoint"; }
+#ifndef PRODUCT
   virtual void format( PhaseRegAlloc *, outputStream *st ) const;
 #endif
 };
@@ -454,8 +454,8 @@ public:
   static const RegMask& static_out_RegMask() { return _out_RegMask; }
   virtual const RegMask& out_RegMask() const { return static_out_RegMask(); }
 
-#ifndef PRODUCT
   virtual const char* Name() const { return "MachConstantBaseNode"; }
+#ifndef PRODUCT
   virtual void format(PhaseRegAlloc*, outputStream* st) const;
 #endif
 };
@@ -502,8 +502,8 @@ public:
   virtual void emit(CodeBuffer &cbuf, PhaseRegAlloc *ra_) const;
   virtual uint size(PhaseRegAlloc *ra_) const;
 
-#ifndef PRODUCT
   virtual const char *Name() const { return "Unvalidated-Entry-Point"; }
+#ifndef PRODUCT
   virtual void format( PhaseRegAlloc *, outputStream *st ) const;
 #endif
 };
@@ -517,8 +517,8 @@ public:
   virtual uint size(PhaseRegAlloc *ra_) const;
   virtual int reloc() const;
 
-#ifndef PRODUCT
   virtual const char *Name() const { return "Prolog"; }
+#ifndef PRODUCT
   virtual void format( PhaseRegAlloc *, outputStream *st ) const;
 #endif
 };
@@ -539,8 +539,8 @@ private:
 public:
   bool do_polling() const { return _do_polling; }
 
-#ifndef PRODUCT
   virtual const char *Name() const { return "Epilog"; }
+#ifndef PRODUCT
   virtual void format( PhaseRegAlloc *, outputStream *st ) const;
 #endif
 };
@@ -560,8 +560,8 @@ public:
 
   virtual int ideal_Opcode() const { return Op_Con; } // bogus; see output.cpp
   virtual const Pipeline *pipeline() const;
-#ifndef PRODUCT
   virtual const char *Name() const { return "Nop"; }
+#ifndef PRODUCT
   virtual void format( PhaseRegAlloc *, outputStream *st ) const;
   virtual void dump_spec(outputStream *st) const { } // No per-operand info
 #endif
@@ -617,7 +617,6 @@ public:
   virtual uint size(PhaseRegAlloc *ra_) const;
 
 
-#ifndef PRODUCT
   static const char *spill_type(SpillType st) {
     switch (st) {
       case TwoAddress:
@@ -656,6 +655,7 @@ public:
     return spill_type(_spill_type);
   }
 
+#ifndef PRODUCT
   virtual void format( PhaseRegAlloc *, outputStream *st ) const;
 #endif
 };
@@ -678,8 +678,8 @@ public:
   virtual uint oper_input_base() const { return 1; }
   virtual void emit(CodeBuffer &cbuf, PhaseRegAlloc *ra_) const { }
   virtual uint size(PhaseRegAlloc *ra_) const { return 0; }
-#ifndef PRODUCT
   virtual const char *Name() const { return "MachMerge"; }
+#ifndef PRODUCT
 #endif
 };
 
@@ -724,8 +724,8 @@ public:
   virtual uint ideal_reg() const { return NotAMachineReg; }
   virtual const RegMask &in_RegMask(uint) const;
   virtual const RegMask &out_RegMask() const { return RegMask::Empty; }
-#ifndef PRODUCT
   virtual const char *Name() const { return "NullCheck"; }
+#ifndef PRODUCT
   virtual void format( PhaseRegAlloc *, outputStream *st ) const;
 #endif
 };
@@ -1133,8 +1133,8 @@ public:
 
 #ifndef PRODUCT
   virtual void format(PhaseRegAlloc *, outputStream *st ) const {}
-  virtual const char *Name() const { return "MachTemp";}
 #endif
+  virtual const char *Name() const { return "MachTemp";}
 };
 
 
@@ -1164,8 +1164,8 @@ public:
 
   virtual uint           hash()   const;
   virtual bool           cmp( const MachOper &oper ) const;
-#ifndef PRODUCT
   virtual const char    *Name()   const { return "Label";}
+#ifndef PRODUCT
 
   virtual void int_format(PhaseRegAlloc *ra, const MachNode *node, outputStream *st) const;
   virtual void ext_format(PhaseRegAlloc *ra, const MachNode *node, int idx, outputStream *st) const { int_format( ra, node, st ); }
@@ -1191,9 +1191,9 @@ public:
 
   virtual uint           hash()   const;
   virtual bool           cmp( const MachOper &oper ) const;
-#ifndef PRODUCT
   virtual const char    *Name()   const { return "Method";}
 
+#ifndef PRODUCT
   virtual void int_format(PhaseRegAlloc *ra, const MachNode *node, outputStream *st) const;
   virtual void ext_format(PhaseRegAlloc *ra, const MachNode *node, int idx, outputStream *st) const { int_format( ra, node, st ); }
 #endif

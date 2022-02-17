@@ -123,6 +123,10 @@ instruct zLoadP(rRegP dst, memory mem, rFlagsReg cr)
   format %{ "movq     $dst, $mem" %}
 
   ins_encode %{
+    //__ incq(Address(r15_thread, Thread::fast_loads_offset()));
+    //if (barrier_data() & ZBarrierNullCheckRemoval) {
+    //  __ incq(Address(r15_thread, Thread::null_check_loads_offset()));
+    //}
     __ movptr($dst$$Register, $mem$$Address);
     z_load_barrier(_masm, this, $mem$$Address, $dst$$Register);
   %}
@@ -130,19 +134,19 @@ instruct zLoadP(rRegP dst, memory mem, rFlagsReg cr)
   ins_pipe(ialu_reg_mem);
 %}
 
-// Load Pointer and Null Check
-instruct zLoadPNullCheck(rFlagsReg cr, memory op, immP0 zero)
-%{
-  predicate(UseZGC && n->in(1)->as_Load()->barrier_data() != 0);
-  match(Set cr (CmpP (LoadP op) zero));
-
-  ins_cost(500); // XXX
-  format %{ "testq   $op, 0xffffffffffff0000\t# ptr" %}
-  ins_encode %{
-    __ testq($op$$Address, 0xFFFF0000);
-  %}
-  ins_pipe(ialu_cr_reg_imm);
-%}
+//// Load Pointer and Null Check
+//instruct zLoadPNullCheck(rFlagsReg cr, memory op, immP0 zero)
+//%{
+//  predicate(UseZGC && n->in(1)->as_Load()->barrier_data() != 0);
+//  match(Set cr (CmpP (LoadP op) zero));
+//
+//  ins_cost(500); // XXX
+//  format %{ "testq   $op, 0xffffffffffff0000\t# ptr" %}
+//  ins_encode %{
+//    __ testq($op$$Address, 0xFFFF0000);
+//  %}
+//  ins_pipe(ialu_cr_reg_imm);
+//%}
 
 // Store Pointer
 instruct zStoreP(memory mem, any_RegP src, rRegP tmp, rFlagsReg cr)

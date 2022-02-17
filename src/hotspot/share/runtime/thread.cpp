@@ -215,6 +215,9 @@ Thread::Thread() {
   DEBUG_ONLY(clear_suspendible_thread();)
   DEBUG_ONLY(clear_indirectly_suspendible_thread();)
 
+  _fast_loads = 0;
+  _null_check_loads = 0;
+
   // allocated data structures
   set_osthread(NULL);
   set_resource_area(new (mtThread)ResourceArea());

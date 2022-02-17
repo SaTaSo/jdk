@@ -144,6 +144,12 @@ class Thread: public ThreadShadow {
   GCThreadLocalData _gc_data;
 
  public:
+  uintptr_t _fast_loads;
+  uintptr_t _null_check_loads;
+
+  static ByteSize fast_loads_offset() { return byte_offset_of(Thread, _fast_loads); }
+  static ByteSize null_check_loads_offset() { return byte_offset_of(Thread, _null_check_loads); }
+
   static ByteSize gc_data_offset() {
     return byte_offset_of(Thread, _gc_data);
   }

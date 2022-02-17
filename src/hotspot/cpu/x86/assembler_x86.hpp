@@ -848,6 +848,7 @@ private:
   void incl(Register dst);
   void incl(Address dst);
   void incq(Register dst);
+public:
   void incq(Address dst);
 
   // New cpus require use of movsd and movss to avoid partial register stall

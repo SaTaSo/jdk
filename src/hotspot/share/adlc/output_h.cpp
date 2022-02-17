@@ -1507,10 +1507,10 @@ void ArchDesc::declareClasses(FILE *fp) {
       fprintf(fp,"  }\n");
     }
 
+    fprintf(fp,"#endif\n");
+
     fprintf(fp,"  virtual const char    *Name() const { return \"%s\";}\n",
             oper->_ident);
-
-    fprintf(fp,"#endif\n");
 
     // Close definition of this XxxMachOper
     fprintf(fp,"};\n");
@@ -1988,11 +1988,11 @@ void ArchDesc::declareClasses(FILE *fp) {
     // virtual function for generating the user's assembler output
     gen_inst_format(fp, _globalNames,*instr);
 
+    fprintf(fp, "#endif\n");
+
     // Machine independent print functionality for debugging
     fprintf(fp,"  virtual const char    *Name() const { return \"%s\";}\n",
             instr->_ident);
-
-    fprintf(fp, "#endif\n");
 
     // Close definition of this XxxMachNode
     fprintf(fp,"};\n");
