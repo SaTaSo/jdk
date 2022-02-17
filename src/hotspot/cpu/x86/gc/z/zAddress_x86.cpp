@@ -44,4 +44,5 @@ size_t ZPlatformAddressHeapBaseShift() {
 
 void ZGlobalsPointers::pd_set_good_masks() {
   ZPointerLoadShift = ZPointer::load_shift_lookup(ZPointerLoadGoodMask);
+  ZPointerLoadBadOrNullMask  = ZPointerLoadGoodMask ^ (ZAddressHeapBase << ZPointerLoadShift);
 }

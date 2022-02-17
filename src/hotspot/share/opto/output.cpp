@@ -352,6 +352,9 @@ void PhaseOutput::perform_peeping() {
       if (mn->ideal_Opcode() != Opcodes::Op_LoadP) {
         continue;
       }
+      if (mn->barrier_data() & ZBarrierElided) {
+        continue;
+      }
       if (strcmp(mn->Name(), "zLoadP") == 0) {
         if (j >= (block->number_of_nodes() - 2)) {
           continue; // no room
@@ -380,11 +383,42 @@ void PhaseOutput::perform_peeping() {
           continue;
         }
 
-        // Note that the stub need to recreate ZF flag
-        mn->add_barrier_data(ZBarrierNullCheckRemoval);
+        MachNode* branch = block->get_node(j + 3)->isa_Mach();
+        if (branch == nullptr) {
+          continue;
+        }
 
-        // Drop node
+        int ccode = 0;
+        if (strcmp(branch->Name(), "jmpCon") == 0) {
+          jmpConNode* jmpCon = (jmpConNode*)branch;
+          //if (jmpCon->_prob > 0.5) {
+          //  // Likely to take the branch - not a good optimization
+          //  continue;
+          //}
+          ccode = ((cmpOpOper*)jmpCon->_opnd_array[1])->ccode();
+        } else if (strcmp(branch->Name(), "jmpCon") == 0) {
+          jmpCon_shortNode* jmpCon = (jmpCon_shortNode*)branch;
+          //if (jmpCon->_prob > 0.5) {
+          //  // Likely to take the branch - not a good optimization
+          //  continue;
+          //}
+          ccode = ((cmpOpOper*)jmpCon->_opnd_array[1])->ccode();
+        } else {
+          continue;
+        }
+
+        if (ccode == Assembler::equal) {
+          // Hack - we ran out of bits in barrier data to
+          // distinguish the direction of the branch.
+          ZBarrierSetC2::set_null_target(mn, (Label*)1);
+        } else {
+          ZBarrierSetC2::set_not_null_target(mn, (Label*)1);
+        }
+
+        mn->add_barrier_data(ZBarrierNullCheckRemoval);
         assert(block->find_node(test) == (j + 2), "check");
+        block->remove_node(j+1);
+        block->remove_node(j+1);
         block->remove_node(j+1);
       }
     }
@@ -1747,6 +1781,19 @@ void PhaseOutput::fill_buffer(CodeBuffer* cb, uint* blk_starts) {
       }
 #endif
       assert(!C->failing(), "Should not reach here if failing.");
+
+      if (n->is_Mach()) {
+        if ((n->as_Mach()->barrier_data() & ZBarrierNullCheckRemoval) != 0) {
+          // This requires the TRUE branch target be in succs[0]
+          uint block_num = block->non_connector_successor(0)->_pre_order;
+          if (ZBarrierSetC2::null_target(n->as_Mach()) != NULL) {
+            ZBarrierSetC2::set_null_target(n->as_Mach(), &blk_labels[block_num]);
+          }
+          if (ZBarrierSetC2::not_null_target(n->as_Mach()) != NULL) {
+            ZBarrierSetC2::set_not_null_target(n->as_Mach(), &blk_labels[block_num]);
+          }
+        }
+      }
 
       // "Normal" instruction case
       DEBUG_ONLY(uint instr_offset = cb->insts_size());

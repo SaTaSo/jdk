@@ -85,6 +85,7 @@ void ZBarrierSet::on_thread_destroy(Thread* thread) {
 void ZBarrierSet::on_thread_attach(Thread* thread) {
   // Set thread local masks
   ZThreadLocalData::set_load_bad_mask(thread, ZPointerLoadBadMask);
+  ZThreadLocalData::set_load_bad_or_null_mask(thread, ZPointerLoadBadOrNullMask);
   ZThreadLocalData::set_load_good_mask(thread, ZPointerLoadGoodMask);
   ZThreadLocalData::set_mark_bad_mask(thread, ZPointerMarkBadMask);
   ZThreadLocalData::set_store_bad_mask(thread, ZPointerStoreBadMask);

@@ -46,6 +46,7 @@ uintptr_t  ZPointerRemembered;
 
 uintptr_t  ZPointerLoadGoodMask;
 uintptr_t  ZPointerLoadBadMask;
+uintptr_t  ZPointerLoadBadOrNullMask;
 
 uintptr_t  ZPointerMarkGoodMask;
 uintptr_t  ZPointerMarkBadMask;

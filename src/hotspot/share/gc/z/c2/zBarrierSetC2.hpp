@@ -72,14 +72,18 @@ class ZLoadBarrierStubC2 : public ZBarrierStubC2 {
 private:
   const Address  _ref_addr;
   const Register _ref;
+  Label* _null_target;
+  Label* _not_null_target;
 
-  ZLoadBarrierStubC2(const MachNode* node, Address ref_addr, Register ref);
+  ZLoadBarrierStubC2(const MachNode* node, Address ref_addr, Register ref, Label* null_target, Label* not_null_target);
 
 public:
-  static ZLoadBarrierStubC2* create(const MachNode* node, Address ref_addr, Register ref);
+  static ZLoadBarrierStubC2* create(const MachNode* node, Address ref_addr, Register ref, Label* null_target = NULL, Label* not_null_target = NULL);
 
   Address ref_addr() const;
   Register ref() const;
+  Label* null_target() const { return _null_target; }
+  Label* not_null_target() const { return _not_null_target; }
   address slow_path() const;
 
   virtual Register result() const;
@@ -159,6 +163,11 @@ public:
 
   virtual void print_stats() const;
   virtual void gather_stats() const;
+
+  static void set_null_target(const MachNode* node, Label* label);
+  static Label* null_target(const MachNode* node);
+  static void set_not_null_target(const MachNode* node, Label* label);
+  static Label* not_null_target(const MachNode* node);
 
   void mark_mach_barrier_dom_elided(MachNode* mach) const;
   void mark_mach_barrier_sab_elided(MachNode* mach) const;

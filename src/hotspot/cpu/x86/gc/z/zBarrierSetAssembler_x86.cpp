@@ -1320,6 +1320,20 @@ void ZBarrierSetAssembler::generate_c2_load_barrier_stub(MacroAssembler* masm, Z
   // Stub entry
   __ bind(*stub->entry());
 
+  Label* null_target = stub->null_target();
+  if (null_target != NULL) {
+    // Branch if null
+    __ relocate(barrier_Relocation::spec(), ZBarrierRelocationFormatLoadGoodBeforeShl);
+    __ shrq(stub->ref(), barrier_Relocation::unpatched);
+    __ jcc(Assembler::zero, *null_target);
+  }
+
+  Label* not_null_target = stub->not_null_target();
+  if (not_null_target != NULL) {
+    // Branch if good or null, but we already know it's not null
+    __ jcc(Assembler::belowEqual, *not_null_target);
+  }
+
   // The fast-path shift destroyed the oop - need to re-read it
   __ movptr(stub->ref(), stub->ref_addr());
 
@@ -1329,9 +1343,14 @@ void ZBarrierSetAssembler::generate_c2_load_barrier_stub(MacroAssembler* masm, Z
     __ call(RuntimeAddress(stub->slow_path()));
   }
 
-  // Handle elided cmps that set ZF
-  if ((stub->node()->barrier_data() & ZBarrierNullCheckRemoval) != 0) {
+  if (null_target != NULL) {
     __ testptr(stub->ref(), stub->ref());
+    __ jcc(Assembler::zero, *null_target);
+  }
+
+  if (not_null_target != NULL) {
+    __ testptr(stub->ref(), stub->ref());
+    __ jcc(Assembler::notZero, *not_null_target);
   }
 
   // Stub exit

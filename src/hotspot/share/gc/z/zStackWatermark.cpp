@@ -188,6 +188,7 @@ void ZStackWatermark::start_processing_impl(void* context) {
 
   // Update thread-local masks
   ZThreadLocalData::set_load_bad_mask(_jt, ZPointerLoadBadMask);
+  ZThreadLocalData::set_load_bad_or_null_mask(_jt, ZPointerLoadBadOrNullMask);
   ZThreadLocalData::set_load_good_mask(_jt, ZPointerLoadGoodMask);
   ZThreadLocalData::set_mark_bad_mask(_jt, ZPointerMarkBadMask);
   ZThreadLocalData::set_store_bad_mask(_jt, ZPointerStoreBadMask);

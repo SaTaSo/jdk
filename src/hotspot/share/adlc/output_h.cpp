@@ -1535,8 +1535,9 @@ void ArchDesc::declareClasses(FILE *fp) {
     fprintf(fp,"\n");
     fprintf(fp,"class %sNode : public %s { \n",
             instr->_ident, instr->mach_base_class(_globalNames) );
-    fprintf(fp,"private:\n");
+    fprintf(fp,"public:\n");
     fprintf(fp,"  MachOper *_opnd_array[%d];\n", instr->num_opnds() );
+    fprintf(fp,"private:\n");
     if ( instr->is_ideal_jump() ) {
       fprintf(fp, "  GrowableArray<Label*> _index2label;\n");
     }

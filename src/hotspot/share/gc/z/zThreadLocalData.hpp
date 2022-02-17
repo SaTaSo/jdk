@@ -36,10 +36,10 @@ class ZThreadLocalData {
 private:
   uintptr_t              _load_good_mask;
   uintptr_t              _load_bad_mask;
+  uintptr_t              _load_bad_or_null_mask;
   uintptr_t              _mark_bad_mask;
   uintptr_t              _store_good_mask;
   uintptr_t              _store_bad_mask;
-  uintptr_t              _uncolor_mask;
   uintptr_t              _nmethod_disarmed;
   ZStoreBarrierBuffer*   _store_barrier_buffer;
   ZMarkThreadLocalStacks _mark_stacks[2];
@@ -51,7 +51,6 @@ private:
       _mark_bad_mask(0),
       _store_good_mask(0),
       _store_bad_mask(0),
-      _uncolor_mask(0),
       _nmethod_disarmed(0),
       _store_barrier_buffer(new ZStoreBarrierBuffer()),
       _mark_stacks(),
@@ -76,6 +75,10 @@ public:
 
   static void set_load_bad_mask(Thread* thread, uintptr_t mask) {
     data(thread)->_load_bad_mask = mask;
+  }
+
+  static void set_load_bad_or_null_mask(Thread* thread, uintptr_t mask) {
+    data(thread)->_load_bad_or_null_mask = mask;
   }
 
   static void set_mark_bad_mask(Thread* thread, uintptr_t mask) {
@@ -122,6 +125,10 @@ public:
 
   static ByteSize load_bad_mask_offset() {
     return Thread::gc_data_offset() + byte_offset_of(ZThreadLocalData, _load_bad_mask);
+  }
+
+  static ByteSize load_bad_or_null_mask_offset() {
+    return Thread::gc_data_offset() + byte_offset_of(ZThreadLocalData, _load_bad_or_null_mask);
   }
 
   static ByteSize mark_bad_mask_offset() {

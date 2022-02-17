@@ -123,11 +123,15 @@ class ZBarrierSetC2State : public ResourceObj {
 private:
   GrowableArray<ZBarrierStubC2*>* _stubs;
   Node_Array                      _live;
+  Node_Array                      _null_target;
+  Node_Array                      _not_null_target;
 
 public:
   ZBarrierSetC2State(Arena* arena) :
     _stubs(new (arena) GrowableArray<ZBarrierStubC2*>(arena, 8,  0, NULL)),
-    _live(arena) {}
+    _live(arena),
+    _null_target(arena),
+    _not_null_target(arena) {}
 
   GrowableArray<ZBarrierStubC2*>* stubs() {
     return _stubs;
@@ -152,6 +156,22 @@ public:
     }
 
     return live;
+  }
+
+  void set_null_target(const MachNode* node, Label* label) {
+    _null_target.map(node->_idx, (Node*)label);
+  }
+
+  Label* null_target(const MachNode* node) {
+    return (Label*)_null_target[node->_idx];
+  }
+
+  void set_not_null_target(const MachNode* node, Label* label) {
+    _not_null_target.map(node->_idx, (Node*)label);
+  }
+
+  Label* not_null_target(const MachNode* node) {
+    return (Label*)_not_null_target[node->_idx];
   }
 };
 
@@ -184,8 +204,8 @@ Label* ZBarrierStubC2::continuation() {
   return &_continuation;
 }
 
-ZLoadBarrierStubC2* ZLoadBarrierStubC2::create(const MachNode* node, Address ref_addr, Register ref) {
-  ZLoadBarrierStubC2* const stub = new (Compile::current()->comp_arena()) ZLoadBarrierStubC2(node, ref_addr, ref);
+ZLoadBarrierStubC2* ZLoadBarrierStubC2::create(const MachNode* node, Address ref_addr, Register ref, Label* null_target, Label* not_null_target) {
+  ZLoadBarrierStubC2* const stub = new (Compile::current()->comp_arena()) ZLoadBarrierStubC2(node, ref_addr, ref, null_target, not_null_target);
   if (!Compile::current()->output()->in_scratch_emit_size()) {
     barrier_set_state()->stubs()->append(stub);
   }
@@ -193,10 +213,12 @@ ZLoadBarrierStubC2* ZLoadBarrierStubC2::create(const MachNode* node, Address ref
   return stub;
 }
 
-ZLoadBarrierStubC2::ZLoadBarrierStubC2(const MachNode* node, Address ref_addr, Register ref) :
+ZLoadBarrierStubC2::ZLoadBarrierStubC2(const MachNode* node, Address ref_addr, Register ref, Label* null_target, Label* not_null_target) :
     ZBarrierStubC2(node),
     _ref_addr(ref_addr),
-    _ref(ref) {
+    _ref(ref),
+    _null_target(null_target),
+    _not_null_target(not_null_target) {
   assert_different_registers(ref, ref_addr.base());
   assert_different_registers(ref, ref_addr.index());
 }
@@ -859,6 +881,21 @@ void ZBarrierSetC2::analyze_dominating_barriers_impl(Node_List& accesses, Node_L
   }
 }
 
+void ZBarrierSetC2::set_null_target(const MachNode* node, Label* label) {
+  return barrier_set_state()->set_null_target(node, label);
+}
+
+Label* ZBarrierSetC2::null_target(const MachNode* node) {
+  return barrier_set_state()->null_target(node);
+}
+
+void ZBarrierSetC2::set_not_null_target(const MachNode* node, Label* label) {
+  return barrier_set_state()->set_not_null_target(node, label);
+}
+
+Label* ZBarrierSetC2::not_null_target(const MachNode* node) {
+  return barrier_set_state()->not_null_target(node);
+}
 
 void ZBarrierSetC2::analyze_dominating_barriers() const {
   ResourceMark rm;

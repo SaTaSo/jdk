@@ -58,7 +58,9 @@ static void z_keep_alive_load_barrier(MacroAssembler& _masm, const MachNode* nod
   __ bind(*stub->continuation());
 }
 
-static void z_load_barrier(MacroAssembler& _masm, const MachNode* node, Address ref_addr, Register ref) {
+//static void z_herpderp() {}
+
+static void z_load_barrier(MacroAssembler& _masm, const MachNode* node, Address ref_addr, Register ref, Register rtmp = noreg) {
   const bool on_non_strong =
       ((node->barrier_data() & ZBarrierWeak) != 0) ||
       ((node->barrier_data() & ZBarrierPhantom) != 0);
@@ -77,14 +79,30 @@ static void z_load_barrier(MacroAssembler& _masm, const MachNode* node, Address 
     __ stop("Found bad oop after load with elided barrier");
     __ bind(good);
   }
-  z_uncolor(_masm, node, ref);
-  if ((node->barrier_data() & ZBarrierElided) != 0) {
-    return;
+  Label* null_target = ZBarrierSetC2::null_target(node);
+  Label* not_null_target = ZBarrierSetC2::not_null_target(node);
+  if (null_target != NULL) {
+    __ andnq(rtmp, ref, Address(r15_thread, ZThreadLocalData::load_bad_or_null_mask_offset()));
+    ZLoadBarrierStubC2* const stub = ZLoadBarrierStubC2::create(node, ref_addr, ref, null_target, NULL);
+    __ jcc(Assembler::notZero, *stub->entry());
+    z_uncolor(_masm, node, ref);
+    __ bind(*stub->continuation());
+  } else if (not_null_target != NULL) {
+    //__ call(RuntimeAddress(CAST_FROM_FN_PTR(address, z_herpderp)));
+    z_uncolor(_masm, node, ref);
+    ZLoadBarrierStubC2* const stub = ZLoadBarrierStubC2::create(node, ref_addr, ref, NULL, not_null_target);
+    __ jcc(Assembler::notZero, *stub->entry());
+    __ bind(*stub->continuation());
+  } else {
+    z_uncolor(_masm, node, ref);
+    if ((node->barrier_data() & ZBarrierElided) != 0) {
+      return;
+    }
+    ZLoadBarrierStubC2* const stub = ZLoadBarrierStubC2::create(node, ref_addr, ref);
+    IntelJccErratumAlignment(_masm, 6);
+    __ jcc(Assembler::above, *stub->entry());
+    __ bind(*stub->continuation());
   }
-  ZLoadBarrierStubC2* const stub = ZLoadBarrierStubC2::create(node, ref_addr, ref);
-  IntelJccErratumAlignment(_masm, 6);
-  __ jcc(Assembler::above, *stub->entry());
-  __ bind(*stub->continuation());
 }
 
 static void z_store_barrier(MacroAssembler& _masm, const MachNode* node, Address ref_addr, Register rnew_zaddress, Register rnew_zpointer, bool is_atomic) {
@@ -113,11 +131,11 @@ static void z_store_barrier(MacroAssembler& _masm, const MachNode* node, Address
 %}
 
 // Load Pointer
-instruct zLoadP(rRegP dst, memory mem, rFlagsReg cr)
+instruct zLoadP(rRegP dst, memory mem, rRegP tmp, rFlagsReg cr)
 %{
   predicate(UseZGC && n->as_Load()->barrier_data() != 0);
   match(Set dst (LoadP mem));
-  effect(TEMP dst, KILL cr);
+  effect(TEMP dst, TEMP tmp, KILL cr);
 
   ins_cost(125);
   format %{ "movq     $dst, $mem" %}
@@ -128,7 +146,7 @@ instruct zLoadP(rRegP dst, memory mem, rFlagsReg cr)
     //  __ incq(Address(r15_thread, Thread::null_check_loads_offset()));
     //}
     __ movptr($dst$$Register, $mem$$Address);
-    z_load_barrier(_masm, this, $mem$$Address, $dst$$Register);
+    z_load_barrier(_masm, this, $mem$$Address, $dst$$Register, $tmp$$Register);
   %}
 
   ins_pipe(ialu_reg_mem);

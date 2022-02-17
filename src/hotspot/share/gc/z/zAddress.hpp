@@ -202,6 +202,7 @@ extern uintptr_t  ZPointerRemappedOldMask;
 // Good/bad masks
 extern uintptr_t  ZPointerLoadGoodMask;
 extern uintptr_t  ZPointerLoadBadMask;
+extern uintptr_t  ZPointerLoadBadOrNullMask;
 
 extern uintptr_t  ZPointerMarkGoodMask;
 extern uintptr_t  ZPointerMarkBadMask;
