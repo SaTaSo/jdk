@@ -30,19 +30,19 @@
 static volatile uintptr_t g_fast_loads = 0;
 static volatile uintptr_t g_null_check_loads = 0;
 
-static void barrier_profile() {
-  Thread* thread = Thread::current();
-  if (thread->_fast_loads > 1000000L) {
-    uintptr_t fast_loads = Atomic::add(&g_fast_loads, thread->_fast_loads);
-    uintptr_t null_check_loads = Atomic::add(&g_null_check_loads, thread->_null_check_loads);
-    log_info(gc)("LB: %ld, NCLB: %ld, %f", fast_loads, null_check_loads, double(null_check_loads) / double(fast_loads) * 100.0);
-    thread->_fast_loads = 0;
-    thread->_null_check_loads = 0;
-  }
-}
+//static void barrier_profile() {
+//  Thread* thread = Thread::current();
+//  if (thread->_fast_loads > 1000000L) {
+//    uintptr_t fast_loads = Atomic::add(&g_fast_loads, thread->_fast_loads);
+//    uintptr_t null_check_loads = Atomic::add(&g_null_check_loads, thread->_null_check_loads);
+//    log_info(gc)("LB: %ld, NCLB: %ld, %f", fast_loads, null_check_loads, double(null_check_loads) / double(fast_loads) * 100.0);
+//    thread->_fast_loads = 0;
+//    thread->_null_check_loads = 0;
+//  }
+//}
 
 JRT_LEAF(oopDesc*, ZBarrierSetRuntime::load_barrier_on_oop_field_preloaded(oopDesc* o, oop* p))
-//barrier_profile();
+  //barrier_profile();
   return to_oop(ZBarrier::load_barrier_on_oop_field_preloaded((zpointer*)p, to_zpointer(o)));
 JRT_END
 
