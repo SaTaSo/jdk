@@ -814,7 +814,7 @@ G1PreConcurrentStartTask::G1PreConcurrentStartTask(GCCause::Cause cause, G1Concu
 void G1ConcurrentMark::pre_concurrent_start(GCCause::Cause cause) {
   assert_at_safepoint_on_vm_thread();
 
-  CodeCache::increment_marking_cycle();
+  CodeCache::start_marking_cycle();
 
   G1PreConcurrentStartTask cl(cause, this);
   G1CollectedHeap::heap()->run_batch_task(&cl);
@@ -1307,7 +1307,7 @@ void G1ConcurrentMark::remark() {
   _remark_times.add((now - start) * 1000.0);
 
   policy->record_concurrent_mark_remark_end();
-  CodeCache::increment_marking_cycle();
+  CodeCache::finish_marking_cycle();
 }
 
 class G1ReclaimEmptyRegionsTask : public WorkerTask {
@@ -2024,6 +2024,8 @@ void G1ConcurrentMark::concurrent_cycle_abort() {
   if (!cm_thread()->in_progress() && !_g1h->concurrent_mark_is_terminating()) {
     return;
   }
+
+  CodeCache::finish_marking_cycle();
 
   // Clear all marks in the next bitmap for this full gc as it has been used by the
   // marking that is interrupted by this full gc.

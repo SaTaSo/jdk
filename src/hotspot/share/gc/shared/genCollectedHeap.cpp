@@ -1170,7 +1170,7 @@ void GenCollectedHeap::gc_prologue(bool full) {
   generation_iterate(&blk, false);  // not old-to-young.
 
   if (full) {
-    CodeCache::increment_marking_cycle();
+    CodeCache::start_marking_cycle();
   }
 };
 
@@ -1192,7 +1192,7 @@ void GenCollectedHeap::gc_epilogue(bool full) {
 #endif // COMPILER2_OR_JVMCI
 
   if (full) {
-    CodeCache::increment_marking_cycle();
+    CodeCache::finish_marking_cycle();
   }
 
   resize_all_tlabs();
