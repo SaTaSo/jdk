@@ -74,7 +74,24 @@ oop ZObjArrayAllocator::initialize(HeapWord* mem) const {
   // over such objects.
   ZThreadLocalData::set_invisible_root(_thread, (zaddress_unsafe*)&mem);
 
+  uint32_t old_seqnum_before = ZGeneration::old()->seqnum();
+  uint32_t young_seqnum_before = ZGeneration::young()->seqnum();
+  uintptr_t color_before = ZPointerStoreGoodMask;
+
+  bool seen_gc_safepoint = false;
+  bool first_iteration = true;
+
   for (size_t processed = 0; processed < payload_size; processed += segment_max) {
+    // Deal with safepoints
+    if (!first_iteration &&
+        !seen_gc_safepoint &&
+        (old_seqnum_before != ZGeneration::old()->seqnum() ||
+         young_seqnum_before != ZGeneration::young()->seqnum() ||
+         color_before != ZPointerStoreGoodMask)) {
+      processed = 0;
+      seen_gc_safepoint = true;
+    }
+    first_iteration = false;
     // Clear segment
     uintptr_t* const start = (uintptr_t*)(mem + header + processed);
     const size_t remaining = payload_size - processed;
@@ -87,7 +104,13 @@ oop ZObjArrayAllocator::initialize(HeapWord* mem) const {
     // of how many GC flips later it will arrive. That's why we OR in 11
     // (ZPointerRememberedMask) in the remembered bits, similar to how
     // forgotten old oops also have 11, for the very same reason.
-    const uintptr_t fill_value = is_reference_type(element_type) ? (ZPointerStoreGoodMask | ZPointerRememberedMask) : 0;
+    // However, we opportunistically try to color without the 11 remembered
+    // bits, hoping to not get interrupted in the middle of a GC safepoint.
+    // Most of the time, we manage to do that, and can the avoid having GC
+    // barriers trigger slow paths for this.
+    const uintptr_t colored_null = seen_gc_safepoint ? (ZPointerStoreGoodMask | ZPointerRememberedMask)
+                                                     : ZPointerStoreGoodMask;
+    const uintptr_t fill_value = is_reference_type(element_type) ? colored_null : 0;
     ZUtils::fill(start, segment, fill_value);
 
     // Safepoint
