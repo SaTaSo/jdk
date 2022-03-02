@@ -339,7 +339,6 @@ public:
   inline intptr_t* derelativize(int offset) const;
   inline void get_oopmap() const;
   inline void get_oopmap(address pc, int oopmap_slot) const;
-  static inline int get_initial_sp(stackChunkOop chunk, bool gc);
 
   template <typename RegisterMapT> inline void update_reg_map_pd(RegisterMapT* map);
 
