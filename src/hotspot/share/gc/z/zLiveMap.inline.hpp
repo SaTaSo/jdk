@@ -146,7 +146,7 @@ inline void ZLiveMap::iterate_segment(ObjectClosure* cl, BitMap::idx_t segment, 
 
     // Get the size of the object before calling the closure, which
     // might overwrite the object in case we are relocating in-place.
-    const size_t size = ZUtils::object_size(addr);
+    const size_t size = ZUtils::object_compact_size(addr);
 
     // Apply closure
     cl->do_object(ZOop::from_address(addr));

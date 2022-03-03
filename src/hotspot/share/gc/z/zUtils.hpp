@@ -37,10 +37,6 @@ public:
   static size_t words_to_bytes(size_t size_in_words);
 
   // Object
-  static size_t object_size(uintptr_t addr);
-  static void object_copy_disjoint(uintptr_t from, uintptr_t to, size_t size);
-  static void object_copy_conjoint(uintptr_t from, uintptr_t to, size_t size);
-
   static size_t object_compact_size(uintptr_t addr);
   static void object_copy_disjoint_compact(uintptr_t from, uintptr_t to, size_t size);
   static void object_copy_conjoint_compact(uintptr_t from, uintptr_t to, size_t size);

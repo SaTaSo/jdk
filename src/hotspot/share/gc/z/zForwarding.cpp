@@ -199,7 +199,7 @@ void ZForwarding::verify() const {
     }
 
     const uintptr_t to_addr = ZAddress::good(entry.to_offset());
-    const size_t size = ZUtils::object_size(to_addr);
+    const size_t size = ZUtils::object_compact_size(to_addr);
     const size_t aligned_size = align_up(size, _page->object_alignment());
     live_bytes += aligned_size;
     live_objects++;
