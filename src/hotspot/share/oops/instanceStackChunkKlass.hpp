@@ -114,7 +114,7 @@ private:
   template <chunk_frames frames> friend class StackChunkFrameStream;
   friend class FixChunkIterateStackClosure;
   friend class MarkMethodsStackClosure;
-  template <gc_type gc, typename OopClosureType> friend class OopOopIterateStackClosure;
+  template <gc_type gc> friend class OopOopIterateStackClosure;
   template <barrier_type barrier> friend class DoBarriersStackClosure;
 
 public:
@@ -142,14 +142,15 @@ public:
   static inline BitMap::idx_t bit_offset(size_t stack_size_in_words);
 
   // Returns the size of the instance including the stack data.
+  size_t uncompressed_oop_size(oop obj) const;
   virtual size_t oop_size(oop obj) const override;
   virtual size_t compact_oop_size(oop obj) const override;
 
-  virtual size_t copy_disjoint(oop obj, HeapWord* to, size_t word_size) override { return copy<copy_type::DISJOINT> (obj, to, word_size); }
-  virtual size_t copy_conjoint(oop obj, HeapWord* to, size_t word_size) override { return copy<copy_type::CONJOINT>(obj, to, word_size); }
+  void copy_disjoint(oop obj, HeapWord* to, size_t word_size) { copy<copy_type::DISJOINT> (obj, to, word_size); }
+  void copy_conjoint(oop obj, HeapWord* to, size_t word_size) { copy<copy_type::CONJOINT>(obj, to, word_size); }
 
-  virtual size_t copy_disjoint_compact(oop obj, HeapWord* to) override { return copy_compact<copy_type::DISJOINT> (obj, to); }
-  virtual size_t copy_conjoint_compact(oop obj, HeapWord* to) override { return copy_compact<copy_type::CONJOINT>(obj, to); }
+  void copy_disjoint_compact(oop obj, HeapWord* to) { copy_compact<copy_type::DISJOINT> (obj, to); }
+  void copy_conjoint_compact(oop obj, HeapWord* to) { copy_compact<copy_type::CONJOINT>(obj, to); }
 
   static void serialize_offsets(class SerializeClosure* f) NOT_CDS_RETURN;
 
@@ -198,6 +199,8 @@ public:
   inline void oop_oop_iterate_bounded(oop obj, OopClosureType* closure, MemRegion mr);
 
 public:
+  static void relativize_chunk(stackChunkOop chunk);
+
   template <typename OopT, gc_type>
   static inline bool should_fix(const stackChunkOop chunk);
 

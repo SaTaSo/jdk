@@ -34,6 +34,7 @@
 #include "gc/shared/adaptiveSizePolicy.hpp"
 #include "gc/shared/cardTableBarrierSet.hpp"
 #include "gc/shared/cardTableRS.hpp"
+#include "gc/shared/continuationGCSupport.inline.hpp"
 #include "gc/shared/collectedHeap.inline.hpp"
 #include "gc/shared/collectorCounters.hpp"
 #include "gc/shared/gcId.hpp"
@@ -930,8 +931,9 @@ void GenCollectedHeap::oop_iterate(OopIterateClosure* cl) {
 }
 
 void GenCollectedHeap::object_iterate(ObjectClosure* cl) {
-  _young_gen->object_iterate(cl);
-  _old_gen->object_iterate(cl);
+  HeapIterateObjectClosure icl(cl);
+  _young_gen->object_iterate(&icl);
+  _old_gen->object_iterate(&icl);
 }
 
 Space* GenCollectedHeap::space_containing(const void* addr) const {
@@ -1233,13 +1235,13 @@ oop GenCollectedHeap::handle_failed_promotion(Generation* old_gen,
                                               oop obj,
                                               size_t obj_size) {
   guarantee(old_gen == _old_gen, "We only get here with an old generation");
-  assert(obj_size == obj->compact_size(), "bad obj_size passed in");
+  assert(obj_size == obj->size(), "bad obj_size passed in");
   HeapWord* result = NULL;
 
   result = old_gen->expand_and_allocate(obj_size, false);
 
   if (result != NULL) {
-    obj->copy_disjoint_compact(result, obj_size);
+    obj->copy_disjoint(result, obj_size);
   }
   return cast_to_oop(result);
 }

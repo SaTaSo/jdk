@@ -35,6 +35,7 @@
 #include "gc/g1/g1FullGCOopClosures.inline.hpp"
 #include "gc/g1/g1RegionMarkStatsCache.hpp"
 #include "gc/g1/g1StringDedup.hpp"
+#include "gc/shared/continuationGCSupport.inline.hpp"
 #include "gc/shared/preservedMarks.inline.hpp"
 #include "gc/shared/stringdedup/stringDedup.hpp"
 #include "oops/access.inline.hpp"
@@ -66,6 +67,8 @@ inline bool G1FullGCMarker::mark_object(oop obj) {
       G1StringDedup::is_candidate_from_mark(obj)) {
     _string_dedup_requests.add(obj);
   }
+
+  ContinuationGCSupport::shrink_stack_chunk(obj);
 
   // Collect live words.
   _mark_stats_cache.add_live_words(obj);
@@ -131,6 +134,7 @@ void G1FullGCMarker::follow_array_chunk(objArrayOop array, int index) {
 
 inline void G1FullGCMarker::follow_object(oop obj) {
   assert(_bitmap->is_marked(obj), "should be marked");
+
   if (obj->is_objArray()) {
     // Handle object arrays explicitly to allow them to
     // be split into chunks if needed.

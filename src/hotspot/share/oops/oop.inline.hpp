@@ -33,6 +33,7 @@
 #include "oops/arrayOop.hpp"
 #include "oops/compressedOops.inline.hpp"
 #include "oops/instanceKlass.hpp"
+#include "oops/instanceStackChunkKlass.hpp"
 #include "oops/markWord.hpp"
 #include "oops/oopsHierarchy.hpp"
 #include "runtime/atomic.hpp"
@@ -197,31 +198,6 @@ size_t oopDesc::size_given_klass(Klass* klass)  {
   assert(s > 0, "Oop size must be greater than zero, not " SIZE_FORMAT, s);
   assert(is_object_aligned(s), "Oop size is not properly aligned: " SIZE_FORMAT, s);
   return s;
-}
-
-size_t oopDesc::compact_size()  {
-  return compact_size_given_klass(klass());
-}
-
-size_t oopDesc::compact_size(size_t size)  {
-  return compact_size_given_klass(klass(), size);
-}
-
-size_t oopDesc::compact_size_given_klass(Klass* klass) {
-  int lh = klass->layout_helper();
-  if (lh > Klass::_lh_neutral_value && Klass::layout_helper_needs_slow_path(lh) && TrimContinuationChunksInGC) {
-    return klass->compact_oop_size(this);
-  }
-  return size_given_klass(klass);
-}
-
-size_t oopDesc::compact_size_given_klass(Klass* klass, size_t size) {
-  int lh = klass->layout_helper();
-  if (lh > Klass::_lh_neutral_value && Klass::layout_helper_needs_slow_path(lh) && TrimContinuationChunksInGC) {
-    return klass->compact_oop_size(this);
-  }
-  assert (size == size_given_klass(klass), "");
-  return size;
 }
 
 bool oopDesc::is_instance()  const { return klass()->is_instance_klass();  }
@@ -408,68 +384,36 @@ bool oopDesc::mark_must_be_preserved(markWord m) const {
   return m.must_be_preserved(this);
 }
 
-size_t oopDesc::copy_disjoint(HeapWord* to) {
-  return copy_disjoint(to, size());
-}
-
-size_t oopDesc::copy_conjoint(HeapWord* to) {
-  return copy_conjoint(to, size());
-}
-
-size_t oopDesc::copy_disjoint_compact(HeapWord* to) {
-  return copy_disjoint_compact(to, compact_size());
-}
-
-size_t oopDesc::copy_conjoint_compact(HeapWord* to) {
-  return copy_conjoint_compact(to, compact_size());
-}
-
 size_t oopDesc::copy_disjoint(HeapWord* to, size_t word_size) {
-  // if (is_stackChunk()) tty->print_cr(">>> copy_disjoint from: %p - %p to: %p - %p (word_size: %zu)", cast_from_oop<HeapWord*>(this), cast_from_oop<HeapWord*>(this) + word_size, to, to + word_size, word_size);
   assert(word_size == (size_t)size() || size_might_change(), "");
-  int lh = klass()->layout_helper();
-  if (lh > Klass::_lh_neutral_value && Klass::layout_helper_needs_slow_path(lh)) {
-    size_t res = klass()->copy_disjoint(this, to, word_size);
-    assert (word_size == res, "");
-    return res;
-  }
-  Copy::aligned_disjoint_words(cast_from_oop<HeapWord*>(this), to, word_size);
-  return word_size;
-}
 
-size_t oopDesc::copy_disjoint_compact(HeapWord* to, size_t word_size) {
-  assert(word_size == (size_t)compact_size() || size_might_change(), "");
-  int lh = klass()->layout_helper();
-  if (lh > Klass::_lh_neutral_value && Klass::layout_helper_needs_slow_path(lh) && TrimContinuationChunksInGC) {
-    size_t res = klass()->copy_disjoint_compact(this, to);
-    assert (word_size == res, "");
-    return res;
+  if (!is_stackChunk()) {
+    Copy::aligned_disjoint_words(cast_from_oop<HeapWord*>(this), to, word_size);
+  } else {
+    if (TrimContinuationChunksInGC) {
+      static_cast<InstanceStackChunkKlass*>(klass())->copy_disjoint_compact(this, to);
+    } else {
+      static_cast<InstanceStackChunkKlass*>(klass())->copy_disjoint(this, to, word_size);
+    }
   }
-  return copy_disjoint(to, word_size);
+
+  return word_size;
 }
 
 size_t oopDesc::copy_conjoint(HeapWord* to, size_t word_size) {
-  // if (is_stackChunk()) tty->print_cr(">>> copy_conjoint from: %p - %p to: %p - %p (word_size: %zu)", cast_from_oop<HeapWord*>(this), cast_from_oop<HeapWord*>(this) + word_size, to, to + word_size, word_size);
   assert(word_size == (size_t)size() || size_might_change(), "");
-  int lh = klass()->layout_helper();
-  if (lh > Klass::_lh_neutral_value && Klass::layout_helper_needs_slow_path(lh)) {
-    size_t res = klass()->copy_conjoint(this, to, word_size);
-    assert (word_size == res, "");
-    return res;
-  }
-  Copy::aligned_conjoint_words(cast_from_oop<HeapWord*>(this), to, word_size);
-  return word_size;
-}
 
-size_t oopDesc::copy_conjoint_compact(HeapWord* to, size_t word_size) {
-  assert(word_size == (size_t)compact_size() || size_might_change(), "");
-  int lh = klass()->layout_helper();
-  if (lh > Klass::_lh_neutral_value && Klass::layout_helper_needs_slow_path(lh) && TrimContinuationChunksInGC) {
-    size_t res = klass()->copy_conjoint_compact(this, to);
-    assert (word_size == res, "");
-    return res;
+  if (!is_stackChunk()) {
+    Copy::aligned_conjoint_words(cast_from_oop<HeapWord*>(this), to, word_size);
+  } else {
+    if (TrimContinuationChunksInGC) {
+      static_cast<InstanceStackChunkKlass*>(klass())->copy_conjoint_compact(this, to);
+    } else {
+      static_cast<InstanceStackChunkKlass*>(klass())->copy_conjoint(this, to, word_size);
+    }
   }
-  return copy_conjoint(to, word_size);
+
+  return word_size;
 }
 
 #endif // SHARE_OOPS_OOP_INLINE_HPP

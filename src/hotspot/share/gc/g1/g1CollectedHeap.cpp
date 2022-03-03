@@ -76,6 +76,7 @@
 #include "gc/g1/heapRegionRemSet.inline.hpp"
 #include "gc/g1/heapRegionSet.inline.hpp"
 #include "gc/shared/concurrentGCBreakpoints.hpp"
+#include "gc/shared/continuationGCSupport.inline.hpp"
 #include "gc/shared/gcBehaviours.hpp"
 #include "gc/shared/gcHeapSummary.hpp"
 #include "gc/shared/gcId.hpp"
@@ -2250,7 +2251,8 @@ public:
 };
 
 void G1CollectedHeap::object_iterate(ObjectClosure* cl) {
-  IterateObjectClosureRegionClosure blk(cl);
+  HeapIterateObjectClosure icl(cl);
+  IterateObjectClosureRegionClosure blk(&icl);
   heap_region_iterate(&blk);
 }
 
@@ -2274,7 +2276,8 @@ ParallelObjectIteratorImpl* G1CollectedHeap::parallel_object_iterator(uint threa
 }
 
 void G1CollectedHeap::object_iterate_parallel(ObjectClosure* cl, uint worker_id, HeapRegionClaimer* claimer) {
-  IterateObjectClosureRegionClosure blk(cl);
+  HeapIterateObjectClosure icl(cl);
+  IterateObjectClosureRegionClosure blk(&icl);
   heap_region_par_iterate_from_worker_offset(&blk, claimer, worker_id);
 }
 

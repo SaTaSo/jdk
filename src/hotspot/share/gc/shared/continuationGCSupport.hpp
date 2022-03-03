@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -19,27 +19,28 @@
  * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
  * or visit www.oracle.com if you need additional information or have any
  * questions.
+ *
  */
 
-#ifndef SHARE_GC_Z_ZUTILS_HPP
-#define SHARE_GC_Z_ZUTILS_HPP
+#ifndef SHARE_GC_SHARED_CONTINUATIONGCSUPPORT_HPP
+#define SHARE_GC_SHARED_CONTINUATIONGCSUPPORT_HPP
 
-#include "memory/allStatic.hpp"
-#include "utilities/globalDefinitions.hpp"
+#include "oops/oopsHierarchy.hpp"
+#include "memory/allocation.hpp"
 
-class ZUtils : public AllStatic {
+class ContinuationGCSupport : public AllStatic {
 public:
-  // Allocation
-  static uintptr_t alloc_aligned(size_t alignment, size_t size);
-
-  // Size conversion
-  static size_t bytes_to_words(size_t size_in_words);
-  static size_t words_to_bytes(size_t size_in_words);
-
-  // Object
-  static size_t object_size(uintptr_t addr);
-  static void object_copy_disjoint(uintptr_t from, uintptr_t to, size_t size);
-  static void object_copy_conjoint(uintptr_t from, uintptr_t to, size_t size);
+  static void relativize_chunk(oop obj);
+  static void shrink_stack_chunk(oop obj);
 };
 
-#endif // SHARE_GC_Z_ZUTILS_HPP
+class HeapIterateObjectClosure : public ObjectClosure {
+private:
+  ObjectClosure* _cl;
+
+public:
+  HeapIterateObjectClosure(ObjectClosure* cl) : _cl(cl) { }
+  virtual void do_object(oop obj);
+};
+
+#endif // SHARE_GC_SHARED_CONTINUATIONGCSUPPORT_HPP

@@ -34,6 +34,7 @@
 #include "gc/parallel/psPromotionManager.hpp"
 #include "gc/parallel/psScavenge.hpp"
 #include "gc/parallel/psVMOperations.hpp"
+#include "gc/shared/continuationGCSupport.inline.hpp"
 #include "gc/shared/gcHeapSummary.hpp"
 #include "gc/shared/gcLocker.hpp"
 #include "gc/shared/gcWhen.hpp"
@@ -554,8 +555,9 @@ void ParallelScavengeHeap::collect(GCCause::Cause cause) {
 }
 
 void ParallelScavengeHeap::object_iterate(ObjectClosure* cl) {
-  young_gen()->object_iterate(cl);
-  old_gen()->object_iterate(cl);
+  HeapIterateObjectClosure icl(cl);
+  young_gen()->object_iterate(&icl);
+  old_gen()->object_iterate(&icl);
 }
 
 // The HeapBlockClaimer is used during parallel iteration over the heap,
@@ -615,7 +617,8 @@ public:
       _claimer() {}
 
   virtual void object_iterate(ObjectClosure* cl, uint worker_id) {
-    _heap->object_iterate_parallel(cl, &_claimer);
+    HeapIterateObjectClosure icl(cl);
+    _heap->object_iterate_parallel(&icl, &_claimer);
   }
 };
 
