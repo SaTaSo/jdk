@@ -114,7 +114,7 @@ private:
   template <chunk_frames frames> friend class StackChunkFrameStream;
   friend class FixChunkIterateStackClosure;
   friend class MarkMethodsStackClosure;
-  template <gc_type gc, typename OopClosureType> friend class OopOopIterateStackClosure;
+  template <gc_type gc> friend class OopOopIterateStackClosure;
   template <barrier_type barrier> friend class DoBarriersStackClosure;
 
 public:
@@ -198,6 +198,10 @@ public:
   inline void oop_oop_iterate_bounded(oop obj, OopClosureType* closure, MemRegion mr);
 
 public:
+  virtual bool is_instanceStackChunk_klass() const { return true; }
+
+  static void relativize_chunk(stackChunkOop chunk);
+
   template <typename OopT, gc_type>
   static inline bool should_fix(const stackChunkOop chunk);
 

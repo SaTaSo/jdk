@@ -52,6 +52,7 @@ private:
 
   OopAndMarkWordStack _stack;
 
+  inline void relativize_chunk(oop obj) const;
   inline bool should_preserve_mark(oop obj, markWord m) const;
 
 public:

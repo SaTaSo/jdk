@@ -339,18 +339,16 @@ public:
   }
 };
 
-template <gc_type gc, typename OopClosureType>
+template <gc_type gc>
 class OopOopIterateStackClosure {
   stackChunkOop _chunk;
-  const bool _do_destructive_processing;
-  OopClosureType * const _closure;
+  OopIterateClosure* const _closure;
   MemRegion _bound;
 
 public:
   int _num_frames, _num_oops;
-  OopOopIterateStackClosure(stackChunkOop chunk, bool do_destructive_processing, OopClosureType* closure, MemRegion mr)
+  OopOopIterateStackClosure(stackChunkOop chunk, OopIterateClosure* closure, MemRegion mr)
     : _chunk(chunk),
-      _do_destructive_processing(do_destructive_processing),
       _closure(closure),
       _bound(mr),
       _num_frames(0),
@@ -361,7 +359,7 @@ public:
     _num_frames++;
     assert (_closure != nullptr, "");
 
-    if (Devirtualizer::do_metadata(_closure)) {
+    if (_closure->do_metadata()) {
       if (f.is_interpreted()) {
         Method* im = f.to_frame().interpreter_frame_method();
         _closure->do_method(im);
@@ -373,18 +371,7 @@ public:
       }
     }
 
-    if (_do_destructive_processing) { // evacuation always takes place at a safepoint; for concurrent iterations, we skip derived pointers, which is ok b/c coarse card marking is used for chunks
-      assert (!f.is_compiled() || f.oopmap()->has_derived_oops() == f.oopmap()->has_any(OopMapValue::derived_oop_value), "");
-      if (f.is_compiled() && f.oopmap()->has_derived_oops()) {
-        if (gc == gc_type::CONCURRENT) {
-          _chunk->set_gc_mode(true);
-          OrderAccess::storestore();
-        }
-        InstanceStackChunkKlass::relativize_derived_pointers<gc>(f, map);
-      }
-    }
-
-    StackChunkOopIterateFilterClosure<OopClosureType> cl(_closure, _chunk, _bound);
+    StackChunkOopIterateFilterClosure<OopIterateClosure> cl(_closure, _chunk, _bound);
     f.iterate_oops(&cl, map);
     _num_oops += cl._num_oops;
 
@@ -396,20 +383,7 @@ template <gc_type gc>
 void InstanceStackChunkKlass::oop_oop_iterate_stack_slow(stackChunkOop chunk, OopIterateClosure* closure, MemRegion mr) {
   assert (Continuation::debug_is_stack_chunk(chunk), "");
 
-  bool do_destructive_processing; // should really be `= closure.is_destructive()`, if we had such a thing
-  if (gc == gc_type::CONCURRENT) {
-    do_destructive_processing = true;
-  } else {
-    if (SafepointSynchronize::is_at_safepoint()) {
-      do_destructive_processing = true;
-      chunk->set_gc_mode(true);
-    } else {
-      do_destructive_processing = false;
-    }
-    assert (!SafepointSynchronize::is_at_safepoint() || chunk->is_gc_mode(), "");
-  }
-
-  OopOopIterateStackClosure<gc, OopIterateClosure> frame_closure(chunk, do_destructive_processing, closure, mr);
+  OopOopIterateStackClosure<gc> frame_closure(chunk, closure, mr);
   chunk->iterate_stack(&frame_closure);
 
   assert (frame_closure._num_frames >= 0, "");
@@ -523,6 +497,33 @@ public:
 template <InstanceStackChunkKlass::barrier_type barrier>
 void InstanceStackChunkKlass::do_barriers(stackChunkOop chunk) {
   DoBarriersStackClosure<barrier> closure(chunk);
+  chunk->iterate_stack(&closure);
+}
+
+class RelativizeStackClosure {
+  const stackChunkOop _chunk;
+public:
+  RelativizeStackClosure(stackChunkOop chunk) : _chunk(chunk) {}
+
+  template <chunk_frames frame_kind, typename RegisterMapT>
+  bool do_frame(const StackChunkFrameStream<frame_kind>& f, const RegisterMapT* map) {
+    bool has_derived = f.is_compiled() && f.oopmap()->has_derived_oops();
+    if (has_derived) {
+      RelativizeDerivedPointers<gc_type::CONCURRENT> derived_closure;
+      f.iterate_derived_pointers(&derived_closure, map);
+    }
+    return true;
+  }
+};
+
+void InstanceStackChunkKlass::relativize_chunk(stackChunkOop chunk) {
+  if (chunk->is_gc_mode()) {
+    // Already relativized
+    return;
+  }
+  chunk->set_gc_mode(true);
+  OrderAccess::storestore();
+  RelativizeStackClosure closure(chunk);
   chunk->iterate_stack(&closure);
 }
 

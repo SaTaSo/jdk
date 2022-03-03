@@ -628,6 +628,8 @@ protected:
                                                     is_typeArray_klass_slow()); }
   #undef assert_same_query
 
+  virtual bool is_instanceStackChunk_klass()  const { return false; }
+
   // Access flags
   AccessFlags access_flags() const         { return _access_flags;  }
   void set_access_flags(AccessFlags flags) { _access_flags = flags; }
