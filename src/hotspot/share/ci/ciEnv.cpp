@@ -1158,12 +1158,6 @@ void ciEnv::register_method(ciMethod* target,
       nm->set_rtm_state(rtm_state);
 #endif
 
-      // Record successful registration.
-      // (Put nm into the task handle *before* publishing to the Java heap.)
-      if (task() != NULL) {
-        task()->set_code(nm);
-      }
-
       if (entry_bci == InvocationEntryBci) {
         if (TieredCompilation) {
           // If there is an old version we're done with it

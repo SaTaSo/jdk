@@ -23,12 +23,14 @@
  */
 
 #include "precompiled.hpp"
+#include "ci/ciEnv.hpp"
 #include "code/codeBehaviours.hpp"
 #include "code/codeCache.hpp"
 #include "code/compiledIC.hpp"
 #include "code/icBuffer.hpp"
 #include "code/nmethod.hpp"
 #include "code/vtableStubs.hpp"
+#include "compiler/compileTask.hpp"
 #include "interpreter/interpreter.hpp"
 #include "interpreter/linkResolver.hpp"
 #include "memory/metadataFactory.hpp"
@@ -63,6 +65,16 @@ CompiledICLocker::~CompiledICLocker() {
 }
 
 bool CompiledICLocker::is_safe(CompiledMethod* method) {
+  nmethod* nm = method->as_nmethod_or_null();
+  if (nm != NULL && nm->is_not_installed()) {
+    Thread* current = Thread::current();
+    if (current->is_Compiler_thread() && ciEnv::current()->task()->code() == nm) {
+      // If we are the compiler that is compiling this compiled method, and it
+      // has not yet been published, thenit is safe to use the inline cache
+      // without further locking.
+      return true;
+    }
+  }
   return CompiledICProtectionBehaviour::current()->is_safe(method);
 }
 
@@ -70,7 +82,7 @@ bool CompiledICLocker::is_safe(address code) {
   CodeBlob* cb = CodeCache::find_blob_unsafe(code);
   assert(cb != NULL && cb->is_compiled(), "must be compiled");
   CompiledMethod* cm = cb->as_compiled_method();
-  return CompiledICProtectionBehaviour::current()->is_safe(cm);
+  return is_safe(cm);
 }
 
 //-----------------------------------------------------------------------------

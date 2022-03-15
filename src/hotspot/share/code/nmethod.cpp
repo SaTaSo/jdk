@@ -673,6 +673,14 @@ nmethod::nmethod(
     debug_only(Universe::heap()->verify_nmethod(this));
 
     CodeCache::commit(this);
+
+    // Record successful registration.
+    // (Put nm into the task handle *before* publishing to the Java heap.)
+    if (Thread::current()->is_Compiler_thread() && ciEnv::current()->task() != NULL) {
+      ciEnv::current()->task()->set_code(this);
+    }
+
+    finalize_relocations();
   }
 
   if (PrintNativeNMethods || PrintDebugInfo || PrintRelocations || PrintDependencies) {
@@ -850,6 +858,12 @@ nmethod::nmethod(
     debug_only(Universe::heap()->verify_nmethod(this));
 
     CodeCache::commit(this);
+
+    // Record successful registration.
+    // (Put nm into the task handle *before* publishing to the Java heap.)
+    ciEnv::current()->task()->set_code(this);
+
+    finalize_relocations();
 
     // Copy contents of ExceptionHandlerTable to nmethod
     handler_table->copy_to(this);
@@ -1097,6 +1111,32 @@ void nmethod::fix_oop_relocations(address begin, address end, bool initialize_im
   }
 }
 
+void nmethod::finalize_relocations() {
+  NoSafepointVerifier nsv;
+
+  // Make sure that post call nops fill in nmethod offsets eagerly so
+  // we don't have to race with deoptimization
+  RelocIterator iter(this);
+  while (iter.next()) {
+    switch (iter.type()) {
+      case relocInfo::virtual_call_type:
+      case relocInfo::opt_virtual_call_type: {
+        CompiledIC *ic = CompiledIC_at(&iter);
+        address pc = ic->end_of_call();
+        CodeCache::find_blob_fast(pc);
+        break;
+      }
+      case relocInfo::static_call_type: {
+        CompiledStaticCall *csc = compiledStaticCall_at(iter.reloc());
+        address pc = csc->end_of_call();
+        CodeCache::find_blob_fast(pc);
+        break;
+      }
+      default:
+        break;
+    }
+  }
+}
 
 void nmethod::make_deoptimized() {
   assert (method() == NULL || can_be_deoptimized(), "");
