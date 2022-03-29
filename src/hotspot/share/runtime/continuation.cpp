@@ -1283,7 +1283,6 @@ bool Freeze<ConfigT>::freeze_fast(intptr_t* top_sp) {
   // writing into the chunk. This is so that an asynchronous stack walk (not at a safepoint) that suspends us here
   // will either see no continuation on the stack, or a consistent chunk.
   unwind_frames();
-  OrderAccess::storestore();
 
   NoSafepointVerifier nsv;
 
@@ -1311,7 +1310,6 @@ bool Freeze<ConfigT>::freeze_fast(intptr_t* top_sp) {
   *(address*)(chunk_bottom_sp - frame::sender_sp_ret_address_offset()) = chunk->pc();
 
   // We're always writing to a young chunk, so the GC can't see it until the next safepoint.
-  OrderAccess::storestore();
   chunk->set_sp(chunk_new_sp);
   assert(chunk->sp_address() == chunk_top, "");
   chunk->set_pc(*(address*)(cont_stack_top - frame::sender_sp_ret_address_offset()));
@@ -1587,7 +1585,6 @@ freeze_result FreezeBase::finalize_freeze(const frame& callee, frame& caller, in
   // writing into the chunk. This is so that an asynchronous stack walk (not at a safepoint) that suspends us here
   // will either see no continuation or a consistent chunk.
   unwind_frames();
-  OrderAccess::storestore();
 
   chunk->set_max_size(chunk->max_size() + _size - ContinuationHelper::frame_metadata);
 
@@ -1814,7 +1811,6 @@ NOINLINE void FreezeBase::finish_freeze(const frame& f, const frame& top) {
 
   set_top_frame_metadata_pd(top);
 
-  OrderAccess::storestore();
   chunk->set_sp(chunk->to_offset(top.sp()));
   chunk->set_pc(top.pc());
 
@@ -2594,7 +2590,6 @@ bool ThawBase::recurse_thaw_java_frame(frame& caller, int num_frames) {
 void ThawBase::finalize_thaw(frame& entry, int argsize) {
   stackChunkOop chunk = _cont.tail();
 
-  OrderAccess::storestore();
   if (!_stream.is_done()) {
     assert(_stream.sp() >= chunk->sp_address(), "");
     chunk->set_sp(chunk->to_offset(_stream.sp()));
