@@ -29,12 +29,23 @@
 #include "oops/oopsHierarchy.hpp"
 
 class ContinuationGCSupport : public AllStatic {
+private:
+  // Stack chunk bitmaps are useful when a stack chunk is iterated
+  // over repeatedly.
+  static bool _use_stack_chunk_bitmap;
+
 public:
   // Relativize the given oop if it is a stack chunk.
   static bool relativize_stack_chunk(oop obj);
   // Relativize and transform to use a bitmap for future oop iteration for the
   // given oop if it is a stack chunk.
   static void transform_stack_chunk(oop obj);
+
+  // Returns true iff a GC supports stack chunk bitmaps.
+  static bool use_stack_chunk_bitmap() { return _use_stack_chunk_bitmap; }
+  // Enabling stack chunk bitmap will give stack chunks some extra space for
+  // the bitmaps, so that transform_stack_chunk can be called.
+  static void enable_stack_chunk_bitmap() { _use_stack_chunk_bitmap = true; }
 };
 
 #endif // SHARE_GC_SHARED_CONTINUATIONGCSUPPORT_HPP

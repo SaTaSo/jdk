@@ -76,6 +76,7 @@
 #include "gc/g1/heapRegionRemSet.inline.hpp"
 #include "gc/g1/heapRegionSet.inline.hpp"
 #include "gc/shared/concurrentGCBreakpoints.hpp"
+#include "gc/shared/continuationGCSupport.hpp"
 #include "gc/shared/gcBehaviours.hpp"
 #include "gc/shared/gcHeapSummary.hpp"
 #include "gc/shared/gcId.hpp"
@@ -1751,6 +1752,8 @@ jint G1CollectedHeap::initialize() {
   _collection_set.initialize(max_reserved_regions());
 
   evac_failure_injector()->reset();
+
+  ContinuationGCSupport::enable_stack_chunk_bitmap();
 
   G1InitLogger::print();
 

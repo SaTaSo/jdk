@@ -22,38 +22,7 @@
  *
  */
 
-#ifndef SHARE_GC_SHARED_CONTINUATIONGCSUPPORT_INLINE_HPP
-#define SHARE_GC_SHARED_CONTINUATIONGCSUPPORT_INLINE_HPP
-
+#include "precompiled.hpp"
 #include "gc/shared/continuationGCSupport.hpp"
 
-#include "oops/instanceStackChunkKlass.hpp"
-#include "oops/oop.inline.hpp"
-#include "oops/stackChunkOop.inline.hpp"
-#include "utilities/debug.hpp"
-
-inline bool ContinuationGCSupport::relativize_stack_chunk(oop obj) {
-  if (!obj->is_stackChunk()) {
-    return false;
-  }
-
-  stackChunkOop chunk = stackChunkOopDesc::cast(obj);
-  if (!chunk->is_gc_mode()) {
-    chunk->relativize();
-  }
-
-  return true;
-}
-
-inline void ContinuationGCSupport::transform_stack_chunk(oop obj) {
-  if (!obj->is_stackChunk()) {
-    return;
-  }
-  assert(use_stack_chunk_bitmap(), "Can only transform stack chunks that use stack chunk bitmaps");
-  stackChunkOop chunk = stackChunkOopDesc::cast(obj);
-  if (!chunk->is_gc_mode()) {
-    chunk->transform();
-  }
-}
-
-#endif // SHARE_GC_SHARED_CONTINUATIONGCSUPPORT_INLINE_HPP
+bool ContinuationGCSupport::_use_stack_chunk_bitmap = false;

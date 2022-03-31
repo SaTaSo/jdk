@@ -135,6 +135,8 @@ jint GenCollectedHeap::initialize() {
   old_rs = old_rs.first_part(_old_gen_spec->max_size());
   _old_gen = _old_gen_spec->init(old_rs, rem_set());
 
+  ContinuationGCSupport::enable_stack_chunk_bitmap();
+
   GCInitLogger::print();
 
   return JNI_OK;

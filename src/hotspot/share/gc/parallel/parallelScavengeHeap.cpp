@@ -34,6 +34,7 @@
 #include "gc/parallel/psPromotionManager.hpp"
 #include "gc/parallel/psScavenge.hpp"
 #include "gc/parallel/psVMOperations.hpp"
+#include "gc/shared/continuationGCSupport.hpp"
 #include "gc/shared/gcHeapSummary.hpp"
 #include "gc/shared/gcLocker.hpp"
 #include "gc/shared/gcWhen.hpp"
@@ -126,6 +127,8 @@ jint ParallelScavengeHeap::initialize() {
   // initialize the policy counters - 2 collectors, 2 generations
   _gc_policy_counters =
     new PSGCAdaptivePolicyCounters("ParScav:MSC", 2, 2, _size_policy);
+
+  ContinuationGCSupport::enable_stack_chunk_bitmap();
 
   if (!PSParallelCompact::initialize()) {
     return JNI_ENOMEM;

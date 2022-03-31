@@ -33,6 +33,7 @@
 #include "compiler/oopMap.hpp"
 #include "gc/shared/barrierSetNMethod.hpp"
 #include "gc/shared/collectedHeap.hpp"
+#include "gc/shared/continuationGCSupport.hpp"
 #include "gc/shared/gc_globals.hpp"
 #include "logging/log.hpp"
 #include "memory/iterator.inline.hpp"
@@ -58,6 +59,10 @@ inline size_t InstanceStackChunkKlass::instance_size(size_t stack_size_in_words)
 }
 
 inline size_t InstanceStackChunkKlass::bitmap_size(size_t stack_size_in_words) {
+  if (!ContinuationGCSupport::use_stack_chunk_bitmap()) {
+    return 0;
+  }
+
   // One bit per potential narrowOop* or oop* address
   size_t size_in_bits = stack_size_in_words << (UseCompressedOops ? 1 : 0);
 
