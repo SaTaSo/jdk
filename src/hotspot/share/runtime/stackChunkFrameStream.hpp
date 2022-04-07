@@ -87,9 +87,9 @@ public:
   inline int num_oops() const;
 
   inline void initialize_register_map(RegisterMap* map);
-  template <typename RegisterMapT> inline void next(RegisterMapT* map);
+  inline void next(RegisterMap* map);
 
-  template <typename RegisterMapT> inline void update_reg_map(RegisterMapT* map);
+  inline void update_reg_map(RegisterMap* map);
 
   void handle_deopted() const;
 
@@ -100,7 +100,7 @@ public:
 #ifdef ASSERT
   bool is_in_frame(void* p) const;
   bool is_deoptimized() const;
-  template <typename RegisterMapT> bool is_in_oops(void* p, const RegisterMapT* map) const;
+  bool is_in_oops(void* p, const RegisterMap* map) const;
 #endif
 
   void print_on(outputStream* st) const PRODUCT_RETURN;
@@ -120,18 +120,17 @@ public:
   inline void get_oopmap() const;
   inline void get_oopmap(address pc, int oopmap_slot) const;
 
-  template <typename RegisterMapT> inline void update_reg_map_pd(RegisterMapT* map);
+  inline void update_reg_map_pd(RegisterMap* map);
 
-  template <typename RegisterMapT>
-  inline void* reg_to_loc(VMReg reg, const RegisterMapT* map) const;
+  inline void* reg_to_loc(VMReg reg, const RegisterMap* map) const;
 
   void assert_is_interpreted_and_frame_type_mixed() const NOT_DEBUG_RETURN;
 
 public:
-  template <class OopClosureType, class RegisterMapT>
-  inline void iterate_oops(OopClosureType* closure, const RegisterMapT* map) const;
-  template <class DerivedOopClosureType, class RegisterMapT>
-  inline void iterate_derived_pointers(DerivedOopClosureType* closure, const RegisterMapT* map) const;
+  template <class OopClosureType>
+  inline void iterate_oops(OopClosureType* closure, const RegisterMap* map) const;
+  template <class DerivedOopClosureType>
+  inline void iterate_derived_pointers(DerivedOopClosureType* closure, const RegisterMap* map) const;
 };
 
 #endif // SHARE_RUNTIME_STACKCHUNKFRAMESTREAM_HPP

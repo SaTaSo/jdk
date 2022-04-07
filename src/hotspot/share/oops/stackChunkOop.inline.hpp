@@ -34,7 +34,6 @@
 #include "runtime/frame.inline.hpp"
 #include "runtime/handles.inline.hpp"
 #include "runtime/registerMap.hpp"
-#include "runtime/smallRegisterMap.inline.hpp"
 #include "utilities/macros.hpp"
 #include CPU_HEADER_INLINE(stackChunkOop)
 
@@ -150,8 +149,8 @@ inline bool stackChunkOopDesc::requires_barriers() {
   return Universe::heap()->requires_barriers(this);
 }
 
-template <stackChunkOopDesc::BarrierType barrier, ChunkFrames frame_kind, typename RegisterMapT>
-void stackChunkOopDesc::do_barriers(const StackChunkFrameStream<frame_kind>& f, const RegisterMapT* map) {
+template <stackChunkOopDesc::BarrierType barrier, ChunkFrames frame_kind>
+void stackChunkOopDesc::do_barriers(const StackChunkFrameStream<frame_kind>& f, const RegisterMap* map) {
   if (frame_kind == ChunkFrames::Mixed) {
     // we could freeze deopted frames in slow mode.
     f.handle_deopted();
@@ -167,8 +166,11 @@ inline void stackChunkOopDesc::iterate_stack(StackChunkFrameClosureType* closure
 
 template <ChunkFrames frame_kind, class StackChunkFrameClosureType>
 inline void stackChunkOopDesc::iterate_stack(StackChunkFrameClosureType* closure) {
-  const SmallRegisterMap* map = SmallRegisterMap::instance;
-  assert(!map->in_cont(), "");
+  ResetNoHandleMark rnhm;
+  HandleMark hm(Thread::current());
+  RegisterMap map(this, true /* update_map */);
+  assert(!map.in_cont(), "");
+  map.set_stack_chunk(this);
 
   StackChunkFrameStream<frame_kind> f(this);
   bool should_continue = true;
@@ -183,17 +185,17 @@ inline void stackChunkOopDesc::iterate_stack(StackChunkFrameClosureType* closure
     assert(f.is_compiled(), "");
 
     should_continue = closure->do_frame(f, &full_map);
-    f.next(map);
+    f.next(&map);
     f.handle_deopted(); // the stub caller might be deoptimized (as it's not at a call)
   }
   assert(!f.is_stub(), "");
 
-  for(; should_continue && !f.is_done(); f.next(map)) {
+  for(; should_continue && !f.is_done(); f.next(&map)) {
     if (frame_kind == ChunkFrames::Mixed) {
       // in slow mode we might freeze deoptimized frames
       f.handle_deopted();
     }
-    should_continue = closure->do_frame(f, map);
+    should_continue = closure->do_frame(f, &map);
   }
 }
 

@@ -71,8 +71,7 @@ inline bool frame::is_compiled_frame() const {
   return false;
 }
 
-template <typename RegisterMapT>
-inline address frame::oopmapreg_to_location(VMReg reg, const RegisterMapT* reg_map) const {
+inline address frame::oopmapreg_to_location(VMReg reg, const RegisterMap* reg_map) const {
   if (reg->is_reg()) {
     // If it is passed in a register, it got spilled in the stub frame.
     return reg_map->location(reg, sp());
@@ -87,8 +86,7 @@ inline address frame::oopmapreg_to_location(VMReg reg, const RegisterMapT* reg_m
   }
 }
 
-template <typename RegisterMapT>
-inline oop* frame::oopmapreg_to_oop_location(VMReg reg, const RegisterMapT* reg_map) const {
+inline oop* frame::oopmapreg_to_oop_location(VMReg reg, const RegisterMap* reg_map) const {
   return (oop*)oopmapreg_to_location(reg, reg_map);
 }
 

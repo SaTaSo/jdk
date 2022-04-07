@@ -39,8 +39,6 @@
 #endif
 
 class RegisterMap;
-class SmallRegisterMap;
-
 
 template <typename OopT>
 static oop read_oop_local(OopT* p) {
@@ -53,19 +51,11 @@ static oop read_oop_local(OopT* p) {
   return NativeAccess<>::oop_load(&obj);
 }
 
-template StackValue* StackValue::create_stack_value(const frame* fr, const RegisterMap* reg_map, ScopeValue* sv);
-template StackValue* StackValue::create_stack_value(const frame* fr, const SmallRegisterMap* reg_map, ScopeValue* sv);
-
-template<typename RegisterMapT>
-StackValue* StackValue::create_stack_value(const frame* fr, const RegisterMapT* reg_map, ScopeValue* sv) {
+StackValue* StackValue::create_stack_value(const frame* fr, const RegisterMap* reg_map, ScopeValue* sv) {
   return create_stack_value(sv, stack_value_address(fr, reg_map, sv), reg_map);
 }
 
-template StackValue* StackValue::create_stack_value(ScopeValue*, address, const RegisterMap*);
-template StackValue* StackValue::create_stack_value(ScopeValue*, address, const SmallRegisterMap*);
-
-template<typename RegisterMapT>
-StackValue* StackValue::create_stack_value(ScopeValue* sv, address value_addr, const RegisterMapT* reg_map) {
+StackValue* StackValue::create_stack_value(ScopeValue* sv, address value_addr, const RegisterMap* reg_map) {
   if (sv->is_location()) {
     // Stack or register value
     Location loc = ((LocationValue *)sv)->location();
@@ -213,11 +203,7 @@ StackValue* StackValue::create_stack_value(ScopeValue* sv, address value_addr, c
   return new StackValue((intptr_t) 0);   // dummy
 }
 
-template address StackValue::stack_value_address(const frame* fr, const RegisterMap* reg_map, ScopeValue* sv);
-template address StackValue::stack_value_address(const frame* fr, const SmallRegisterMap* reg_map, ScopeValue* sv);
-
-template<typename RegisterMapT>
-address StackValue::stack_value_address(const frame* fr, const RegisterMapT* reg_map, ScopeValue* sv) {
+address StackValue::stack_value_address(const frame* fr, const RegisterMap* reg_map, ScopeValue* sv) {
   if (!sv->is_location()) {
     return NULL;
   }

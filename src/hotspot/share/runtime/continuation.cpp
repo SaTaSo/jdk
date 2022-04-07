@@ -52,8 +52,8 @@
 #include "runtime/keepStackGCProcessed.hpp"
 #include "runtime/orderAccess.hpp"
 #include "runtime/osThread.hpp"
+#include "runtime/registerMap.hpp"
 #include "runtime/prefetch.inline.hpp"
-#include "runtime/smallRegisterMap.inline.hpp"
 #include "runtime/stackChunkFrameStream.inline.hpp"
 #include "runtime/stackFrameStream.inline.hpp"
 #include "runtime/stackOverflow.hpp"
@@ -1335,7 +1335,8 @@ NOINLINE freeze_result FreezeBase::freeze(frame& f, frame& caller, int callee_ar
       // special native frame
       return freeze_pinned_native;
     }
-    if (UNLIKELY(ContinuationHelper::CompiledFrame::is_owning_locks(_cont.thread(), SmallRegisterMap::instance, f))) {
+    RegisterMap reg_map(NULL, true /* update_map */, false /* process_frames */, false /* walk_cont */);
+    if (UNLIKELY(ContinuationHelper::CompiledFrame::is_owning_locks(_cont.thread(), &reg_map, f))) {
       return freeze_pinned_monitor;
     }
 
@@ -2134,8 +2135,8 @@ protected:
   NOINLINE intptr_t* thaw_slow(stackChunkOop chunk, bool return_barrier);
 
 private:
-  void thaw(const frame& hf, frame& caller, int num_frames, bool top);
-  template<typename FKind> bool recurse_thaw_java_frame(frame& caller, int num_frames);
+  void thaw(RegisterMap& reg_map, const frame& hf, frame& caller, int num_frames, bool top);
+  template<typename FKind> bool recurse_thaw_java_frame(RegisterMap& reg_map, frame& caller, int num_frames);
   void finalize_thaw(frame& entry, int argsize);
 
   inline void before_thaw_java_frame(const frame& hf, const frame& caller, bool bottom, int num_frame);
@@ -2143,9 +2144,9 @@ private:
   inline void patch(frame& f, const frame& caller, bool bottom);
   void clear_bitmap_bits(intptr_t* start, int range);
 
-  NOINLINE void recurse_thaw_interpreted_frame(const frame& hf, frame& caller, int num_frames);
-  void recurse_thaw_compiled_frame(const frame& hf, frame& caller, int num_frames, bool stub_caller);
-  void recurse_thaw_stub_frame(const frame& hf, frame& caller, int num_frames);
+  NOINLINE void recurse_thaw_interpreted_frame(RegisterMap& reg_map, const frame& hf, frame& caller, int num_frames);
+  void recurse_thaw_compiled_frame(RegisterMap& reg_map, const frame& hf, frame& caller, int num_frames, bool stub_caller);
+  void recurse_thaw_stub_frame(RegisterMap& reg_map, const frame& hf, frame& caller, int num_frames);
   void finish_thaw(frame& f);
 
   void push_return_frame(frame& f);
@@ -2237,6 +2238,8 @@ NOINLINE intptr_t* Thaw<ConfigT>::thaw_fast(stackChunkOop chunk) {
   } else { // thaw a single frame
     partial = true;
 
+    RegisterMap reg_map(chunk, false /* update_map */);
+    reg_map.set_stack_chunk(chunk);
     StackChunkFrameStream<ChunkFrames::CompiledOnly> f(chunk);
     assert(chunk_sp == f.sp(), "");
     assert(chunk_sp == f.unextended_sp(), "");
@@ -2244,7 +2247,7 @@ NOINLINE intptr_t* Thaw<ConfigT>::thaw_fast(stackChunkOop chunk) {
     const int frame_size = f.cb()->frame_size();
     argsize = f.stack_argsize();
 
-    f.next(SmallRegisterMap::instance);
+    f.next(&reg_map);
     empty = f.is_done();
     assert(!empty || argsize == chunk->argsize(), "");
 
@@ -2363,8 +2366,10 @@ NOINLINE intptr_t* ThawBase::thaw_slow(stackChunkOop chunk, bool return_barrier)
     hf.print_on(&ls);
   }
 
+  RegisterMap reg_map(chunk, true /* update_values */);
+  reg_map.set_stack_chunk(chunk);
   frame f;
-  thaw(hf, f, num_frames, true);
+  thaw(reg_map, hf, f, num_frames, true);
   finish_thaw(f); // f is now the topmost thawed frame
   _cont.write();
 
@@ -2391,7 +2396,7 @@ NOINLINE intptr_t* ThawBase::thaw_slow(stackChunkOop chunk, bool return_barrier)
   return sp;
 }
 
-void ThawBase::thaw(const frame& hf, frame& caller, int num_frames, bool top) {
+void ThawBase::thaw(RegisterMap& reg_map, const frame& hf, frame& caller, int num_frames, bool top) {
   log_develop_debug(continuations)("thaw num_frames: %d", num_frames);
   assert(!_cont.is_empty(), "no more frames");
   assert(num_frames > 0, "");
@@ -2399,23 +2404,23 @@ void ThawBase::thaw(const frame& hf, frame& caller, int num_frames, bool top) {
 
   if (top && hf.is_safepoint_blob_frame()) {
     assert(ContinuationHelper::Frame::is_stub(hf.cb()), "cb: %s", hf.cb()->name());
-    recurse_thaw_stub_frame(hf, caller, num_frames);
+    recurse_thaw_stub_frame(reg_map, hf, caller, num_frames);
   } else if (!hf.is_interpreted_frame()) {
-    recurse_thaw_compiled_frame(hf, caller, num_frames, false);
+    recurse_thaw_compiled_frame(reg_map, hf, caller, num_frames, false);
   } else {
-    recurse_thaw_interpreted_frame(hf, caller, num_frames);
+    recurse_thaw_interpreted_frame(reg_map, hf, caller, num_frames);
   }
 }
 
 template<typename FKind>
-bool ThawBase::recurse_thaw_java_frame(frame& caller, int num_frames) {
+bool ThawBase::recurse_thaw_java_frame(RegisterMap& reg_map, frame& caller, int num_frames) {
   assert(num_frames > 0, "");
 
   DEBUG_ONLY(_frames++;)
 
   int argsize = _stream.stack_argsize();
 
-  _stream.next(SmallRegisterMap::instance);
+  _stream.next(&reg_map);
   assert(_stream.to_frame().is_empty() == _stream.is_done(), "");
 
   // we never leave a compiled caller of an interpreted frame as the top frame in the chunk
@@ -2429,7 +2434,7 @@ bool ThawBase::recurse_thaw_java_frame(frame& caller, int num_frames) {
     finalize_thaw(caller, FKind::interpreted ? 0 : argsize);
     return true; // bottom
   } else { // recurse
-    thaw(_stream.to_frame(), caller, num_frames - 1, false);
+    thaw(reg_map, _stream.to_frame(), caller, num_frames - 1, false);
     return false;
   }
 }
@@ -2504,14 +2509,14 @@ inline void ThawBase::patch(frame& f, const frame& caller, bool bottom) {
                                 chunk->bit_index_for(start+range));
   }
 
-NOINLINE void ThawBase::recurse_thaw_interpreted_frame(const frame& hf, frame& caller, int num_frames) {
+NOINLINE void ThawBase::recurse_thaw_interpreted_frame(RegisterMap& reg_map, const frame& hf, frame& caller, int num_frames) {
   assert(hf.is_interpreted_frame(), "");
 
   if (UNLIKELY(_barriers)) {
-    _cont.tail()->do_barriers<stackChunkOopDesc::BarrierType::Store>(_stream, SmallRegisterMap::instance);
+    _cont.tail()->do_barriers<stackChunkOopDesc::BarrierType::Store>(_stream, &reg_map);
   }
 
-  const bool bottom = recurse_thaw_java_frame<ContinuationHelper::InterpretedFrame>(caller, num_frames);
+  const bool bottom = recurse_thaw_java_frame<ContinuationHelper::InterpretedFrame>(reg_map, caller, num_frames);
 
   DEBUG_ONLY(before_thaw_java_frame(hf, caller, bottom, num_frames);)
 
@@ -2559,7 +2564,8 @@ NOINLINE void ThawBase::recurse_thaw_interpreted_frame(const frame& hf, frame& c
 
   if (!bottom) {
     // can only fix caller once this frame is thawed (due to callee saved regs)
-    _cont.tail()->fix_thawed_frame(caller, SmallRegisterMap::instance);
+    RegisterMap map(nullptr, true, false, false);
+    _cont.tail()->fix_thawed_frame(caller, &map);
   } else if (_cont.tail()->has_bitmap() && locals > 0) {
     assert(hf.is_heap_frame(), "should be");
     clear_bitmap_bits(ContinuationHelper::InterpretedFrame::frame_bottom(hf) - locals, locals);
@@ -2569,15 +2575,15 @@ NOINLINE void ThawBase::recurse_thaw_interpreted_frame(const frame& hf, frame& c
   caller = f;
 }
 
-void ThawBase::recurse_thaw_compiled_frame(const frame& hf, frame& caller, int num_frames, bool stub_caller) {
+void ThawBase::recurse_thaw_compiled_frame(RegisterMap& reg_map, const frame& hf, frame& caller, int num_frames, bool stub_caller) {
   assert(!hf.is_interpreted_frame(), "");
   assert(_cont.is_preempted() || !stub_caller, "stub caller not at preemption");
 
   if (!stub_caller && UNLIKELY(_barriers)) { // recurse_thaw_stub_frame already invoked our barriers with a full regmap
-    _cont.tail()->do_barriers<stackChunkOopDesc::BarrierType::Store>(_stream, SmallRegisterMap::instance);
+    _cont.tail()->do_barriers<stackChunkOopDesc::BarrierType::Store>(_stream, &reg_map);
   }
 
-  const bool bottom = recurse_thaw_java_frame<ContinuationHelper::CompiledFrame>(caller, num_frames);
+  const bool bottom = recurse_thaw_java_frame<ContinuationHelper::CompiledFrame>(reg_map, caller, num_frames);
 
   DEBUG_ONLY(before_thaw_java_frame(hf, caller, bottom, num_frames);)
 
@@ -2629,7 +2635,8 @@ void ThawBase::recurse_thaw_compiled_frame(const frame& hf, frame& caller, int n
 
   if (!bottom) {
     // can only fix caller once this frame is thawed (due to callee saved regs)
-    _cont.tail()->fix_thawed_frame(caller, SmallRegisterMap::instance);
+    RegisterMap map(nullptr, true, false, false);
+    _cont.tail()->fix_thawed_frame(caller, &map);
   } else if (_cont.tail()->has_bitmap() && added_argsize > 0) {
     clear_bitmap_bits(hsp + ContinuationHelper::CompiledFrame::size(hf), added_argsize);
   }
@@ -2638,11 +2645,10 @@ void ThawBase::recurse_thaw_compiled_frame(const frame& hf, frame& caller, int n
   caller = f;
 }
 
-void ThawBase::recurse_thaw_stub_frame(const frame& hf, frame& caller, int num_frames) {
+void ThawBase::recurse_thaw_stub_frame(RegisterMap& map, const frame& hf, frame& caller, int num_frames) {
   DEBUG_ONLY(_frames++;)
 
   {
-    RegisterMap map(nullptr, true, false, false);
     map.set_include_argument_oops(false);
     _stream.next(&map);
     assert(!_stream.is_done(), "");
@@ -2652,7 +2658,7 @@ void ThawBase::recurse_thaw_stub_frame(const frame& hf, frame& caller, int num_f
     assert(!_stream.is_done(), "");
   }
 
-  recurse_thaw_compiled_frame(_stream.to_frame(), caller, num_frames, true); // this could be deoptimized
+  recurse_thaw_compiled_frame(map, _stream.to_frame(), caller, num_frames, true); // this could be deoptimized
 
   DEBUG_ONLY(before_thaw_java_frame(hf, caller, false, num_frames);)
 
@@ -2670,6 +2676,7 @@ void ThawBase::recurse_thaw_stub_frame(const frame& hf, frame& caller, int num_f
                   fsize + frame::metadata_words);
 
   { // can only fix caller once this frame is thawed (due to callee saved regs)
+    // TODO: Needed still?
     RegisterMap map(nullptr, true, false, false); // map.clear();
     map.set_include_argument_oops(false);
     f.oop_map()->update_register_map(&f, &map);
@@ -2702,7 +2709,8 @@ void ThawBase::finish_thaw(frame& f) {
     f.set_sp(f.sp() - 1);
   }
   push_return_frame(f);
-  chunk->fix_thawed_frame(f, SmallRegisterMap::instance); // can only fix caller after push_return_frame (due to callee saved regs)
+  RegisterMap reg_map(nullptr, true, false, false);
+  chunk->fix_thawed_frame(f, &reg_map); // can only fix caller after push_return_frame (due to callee saved regs)
 
   assert(_cont.is_empty() == _cont.last_frame().is_empty(), "");
 

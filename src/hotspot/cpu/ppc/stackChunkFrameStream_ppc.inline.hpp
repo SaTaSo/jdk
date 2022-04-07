@@ -97,19 +97,16 @@ inline int StackChunkFrameStream<frame_kind>::interpreter_frame_num_oops() const
 }
 
 template<>
-template<>
 inline void StackChunkFrameStream<ChunkFrames::Mixed>::update_reg_map_pd(RegisterMap* map) {
   Unimplemented();
 }
 
-template<>
 template<>
 inline void StackChunkFrameStream<ChunkFrames::CompiledOnly>::update_reg_map_pd(RegisterMap* map) {
   Unimplemented();
 }
 
 template <ChunkFrames frame_kind>
-template <typename RegisterMapT>
-inline void StackChunkFrameStream<frame_kind>::update_reg_map_pd(RegisterMapT* map) {}
+inline void StackChunkFrameStream<frame_kind>::update_reg_map_pd(RegisterMap* map) {}
 
 #endif // CPU_PPC_STACKCHUNKFRAMESTREAM_PPC_INLINE_HPP

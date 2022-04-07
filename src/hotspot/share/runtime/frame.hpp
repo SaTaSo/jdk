@@ -446,10 +446,8 @@ class frame {
   void describe(FrameValues& values, int frame_no, const RegisterMap* reg_map=NULL);
 
   // Conversion from a VMReg to physical stack location
-  template <typename RegisterMapT>
-  address oopmapreg_to_location(VMReg reg, const RegisterMapT* reg_map) const;
-  template <typename RegisterMapT>
-  oop* oopmapreg_to_oop_location(VMReg reg, const RegisterMapT* reg_map) const;
+  address oopmapreg_to_location(VMReg reg, const RegisterMap* reg_map) const;
+  oop* oopmapreg_to_oop_location(VMReg reg, const RegisterMap* reg_map) const;
 
   // Oops-do's
   void oops_compiled_arguments_do(Symbol* signature, bool has_receiver, bool has_appendix, const RegisterMap* reg_map, OopClosure* f) const;

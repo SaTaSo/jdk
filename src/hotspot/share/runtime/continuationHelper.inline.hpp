@@ -171,8 +171,7 @@ inline int ContinuationHelper::CompiledFrame::num_oops(const frame& f) {
   return f.num_oops() + 1;
 }
 
-template<typename RegisterMapT>
-bool ContinuationHelper::CompiledFrame::is_owning_locks(JavaThread* thread, RegisterMapT* map, const frame& f) {
+bool ContinuationHelper::CompiledFrame::is_owning_locks(JavaThread* thread, RegisterMap* map, const frame& f) {
   assert(!f.is_interpreted_frame(), "");
   assert(CompiledFrame::is_instance(f), "");
 

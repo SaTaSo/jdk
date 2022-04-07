@@ -125,7 +125,6 @@ inline int StackChunkFrameStream<frame_kind>::interpreter_frame_num_oops() const
 }
 
 template<>
-template<>
 inline void StackChunkFrameStream<ChunkFrames::Mixed>::update_reg_map_pd(RegisterMap* map) {
   if (map->update_map()) {
     frame::update_map_with_saved_link(map, map->in_cont() ? (intptr_t**)(intptr_t)frame::sender_sp_offset
@@ -133,7 +132,6 @@ inline void StackChunkFrameStream<ChunkFrames::Mixed>::update_reg_map_pd(Registe
   }
 }
 
-template<>
 template<>
 inline void StackChunkFrameStream<ChunkFrames::CompiledOnly>::update_reg_map_pd(RegisterMap* map) {
   if (map->update_map()) {
@@ -143,7 +141,6 @@ inline void StackChunkFrameStream<ChunkFrames::CompiledOnly>::update_reg_map_pd(
 }
 
 template <ChunkFrames frame_kind>
-template <typename RegisterMapT>
-inline void StackChunkFrameStream<frame_kind>::update_reg_map_pd(RegisterMapT* map) {}
+inline void StackChunkFrameStream<frame_kind>::update_reg_map_pd(RegisterMap* map) {}
 
 #endif // CPU_AARCH64_STACKCHUNKFRAMESTREAM_AARCH64_INLINE_HPP

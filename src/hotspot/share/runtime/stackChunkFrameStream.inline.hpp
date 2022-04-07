@@ -152,8 +152,7 @@ inline void StackChunkFrameStream<frame_kind>::initialize_register_map(RegisterM
 }
 
 template <ChunkFrames frame_kind>
-template <typename RegisterMapT>
-inline void StackChunkFrameStream<frame_kind>::next(RegisterMapT* map) {
+inline void StackChunkFrameStream<frame_kind>::next(RegisterMap* map) {
   update_reg_map(map);
   bool safepoint = is_stub();
   if (frame_kind == ChunkFrames::Mixed) {
@@ -231,14 +230,12 @@ inline void StackChunkFrameStream<frame_kind>::get_oopmap(address pc, int oopmap
 }
 
 template <ChunkFrames frame_kind>
-template <typename RegisterMapT>
-inline void* StackChunkFrameStream<frame_kind>::reg_to_loc(VMReg reg, const RegisterMapT* map) const {
+inline void* StackChunkFrameStream<frame_kind>::reg_to_loc(VMReg reg, const RegisterMap* map) const {
   assert(!is_done(), "");
   return reg->is_reg() ? (void*)map->location(reg, sp()) // see frame::update_map_with_saved_link(&map, link_addr);
                        : (void*)((address)unextended_sp() + (reg->reg2stack() * VMRegImpl::stack_slot_size));
 }
 
-template<>
 template<>
 inline void StackChunkFrameStream<ChunkFrames::Mixed>::update_reg_map(RegisterMap* map) {
   assert(!map->in_cont() || map->stack_chunk() == _chunk, "");
@@ -248,7 +245,6 @@ inline void StackChunkFrameStream<ChunkFrames::Mixed>::update_reg_map(RegisterMa
   }
 }
 
-template<>
 template<>
 inline void StackChunkFrameStream<ChunkFrames::CompiledOnly>::update_reg_map(RegisterMap* map) {
   assert(map->in_cont(), "");
@@ -260,8 +256,7 @@ inline void StackChunkFrameStream<ChunkFrames::CompiledOnly>::update_reg_map(Reg
 }
 
 template <ChunkFrames frame_kind>
-template <typename RegisterMapT>
-inline void StackChunkFrameStream<frame_kind>::update_reg_map(RegisterMapT* map) {}
+inline void StackChunkFrameStream<frame_kind>::update_reg_map(RegisterMap* map) {}
 
 template <ChunkFrames frame_kind>
 inline address StackChunkFrameStream<frame_kind>::orig_pc() const {
@@ -319,8 +314,8 @@ void StackChunkFrameStream<frame_kind>::handle_deopted() const {
 }
 
 template <ChunkFrames frame_kind>
-template <class OopClosureType, class RegisterMapT>
-inline void StackChunkFrameStream<frame_kind>::iterate_oops(OopClosureType* closure, const RegisterMapT* map) const {
+template <class OopClosureType>
+inline void StackChunkFrameStream<frame_kind>::iterate_oops(OopClosureType* closure, const RegisterMap* map) const {
   if (is_interpreted()) {
     frame f = to_frame();
     f.oops_interpreted_do(closure, nullptr, true);
@@ -348,8 +343,8 @@ inline void StackChunkFrameStream<frame_kind>::iterate_oops(OopClosureType* clos
 }
 
 template <ChunkFrames frame_kind>
-template <class DerivedOopClosureType, class RegisterMapT>
-inline void StackChunkFrameStream<frame_kind>::iterate_derived_pointers(DerivedOopClosureType* closure, const RegisterMapT* map) const {
+template <class DerivedOopClosureType>
+inline void StackChunkFrameStream<frame_kind>::iterate_derived_pointers(DerivedOopClosureType* closure, const RegisterMap* map) const {
   if (is_interpreted()) {
     return;
   }
@@ -378,8 +373,7 @@ inline void StackChunkFrameStream<frame_kind>::iterate_derived_pointers(DerivedO
 #ifdef ASSERT
 
 template <ChunkFrames frame_kind>
-template <typename RegisterMapT>
-bool StackChunkFrameStream<frame_kind>::is_in_oops(void* p, const RegisterMapT* map) const {
+bool StackChunkFrameStream<frame_kind>::is_in_oops(void* p, const RegisterMap* map) const {
   for (OopMapStream oms(oopmap()); !oms.is_done(); oms.next()) {
     if (oms.current().type() != OopMapValue::oop_value) {
       continue;

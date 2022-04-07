@@ -468,8 +468,7 @@ inline frame frame::sender_for_compiled_frame(RegisterMap* map) const {
   return frame(l_sender_sp, unextended_sp, *saved_fp_addr, sender_pc);
 }
 
-template <typename RegisterMapT>
-void frame::update_map_with_saved_link(RegisterMapT* map, intptr_t** link_addr) {
+inline void frame::update_map_with_saved_link(RegisterMap* map, intptr_t** link_addr) {
   // The interpreter and compiler(s) always save EBP/RBP in a known
   // location on entry. We must record where that location is
   // so this if EBP/RBP was live on callout from c2 we can find

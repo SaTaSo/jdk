@@ -464,11 +464,9 @@ private:
   DerivedOopFnT* _derived_oop_fn;
 public:
   OopMapDo(OopFnT* oop_fn, DerivedOopFnT* derived_oop_fn) : _oop_fn(oop_fn), _derived_oop_fn(derived_oop_fn) {}
-  template <typename RegisterMapT>
-  void oops_do(const frame* fr, const RegisterMapT* reg_map, const ImmutableOopMap* oopmap);
+  void oops_do(const frame* fr, const RegisterMap* reg_map, const ImmutableOopMap* oopmap);
 private:
-  template <typename RegisterMapT>
-  void iterate_oops_do(const frame *fr, const RegisterMapT *reg_map, const ImmutableOopMap* oopmap);
+  void iterate_oops_do(const frame *fr, const RegisterMap *reg_map, const ImmutableOopMap* oopmap);
 };
 
 // Derived pointer support. This table keeps track of all derived points on a

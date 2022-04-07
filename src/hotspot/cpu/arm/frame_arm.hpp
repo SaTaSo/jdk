@@ -112,8 +112,7 @@
   // expression stack tos if we are nested in a java call
   intptr_t* interpreter_frame_last_sp() const;
 
-  template <typename RegisterMapT>
-  static void update_map_with_saved_link(RegisterMapT* map, intptr_t** link_addr);
+  static void update_map_with_saved_link(RegisterMap* map, intptr_t** link_addr);
 
   // deoptimization support
   void interpreter_frame_set_last_sp(intptr_t* sp);

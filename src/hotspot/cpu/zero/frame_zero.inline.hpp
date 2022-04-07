@@ -242,8 +242,7 @@ inline frame frame::sender(RegisterMap* map) const {
   return result;
 }
 
-template <typename RegisterMapT>
-void frame::update_map_with_saved_link(RegisterMapT* map, intptr_t** link_addr) {
+inline void frame::update_map_with_saved_link(RegisterMap* map, intptr_t** link_addr) {
   Unimplemented();
 }
 

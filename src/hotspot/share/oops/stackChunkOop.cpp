@@ -33,7 +33,6 @@
 #include "oops/stackChunkOop.inline.hpp"
 #include "runtime/frame.hpp"
 #include "runtime/registerMap.hpp"
-#include "runtime/smallRegisterMap.inline.hpp"
 #include "runtime/stackChunkFrameStream.inline.hpp"
 #if INCLUDE_SHENANDOAHGC
 #include "gc/shenandoah/shenandoahHeap.inline.hpp"
@@ -101,8 +100,10 @@ static int num_java_frames(const StackChunkFrameStream<ChunkFrames::Mixed>& f) {
 
 int stackChunkOopDesc::num_java_frames() const {
   int n = 0;
+  ResetNoHandleMark rnhm;
+  RegisterMap reg_map(cast_to_oop(this), false /* update_map */);
   for (StackChunkFrameStream<ChunkFrames::Mixed> f(const_cast<stackChunkOopDesc*>(this)); !f.is_done();
-       f.next(SmallRegisterMap::instance)) {
+       f.next(&reg_map)) {
     if (!f.is_stub()) {
       n += ::num_java_frames(f);
     }
@@ -153,8 +154,8 @@ class DoBarriersStackClosure {
 public:
   DoBarriersStackClosure(stackChunkOop chunk) : _chunk(chunk) {}
 
-  template <ChunkFrames frame_kind, typename RegisterMapT>
-  bool do_frame(const StackChunkFrameStream<frame_kind>& f, const RegisterMapT* map) {
+  template <ChunkFrames frame_kind>
+  bool do_frame(const StackChunkFrameStream<frame_kind>& f, const RegisterMap* map) {
     _chunk->do_barriers0<barrier>(f, map);
     return true;
   }
@@ -230,9 +231,9 @@ public:
   }
 };
 
-template <ChunkFrames frame_kind, typename RegisterMapT>
+template <ChunkFrames frame_kind>
 static void relativize_derived_oops_in_frame(const StackChunkFrameStream<frame_kind>& f,
-                                             const RegisterMapT* map) {
+                                             const RegisterMap* map) {
   assert(!f.is_compiled() || f.oopmap()->has_derived_oops() == f.oopmap()->has_any(OopMapValue::derived_oop_value), "");
   bool has_derived = f.is_compiled() && f.oopmap()->has_derived_oops();
   if (has_derived) {
@@ -243,8 +244,8 @@ static void relativize_derived_oops_in_frame(const StackChunkFrameStream<frame_k
 
 class RelativizeDerivedOopsStackChunkFrameClosure {
 public:
-  template <ChunkFrames frame_kind, typename RegisterMapT>
-  bool do_frame(const StackChunkFrameStream<frame_kind>& f, const RegisterMapT* map) {
+  template <ChunkFrames frame_kind>
+  bool do_frame(const StackChunkFrameStream<frame_kind>& f, const RegisterMap* map) {
     relativize_derived_oops_in_frame(f, map);
     return true;
   }
@@ -309,8 +310,8 @@ class TransformStackChunkClosure {
 public:
   TransformStackChunkClosure(stackChunkOop chunk) : _chunk(chunk) { }
 
-  template <ChunkFrames frame_kind, typename RegisterMapT>
-  bool do_frame(const StackChunkFrameStream<frame_kind>& f, const RegisterMapT* map) {
+  template <ChunkFrames frame_kind>
+  bool do_frame(const StackChunkFrameStream<frame_kind>& f, const RegisterMap* map) {
     relativize_derived_oops_in_frame(f, map);
 
     // This code is called from the STW collectors and don't have concurrent
@@ -360,9 +361,9 @@ public:
   }
 };
 
-template <stackChunkOopDesc::BarrierType barrier, ChunkFrames frame_kind, typename RegisterMapT>
-void stackChunkOopDesc::do_barriers0(const StackChunkFrameStream<frame_kind>& f, const RegisterMapT* map) {
-  // We need to invoke the write barriers so as not to miss oops in old chunks that haven't yet been concurrently scanned
+template <stackChunkOopDesc::BarrierType barrier, ChunkFrames frame_kind>
+void stackChunkOopDesc::do_barriers0(const StackChunkFrameStream<frame_kind>& f, const RegisterMap* map) {
+  // we need to invoke the write barriers so as not to miss oops in old chunks that haven't yet been concurrently scanned
   if (f.is_done()) {
     return;
   }
@@ -399,10 +400,6 @@ template void stackChunkOopDesc::do_barriers0<stackChunkOopDesc::BarrierType::Lo
 template void stackChunkOopDesc::do_barriers0<stackChunkOopDesc::BarrierType::Store>(const StackChunkFrameStream<ChunkFrames::Mixed>& f, const RegisterMap* map);
 template void stackChunkOopDesc::do_barriers0<stackChunkOopDesc::BarrierType::Load> (const StackChunkFrameStream<ChunkFrames::CompiledOnly>& f, const RegisterMap* map);
 template void stackChunkOopDesc::do_barriers0<stackChunkOopDesc::BarrierType::Store>(const StackChunkFrameStream<ChunkFrames::CompiledOnly>& f, const RegisterMap* map);
-template void stackChunkOopDesc::do_barriers0<stackChunkOopDesc::BarrierType::Load> (const StackChunkFrameStream<ChunkFrames::Mixed>& f, const SmallRegisterMap* map);
-template void stackChunkOopDesc::do_barriers0<stackChunkOopDesc::BarrierType::Store>(const StackChunkFrameStream<ChunkFrames::Mixed>& f, const SmallRegisterMap* map);
-template void stackChunkOopDesc::do_barriers0<stackChunkOopDesc::BarrierType::Load> (const StackChunkFrameStream<ChunkFrames::CompiledOnly>& f, const SmallRegisterMap* map);
-template void stackChunkOopDesc::do_barriers0<stackChunkOopDesc::BarrierType::Store>(const StackChunkFrameStream<ChunkFrames::CompiledOnly>& f, const SmallRegisterMap* map);
 
 class DerelativizeDerivedOopClosure : public DerivedOopClosure {
 public:
@@ -434,8 +431,7 @@ public:
   void do_oop(narrowOop* p) override {}
 };
 
-template <typename RegisterMapT>
-void stackChunkOopDesc::fix_thawed_frame(const frame& f, const RegisterMapT* map) {
+void stackChunkOopDesc::fix_thawed_frame(const frame& f, const RegisterMap* map) {
   if (has_bitmap() && UseCompressedOops) {
     UncompressOopsOopClosure oop_closure;
     if (f.is_interpreted_frame()) {
@@ -452,9 +448,6 @@ void stackChunkOopDesc::fix_thawed_frame(const frame& f, const RegisterMapT* map
     visitor.oops_do(&f, map, f.oop_map());
   }
 }
-
-template void stackChunkOopDesc::fix_thawed_frame(const frame& f, const RegisterMap* map);
-template void stackChunkOopDesc::fix_thawed_frame(const frame& f, const SmallRegisterMap* map);
 
 void stackChunkOopDesc::print_on(bool verbose, outputStream* st) const {
   if (*((juint*)this) == badHeapWordVal) {
@@ -561,8 +554,8 @@ public:
     : _chunk(chunk), _sp(nullptr), _cb(nullptr), _callee_interpreted(false),
       _size(size), _argsize(0), _num_oops(0), _num_frames(num_frames), _num_interpreted_frames(0), _num_i2c(0) {}
 
-  template <ChunkFrames frame_kind, typename RegisterMapT>
-  bool do_frame(const StackChunkFrameStream<frame_kind>& f, const RegisterMapT* map) {
+  template <ChunkFrames frame_kind>
+  bool do_frame(const StackChunkFrameStream<frame_kind>& f, const RegisterMap* map) {
     _sp = f.sp();
     _cb = f.cb();
 

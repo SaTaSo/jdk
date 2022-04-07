@@ -30,6 +30,7 @@
 #include "oops/compressedOops.hpp"
 #include "runtime/frame.inline.hpp"
 #include "runtime/globals.hpp"
+#include "runtime/registerMap.hpp"
 #include "utilities/ostream.hpp"
 
 inline const ImmutableOopMap* ImmutableOopMapSet::find_map_at_slot(int slot, int pc_offset) const {
@@ -49,9 +50,8 @@ inline bool SkipNullValue::should_skip(oop val) {
 }
 
 template <typename OopFnT, typename DerivedOopFnT, typename ValueFilterT>
-template <typename RegisterMapT>
-void OopMapDo<OopFnT, DerivedOopFnT, ValueFilterT>::iterate_oops_do(const frame *fr, const RegisterMapT *reg_map, const ImmutableOopMap* oopmap) {
-  NOT_PRODUCT(if (TraceCodeBlobStacks) OopMapSet::trace_codeblob_maps(fr, reg_map->as_RegisterMap());)
+void OopMapDo<OopFnT, DerivedOopFnT, ValueFilterT>::iterate_oops_do(const frame *fr, const RegisterMap *reg_map, const ImmutableOopMap* oopmap) {
+  NOT_PRODUCT(if (TraceCodeBlobStacks) OopMapSet::trace_codeblob_maps(fr, reg_map);)
   assert(fr != NULL, "");
 
   // handle derived pointers first (otherwise base pointer may be
@@ -148,8 +148,7 @@ void OopMapDo<OopFnT, DerivedOopFnT, ValueFilterT>::iterate_oops_do(const frame 
 
 
 template <typename OopFnT, typename DerivedOopFnT, typename ValueFilterT>
-template <typename RegisterMapT>
-void OopMapDo<OopFnT, DerivedOopFnT, ValueFilterT>::oops_do(const frame *fr, const RegisterMapT *reg_map, const ImmutableOopMap* oopmap) {
+void OopMapDo<OopFnT, DerivedOopFnT, ValueFilterT>::oops_do(const frame *fr, const RegisterMap *reg_map, const ImmutableOopMap* oopmap) {
   iterate_oops_do(fr, reg_map, oopmap);
 }
 

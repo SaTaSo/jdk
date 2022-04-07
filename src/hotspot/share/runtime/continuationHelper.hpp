@@ -128,8 +128,7 @@ public:
 
   static bool is_instance(const frame& f);
 
-  template <typename RegisterMapT>
-  static bool is_owning_locks(JavaThread* thread, RegisterMapT* map, const frame& f);
+  static bool is_owning_locks(JavaThread* thread, RegisterMap* map, const frame& f);
 };
 
 class ContinuationHelper::StubFrame : public ContinuationHelper::NonInterpretedFrame {

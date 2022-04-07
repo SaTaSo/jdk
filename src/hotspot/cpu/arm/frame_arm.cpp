@@ -373,7 +373,7 @@ void frame::adjust_unextended_sp() {
 
 //------------------------------------------------------------------------------
 // frame::update_map_with_saved_link
-void frame::update_map_with_saved_link(RegisterMap* map, intptr_t** link_addr) {
+inline void frame::update_map_with_saved_link(RegisterMap* map, intptr_t** link_addr) {
   // see x86 for comments
   map->set_location(FP->as_VMReg(), (address) link_addr);
 }

@@ -43,7 +43,7 @@
 #include "runtime/frame.inline.hpp"
 #include "runtime/globals.hpp"
 #include "runtime/handles.inline.hpp"
-#include "runtime/smallRegisterMap.inline.hpp"
+#include "runtime/registerMap.hpp"
 #include "runtime/stackChunkFrameStream.inline.hpp"
 #include "utilities/bitMap.inline.hpp"
 #include "utilities/debug.hpp"
