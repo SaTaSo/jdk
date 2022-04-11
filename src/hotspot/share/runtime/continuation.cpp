@@ -815,10 +815,13 @@ bool Continuation::fix_continuation_bottom_sender(JavaThread* thread, const fram
   return false;
 }
 
-address Continuation::get_top_return_pc_post_barrier(JavaThread* thread, address pc) {
+// If the PC is the continuation return barrier PC, look through the continuation to
+// see what actual return PC was there.
+address Continuation::continuation_invariant_return_pc(JavaThread* thread, address pc) {
   ContinuationEntry* ce;
   if (thread != nullptr && is_return_barrier_entry(pc) && (ce = thread->last_continuation()) != nullptr) {
-    return ce->entry_pc();
+    ContinuationWrapper cont(ce->cont_oop());
+    return cont.last_nonempty_chunk()->pc();
   }
   return pc;
 }

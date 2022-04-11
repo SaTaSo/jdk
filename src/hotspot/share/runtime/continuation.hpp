@@ -103,7 +103,8 @@ public:
   static bool unpin(JavaThread* current);
 
   static bool fix_continuation_bottom_sender(JavaThread* thread, const frame& callee, address* sender_pc, intptr_t** sender_sp);
-  static address get_top_return_pc_post_barrier(JavaThread* thread, address pc);
+  static address continuation_invariant_return_pc(JavaThread* thread, address pc);
+
   static void set_cont_fastpath_thread_state(JavaThread* thread);
   static void notify_deopt(JavaThread* thread, intptr_t* sp);
 

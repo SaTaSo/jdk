@@ -1244,7 +1244,8 @@ JRT_END
 
 JRT_LEAF(int, InterpreterRuntime::interpreter_contains(address pc))
 {
-  return (Interpreter::contains(Continuation::get_top_return_pc_post_barrier(JavaThread::current(), pc)) ? 1 : 0);
+  address continuation_invariant_pc = Continuation::continuation_invariant_return_pc(JavaThread::current(), pc);
+  return (Interpreter::contains(continuation_invariant_pc) ? 1 : 0);
 }
 JRT_END
 
