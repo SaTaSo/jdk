@@ -212,8 +212,19 @@ const DecoratorSet ARRAYCOPY_DECORATOR_MASK       = ARRAYCOPY_CHECKCAST | ARRAYC
 const DecoratorSet ACCESS_READ                    = UCONST64(1) << 28;
 const DecoratorSet ACCESS_WRITE                   = UCONST64(1) << 29;
 
+// == Side effect decorators ==
+// Some GC barriers cause side effects to the memory they operate on. For stores that is
+// certainly expected, but for loads less so. This is usually done by concurrent GCs
+// with load barriers that want to fix fields so that subsequent accesses may take a fast
+// path. However, it is not always correct for a load to have side effects.
+// * WITH_NORMAL: Normal access, potentially has side effects on the supplied address
+// * WITH_NO_SIDE_EFFECTS: An access that guarantees the supplied address will not be modified
+const DecoratorSet WITH_NORMAL                    = UCONST64(1) << 30;
+const DecoratorSet WITH_NO_SIDE_EFFECTS           = UCONST64(1) << 31;
+const DecoratorSet WITH_DECORATOR_MASK            = WITH_NORMAL | WITH_NO_SIDE_EFFECTS;
+
 // Keep track of the last decorator.
-const DecoratorSet DECORATOR_LAST = UCONST64(1) << 29;
+const DecoratorSet DECORATOR_LAST = UCONST64(1) << 31;
 
 namespace AccessInternal {
   // This class adds implied decorators that follow according to decorator rules.
@@ -228,10 +239,13 @@ namespace AccessInternal {
     // If no memory ordering has been picked, unordered will be picked
     static const DecoratorSet memory_ordering_default = ref_strength_default |
       ((MO_DECORATOR_MASK & ref_strength_default) == 0 ? MO_UNORDERED : DECORATORS_NONE);
-    // If no barrier strength has been picked, normal will be used
+    // If no barrier strength has been picked, normal will be picked
     static const DecoratorSet barrier_strength_default = memory_ordering_default |
       ((AS_DECORATOR_MASK & memory_ordering_default) == 0 ? AS_NORMAL : DECORATORS_NONE);
-    static const DecoratorSet value = barrier_strength_default;
+    // If no side effects have been picked, normal will be picked
+    static const DecoratorSet side_effects_default = barrier_strength_default |
+      ((WITH_DECORATOR_MASK & barrier_strength_default) == 0 ? WITH_NORMAL : DECORATORS_NONE);
+    static const DecoratorSet value = side_effects_default;
   };
 
   // This function implements the above DecoratorFixup rules, but without meta
@@ -244,10 +258,12 @@ namespace AccessInternal {
     // If no memory ordering has been picked, unordered will be picked
     DecoratorSet memory_ordering_default = ref_strength_default |
       ((MO_DECORATOR_MASK & ref_strength_default) == 0 ? MO_UNORDERED : DECORATORS_NONE);
-    // If no barrier strength has been picked, normal will be used
+    // If no barrier strength has been picked, normal will be picked
     DecoratorSet barrier_strength_default = memory_ordering_default |
       ((AS_DECORATOR_MASK & memory_ordering_default) == 0 ? AS_NORMAL : DECORATORS_NONE);
-    return barrier_strength_default;
+    DecoratorSet side_effects_default = barrier_strength_default |
+      ((WITH_DECORATOR_MASK & barrier_strength_default) == 0 ? WITH_NORMAL : DECORATORS_NONE);
+    return side_effects_default;
   }
 }
 

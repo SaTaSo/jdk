@@ -111,14 +111,14 @@ class Access: public AllStatic {
   static void verify_oop_decorators() {
     const DecoratorSet oop_decorators = AS_DECORATOR_MASK | IN_DECORATOR_MASK |
                                         (ON_DECORATOR_MASK ^ ON_UNKNOWN_OOP_REF) | // no unknown oop refs outside of the heap
-                                        IS_ARRAY | IS_NOT_NULL | IS_DEST_UNINITIALIZED;
+                                        IS_ARRAY | IS_NOT_NULL | IS_DEST_UNINITIALIZED | WITH_NO_SIDE_EFFECTS;
     verify_decorators<expected_mo_decorators | oop_decorators>();
   }
 
   template <DecoratorSet expected_mo_decorators>
   static void verify_heap_oop_decorators() {
     const DecoratorSet heap_oop_decorators = AS_DECORATOR_MASK | ON_DECORATOR_MASK |
-                                             IN_HEAP | IS_ARRAY | IS_NOT_NULL;
+                                             IN_HEAP | IS_ARRAY | IS_NOT_NULL | WITH_NO_SIDE_EFFECTS;
     verify_decorators<expected_mo_decorators | heap_oop_decorators>();
   }
 
@@ -363,6 +363,11 @@ void Access<decorators>::verify_decorators() {
   STATIC_ASSERT(location_decorators == 0 || ( // make sure location decorators are disjoint if set
     (location_decorators ^ IN_NATIVE) == 0 ||
     (location_decorators ^ IN_HEAP) == 0
+  ));
+  const DecoratorSet side_effect_decorators = decorators & WITH_DECORATOR_MASK;
+  STATIC_ASSERT(side_effect_decorators == 0 || ( // make sure with decorators are disjoint if set
+    (side_effect_decorators ^ WITH_NORMAL) == 0 ||
+    (side_effect_decorators ^ WITH_NO_SIDE_EFFECTS) == 0
   ));
 }
 
