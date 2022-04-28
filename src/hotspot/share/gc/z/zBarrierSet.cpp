@@ -41,6 +41,10 @@
 class ZBarrierSetC1;
 class ZBarrierSetC2;
 
+void ZBarrierSet::unsupported() {
+  guarantee(false, "ZGC does not support compressed oops");
+}
+
 ZBarrierSet::ZBarrierSet() :
     BarrierSet(make_barrier_set_assembler<ZBarrierSetAssembler>(),
                make_barrier_set_c1<ZBarrierSetC1>(),

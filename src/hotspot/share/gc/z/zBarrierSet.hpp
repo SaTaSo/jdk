@@ -29,6 +29,9 @@
 class ZBarrierSetAssembler;
 
 class ZBarrierSet : public BarrierSet {
+private:
+  static void unsupported();
+
 public:
   ZBarrierSet();
 
@@ -55,46 +58,44 @@ public:
 
     static oop* field_addr(oop base, ptrdiff_t offset);
 
-    template <typename T>
-    static oop load_barrier_on_oop_field_preloaded(T* addr, oop o);
+    static oop load_barrier_on_oop_field_preloaded(oop* addr, oop o);
 
-    template <typename T>
-    static oop load_barrier_on_unknown_oop_field_preloaded(oop base, ptrdiff_t offset, T* addr, oop o);
+    static oop load_barrier_on_unknown_oop_field_preloaded(oop base, ptrdiff_t offset, oop* addr, oop o);
 
   public:
     //
     // In heap
     //
-    template <typename T>
-    static oop oop_load_in_heap(T* addr);
+    static oop oop_load_in_heap(oop* addr);
+    static oop oop_load_in_heap(narrowOop* addr) { unsupported(); return NULL; }
     static oop oop_load_in_heap_at(oop base, ptrdiff_t offset);
 
-    template <typename T>
-    static oop oop_atomic_cmpxchg_in_heap(T* addr, oop compare_value, oop new_value);
+    static oop oop_atomic_cmpxchg_in_heap(oop* addr, oop compare_value, oop new_value);
+    static oop oop_atomic_cmpxchg_in_heap(narrowOop* addr, oop compare_value, oop new_value) { unsupported(); return NULL; }
     static oop oop_atomic_cmpxchg_in_heap_at(oop base, ptrdiff_t offset, oop compare_value, oop new_value);
 
-    template <typename T>
-    static oop oop_atomic_xchg_in_heap(T* addr, oop new_value);
+    static oop oop_atomic_xchg_in_heap(oop* addr, oop new_value);
+    static oop oop_atomic_xchg_in_heap(narrowOop* addr, oop new_value) { unsupported(); return NULL; }
     static oop oop_atomic_xchg_in_heap_at(oop base, ptrdiff_t offset, oop new_value);
 
-    template <typename T>
-    static bool oop_arraycopy_in_heap(arrayOop src_obj, size_t src_offset_in_bytes, T* src_raw,
-                                      arrayOop dst_obj, size_t dst_offset_in_bytes, T* dst_raw,
+    static bool oop_arraycopy_in_heap(arrayOop src_obj, size_t src_offset_in_bytes, oop* src_raw,
+                                      arrayOop dst_obj, size_t dst_offset_in_bytes, oop* dst_raw,
                                       size_t length);
+    static bool oop_arraycopy_in_heap(arrayOop src_obj, size_t src_offset_in_bytes, narrowOop* src_raw,
+                                      arrayOop dst_obj, size_t dst_offset_in_bytes, narrowOop* dst_raw,
+                                      size_t length) { unsupported(); return false; }
 
     static void clone_in_heap(oop src, oop dst, size_t size);
 
     //
     // Not in heap
     //
-    template <typename T>
-    static oop oop_load_not_in_heap(T* addr);
-
-    template <typename T>
-    static oop oop_atomic_cmpxchg_not_in_heap(T* addr, oop compare_value, oop new_value);
-
-    template <typename T>
-    static oop oop_atomic_xchg_not_in_heap(T* addr, oop new_value);
+    static oop oop_load_not_in_heap(oop* addr);
+    static oop oop_load_not_in_heap(narrowOop* addr) { unsupported(); return NULL; }
+    static oop oop_atomic_cmpxchg_not_in_heap(oop* addr, oop compare_value, oop new_value);
+    static oop oop_atomic_cmpxchg_not_in_heap(narrowOop* addr, oop compare_value, oop new_value) { unsupported(); return NULL; }
+    static oop oop_atomic_xchg_not_in_heap(oop* addr, oop new_value);
+    static oop oop_atomic_xchg_not_in_heap(narrowOop* addr, oop new_value) { unsupported(); return NULL; }
   };
 };
 

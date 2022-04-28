@@ -210,48 +210,6 @@ uintptr_t ZBarrier::mark_barrier_on_finalizable_oop_slow_path(uintptr_t addr) {
   return mark<GCThread, Follow, Finalizable, Overflow>(addr);
 }
 
-//
-// Narrow oop variants, never used.
-//
-oop ZBarrier::load_barrier_on_oop_field(volatile narrowOop* p) {
-  ShouldNotReachHere();
-  return NULL;
-}
-
-oop ZBarrier::load_barrier_on_oop_field_preloaded(volatile narrowOop* p, oop o) {
-  ShouldNotReachHere();
-  return NULL;
-}
-
-void ZBarrier::load_barrier_on_oop_array(volatile narrowOop* p, size_t length) {
-  ShouldNotReachHere();
-}
-
-oop ZBarrier::load_barrier_on_weak_oop_field_preloaded(volatile narrowOop* p, oop o) {
-  ShouldNotReachHere();
-  return NULL;
-}
-
-oop ZBarrier::load_barrier_on_phantom_oop_field_preloaded(volatile narrowOop* p, oop o) {
-  ShouldNotReachHere();
-  return NULL;
-}
-
-oop ZBarrier::weak_load_barrier_on_oop_field_preloaded(volatile narrowOop* p, oop o) {
-  ShouldNotReachHere();
-  return NULL;
-}
-
-oop ZBarrier::weak_load_barrier_on_weak_oop_field_preloaded(volatile narrowOop* p, oop o) {
-  ShouldNotReachHere();
-  return NULL;
-}
-
-oop ZBarrier::weak_load_barrier_on_phantom_oop_field_preloaded(volatile narrowOop* p, oop o) {
-  ShouldNotReachHere();
-  return NULL;
-}
-
 #ifdef ASSERT
 
 // ON_WEAK barriers should only ever be applied to j.l.r.Reference.referents.

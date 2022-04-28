@@ -114,16 +114,6 @@ public:
   // Mark barrier
   static void mark_barrier_on_oop_field(volatile oop* p, bool finalizable);
   static void mark_barrier_on_oop_array(volatile oop* p, size_t length, bool finalizable);
-
-  // Narrow oop variants, never used.
-  static oop  load_barrier_on_oop_field(volatile narrowOop* p);
-  static oop  load_barrier_on_oop_field_preloaded(volatile narrowOop* p, oop o);
-  static void load_barrier_on_oop_array(volatile narrowOop* p, size_t length);
-  static oop  load_barrier_on_weak_oop_field_preloaded(volatile narrowOop* p, oop o);
-  static oop  load_barrier_on_phantom_oop_field_preloaded(volatile narrowOop* p, oop o);
-  static oop  weak_load_barrier_on_oop_field_preloaded(volatile narrowOop* p, oop o);
-  static oop  weak_load_barrier_on_weak_oop_field_preloaded(volatile narrowOop* p, oop o);
-  static oop  weak_load_barrier_on_phantom_oop_field_preloaded(volatile narrowOop* p, oop o);
 };
 
 class ZLoadBarrierOopClosure : public BasicOopIterateClosure {
