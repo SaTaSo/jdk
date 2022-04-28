@@ -41,18 +41,6 @@
 class RegisterMap;
 class SmallRegisterMap;
 
-
-template <typename OopT>
-static oop read_oop_local(OopT* p) {
-  // We can't do a native access directly from p because load barriers
-  // may self-heal. If that happens on a base pointer for compressed oops,
-  // then there will be a crash later on. Only the stack watermark API is
-  // allowed to heal oops, because it heals derived pointers before their
-  // corresponding base pointers.
-  oop obj = RawAccess<>::oop_load(p);
-  return NativeAccess<>::oop_load(&obj);
-}
-
 template StackValue* StackValue::create_stack_value(const frame* fr, const RegisterMap* reg_map, ScopeValue* sv);
 template StackValue* StackValue::create_stack_value(const frame* fr, const SmallRegisterMap* reg_map, ScopeValue* sv);
 
@@ -129,28 +117,46 @@ StackValue* StackValue::create_stack_value(ScopeValue* sv, address value_addr, c
         value.noop = *(narrowOop*) value_addr;
       }
       // Decode narrowoop
-      oop val = read_oop_local(&value.noop);
+      oop val;
+      if (reg_map->in_cont()) {
+        val = HeapAccess<WITH_NO_SIDE_EFFECTS>::oop_load(&value.noop);
+      } else {
+        val = NativeAccess<WITH_NO_SIDE_EFFECTS>::oop_load(&value.noop);
+      }
       Handle h(Thread::current(), val); // Wrap a handle around the oop
       return new StackValue(h);
     }
 #endif
     case Location::oop: {
       oop val;
-      if (reg_map->in_cont() && reg_map->stack_chunk()->has_bitmap() && UseCompressedOops) {
-        val = CompressedOops::decode(*(narrowOop*)value_addr);
+      if (UseCompressedOops) {
+        // Compiled code may produce decoded oop = narrow_oop_base
+        // when a narrow oop implicit null check is used.
+        // The narrow_oop_base could be NULL or be the address
+        // of the page below heap. Use NULL value for both cases.
+        // We have to use raw accesses to figure out if it is the
+        // weird NULL value, as the barriers don't understand it.
+        if (reg_map->in_cont() && reg_map->stack_chunk()->has_bitmap() && UseCompressedOops) {
+          val = CompressedOops::decode(*(narrowOop*)value_addr);
+        } else {
+          val = *(oop *)value_addr;
+        }
+        if (CompressedOops::is_base(val)) {
+          Handle h(Thread::current(), oop(NULL)); // Wrap a handle around the oop
+          return new StackValue(h);
+        }
+      }
+      if (reg_map->in_cont()) {
+        // We read the oops without side effects, as side effects might destroy
+        // derived pointers, if we are reading the base of that derived pointer.
+        if (reg_map->stack_chunk()->has_bitmap() && UseCompressedOops) {
+          val = HeapAccess<WITH_NO_SIDE_EFFECTS>::oop_load((narrowOop*)value_addr);
+        } else {
+          val = HeapAccess<WITH_NO_SIDE_EFFECTS>::oop_load((oop*)value_addr);
+        }
       } else {
-        val = *(oop *)value_addr;
+        val = RawAccess<>::oop_load((oop*)value_addr);
       }
-#ifdef _LP64
-      if (CompressedOops::is_base(val)) {
-         // Compiled code may produce decoded oop = narrow_oop_base
-         // when a narrow oop implicit null check is used.
-         // The narrow_oop_base could be NULL or be the address
-         // of the page below heap. Use NULL value for both cases.
-         val = (oop)NULL;
-      }
-#endif
-      val = read_oop_local(&val);
       assert(oopDesc::is_oop_or_null(val), "bad oop found at " INTPTR_FORMAT " in_cont: %d compressed: %d",
         p2i(value_addr), reg_map->in_cont(), reg_map->in_cont() && reg_map->stack_chunk()->has_bitmap() && UseCompressedOops);
       Handle h(Thread::current(), val); // Wrap a handle around the oop

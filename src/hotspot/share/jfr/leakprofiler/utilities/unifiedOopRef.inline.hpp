@@ -93,15 +93,15 @@ inline UnifiedOopRef UnifiedOopRef::encode_null() {
 inline oop UnifiedOopRef::dereference() const {
   if (is_native()) {
     if (is_narrow()) {
-      return NativeAccess<AS_NO_KEEPALIVE>::oop_load(addr<narrowOop*>());
+      return NativeAccess<AS_NO_KEEPALIVE | WITH_NO_SIDE_EFFECTS>::oop_load(addr<narrowOop*>());
     } else {
-      return NativeAccess<AS_NO_KEEPALIVE>::oop_load(addr<oop*>());
+      return NativeAccess<AS_NO_KEEPALIVE | WITH_NO_SIDE_EFFECTS>::oop_load(addr<oop*>());
     }
   } else {
     if (is_narrow()) {
-      return HeapAccess<AS_NO_KEEPALIVE>::oop_load(addr<narrowOop*>());
+      return HeapAccess<AS_NO_KEEPALIVE | WITH_NO_SIDE_EFFECTS>::oop_load(addr<narrowOop*>());
     } else {
-      return HeapAccess<AS_NO_KEEPALIVE>::oop_load(addr<oop*>());
+      return HeapAccess<AS_NO_KEEPALIVE | WITH_NO_SIDE_EFFECTS>::oop_load(addr<oop*>());
     }
   }
 }

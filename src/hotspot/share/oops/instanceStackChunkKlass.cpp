@@ -72,12 +72,14 @@ class StackChunkOopIterateFilterClosure: public OopClosure {
 private:
   OopClosureType* const _closure;
   MemRegion _bound;
+  DEBUG_ONLY(bool _expect_modifications;)
 
 public:
 
-  StackChunkOopIterateFilterClosure(OopClosureType* closure, MemRegion bound)
+  StackChunkOopIterateFilterClosure(OopClosureType* closure, MemRegion bound DEBUG_ONLY(COMMA bool expect_modifications))
     : _closure(closure),
-      _bound(bound) {}
+      _bound(bound)
+      DEBUG_ONLY(COMMA _expect_modifications(expect_modifications)) {}
 
   virtual void do_oop(oop* p)       override { do_oop_work(p); }
   virtual void do_oop(narrowOop* p) override { do_oop_work(p); }
@@ -85,7 +87,14 @@ public:
   template <typename T>
   void do_oop_work(T* p) {
     if (_bound.contains(p)) {
+#ifdef ASSERT
+      T before = *p;
+#endif
       Devirtualizer::do_oop(_closure, p);
+      assert(*p == before || _expect_modifications,
+             "Detected unexpected oop modification in a stack chunk - "
+             "perhaps you are accessing a stack chunk without the "
+             "WITH_NO_SIDEFFECTS decorators");
     }
   }
 };
@@ -113,6 +122,25 @@ public:
   }
 };
 
+#ifdef ASSERT
+static bool expect_modifications(stackChunkOop chunk) {
+  // We opt in to expect modifications to oops when oop_iterate is called
+  // on stack chunks. Otherwise, we expect that modifications should not happen
+  // as that can break derived pointers.
+  Thread* thread = Thread::current();
+  if (thread->is_ConcurrentGC_thread()) {
+    return true;
+  }
+  if (thread->is_Worker_thread()) {
+    return true;
+  }
+  if (thread->is_VM_thread() && SafepointSynchronize::is_at_safepoint()) {
+    return Universe::heap()->is_gc_active();
+  }
+  return false;
+}
+#endif
+
 void InstanceStackChunkKlass::do_methods(stackChunkOop chunk, OopIterateClosure* cl) {
   DoMethodsStackChunkFrameClosure closure(cl);
   chunk->iterate_stack(&closure);
@@ -122,12 +150,14 @@ class OopIterateStackChunkFrameClosure {
   OopIterateClosure* const _closure;
   MemRegion _bound;
   const bool _do_metadata;
+  DEBUG_ONLY(const bool _expect_modifications;)
 
 public:
-  OopIterateStackChunkFrameClosure(OopIterateClosure* closure, MemRegion mr)
+  OopIterateStackChunkFrameClosure(OopIterateClosure* closure, MemRegion mr, stackChunkOop chunk)
     : _closure(closure),
       _bound(mr),
-      _do_metadata(_closure->do_metadata()) {
+      _do_metadata(_closure->do_metadata())
+      DEBUG_ONLY(COMMA _expect_modifications(expect_modifications(chunk))) {
     assert(_closure != nullptr, "must be set");
   }
 
@@ -137,7 +167,7 @@ public:
       DoMethodsStackChunkFrameClosure(_closure).do_frame(f, map);
     }
 
-    StackChunkOopIterateFilterClosure<OopIterateClosure> cl(_closure, _bound);
+    StackChunkOopIterateFilterClosure<OopIterateClosure> cl(_closure, _bound DEBUG_ONLY(COMMA _expect_modifications));
     f.iterate_oops(&cl, map);
 
     return true;
@@ -145,14 +175,7 @@ public:
 };
 
 void InstanceStackChunkKlass::oop_oop_iterate_stack_slow(stackChunkOop chunk, OopIterateClosure* closure, MemRegion mr) {
-  if (UseZGC || UseShenandoahGC) {
-    // An OopClosure could apply barriers to a stack chunk. The side effects
-    // of the load barriers could destroy derived pointers, which must be
-    // processed before their base oop is processed. So we force processing
-    // of derived pointers before applying the closures.
-    chunk->relativize_derived_pointers_concurrently();
-  }
-  OopIterateStackChunkFrameClosure frame_closure(closure, mr);
+  OopIterateStackChunkFrameClosure frame_closure(closure, mr, chunk);
   chunk->iterate_stack(&frame_closure);
 }
 

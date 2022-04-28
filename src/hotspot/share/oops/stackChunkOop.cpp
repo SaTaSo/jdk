@@ -441,12 +441,6 @@ void stackChunkOopDesc::print_on(bool verbose, outputStream* st) const {
 
 #ifdef ASSERT
 
-template <typename P>
-static inline oop safe_load(P* addr) {
-  oop obj = RawAccess<>::oop_load(addr);
-  return NativeAccess<>::oop_load(&obj);
-}
-
 class StackChunkVerifyOopsClosure : public OopClosure {
   stackChunkOop _chunk;
   int _count;
@@ -459,8 +453,8 @@ public:
   void do_oop(narrowOop* p) override { do_oop_work(p); }
 
   template <typename T> inline void do_oop_work(T* p) {
-     _count++;
-    oop obj = safe_load(p);
+    _count++;
+    oop obj = NativeAccess<AS_NO_KEEPALIVE | WITH_NO_SIDE_EFFECTS>::oop_load(p);
     assert(obj == nullptr || dbg_is_good_oop(obj), "p: " INTPTR_FORMAT " obj: " INTPTR_FORMAT, p2i(p), p2i((oopDesc*)obj));
     if (_chunk->has_bitmap()) {
       BitMap::idx_t index = _chunk->bit_index_for(p);
@@ -547,7 +541,7 @@ public:
     T* p = _chunk->address_for_bit<T>(index);
     _count++;
 
-    oop obj = safe_load(p);
+    oop obj = NativeAccess<AS_NO_KEEPALIVE | WITH_NO_SIDE_EFFECTS>::oop_load(p);
     assert(obj == nullptr || dbg_is_good_oop(obj),
            "p: " INTPTR_FORMAT " obj: " INTPTR_FORMAT " index: " SIZE_FORMAT,
            p2i(p), p2i((oopDesc*)obj), index);

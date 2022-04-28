@@ -103,10 +103,10 @@ private:
 
   oop load_oop(oop* p) {
     if (Weak) {
-      return NativeAccess<AS_NO_KEEPALIVE | ON_PHANTOM_OOP_REF>::oop_load(p);
+      return NativeAccess<AS_NO_KEEPALIVE | WITH_NO_SIDE_EFFECTS | ON_PHANTOM_OOP_REF>::oop_load(p);
     }
 
-    return NativeAccess<AS_NO_KEEPALIVE>::oop_load(p);
+    return NativeAccess<AS_NO_KEEPALIVE | WITH_NO_SIDE_EFFECTS>::oop_load(p);
   }
 
 public:
@@ -133,10 +133,10 @@ private:
     assert(ZCollectedHeap::heap()->is_in(p), "Should be in heap");
 
     if (VisitReferents) {
-      return HeapAccess<AS_NO_KEEPALIVE | ON_UNKNOWN_OOP_REF>::oop_load_at(_base, _base->field_offset(p));
+      return HeapAccess<AS_NO_KEEPALIVE | WITH_NO_SIDE_EFFECTS | ON_UNKNOWN_OOP_REF>::oop_load_at(_base, _base->field_offset(p));
     }
 
-    return HeapAccess<AS_NO_KEEPALIVE>::oop_load(p);
+    return HeapAccess<AS_NO_KEEPALIVE | WITH_NO_SIDE_EFFECTS>::oop_load(p);
   }
 
 public:
