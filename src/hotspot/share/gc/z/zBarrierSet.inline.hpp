@@ -56,6 +56,10 @@ template <DecoratorSet decorators, typename BarrierSetT>
 inline oop ZBarrierSet::AccessBarrier<decorators, BarrierSetT>::load_barrier_on_oop_field_preloaded(oop* addr, oop o) {
   verify_decorators_absent<ON_UNKNOWN_OOP_REF>();
 
+  if (HasDecorator<decorators, WITH_NO_SIDE_EFFECTS>::value) {
+    addr = NULL;
+  }
+
   if (HasDecorator<decorators, AS_NO_KEEPALIVE>::value) {
     if (HasDecorator<decorators, ON_STRONG_OOP_REF>::value) {
       return ZBarrier::weak_load_barrier_on_oop_field_preloaded(addr, o);
@@ -83,6 +87,10 @@ inline oop ZBarrierSet::AccessBarrier<decorators, BarrierSetT>::load_barrier_on_
 
   const DecoratorSet decorators_known_strength =
     AccessBarrierSupport::resolve_possibly_unknown_oop_ref_strength<decorators>(base, offset);
+
+  if (HasDecorator<decorators, WITH_NO_SIDE_EFFECTS>::value) {
+    addr = NULL;
+  }
 
   if (HasDecorator<decorators, AS_NO_KEEPALIVE>::value) {
     if (decorators_known_strength & ON_STRONG_OOP_REF) {
