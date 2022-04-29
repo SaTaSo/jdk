@@ -608,7 +608,10 @@ static void adjust_gc(ZWorkerResizeInfo young_info, ZWorkerResizeInfo old_info) 
 
   const bool need_more_young_workers = young_info._current_nworkers < young_info._desired_nworkers;
   const bool need_more_old_workers = old_info._current_nworkers < old_info._desired_nworkers;
-  const bool too_many_total_threads = MAX2(young_info._current_nworkers, young_info._desired_nworkers) + old_info._current_nworkers > ConcGCThreads;
+  // Note that even if ConcGCThreads is 1, we have to allow one young and one old thread
+  // if they want to both run concurrently.
+  uint max_threads = MAX2(ConcGCThreads, 2u);
+  const bool too_many_total_threads = MAX2(young_info._current_nworkers, young_info._desired_nworkers) + old_info._current_nworkers > max_threads;
 
   if ((old_info._desired_nworkers != 0 && need_more_old_workers) || too_many_total_threads) {
     // Need to change major workers
