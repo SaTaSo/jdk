@@ -474,6 +474,12 @@ public:
   }
 };
 
+enum class ZRelocType {
+  young_to_young,
+  old_to_old,
+  young_to_old
+};
+
 template <typename Allocator>
 class ZRelocateWork : public StackObj {
 private:
@@ -549,6 +555,10 @@ private:
 
   void update_remset_old_to_old(zaddress from_addr, zaddress to_addr) const {
     // Old-to-old relocation - move existing remset bits
+    assert(_forwarding->to_age() == ZPageAge::old,
+           "Should only be called for old-to-old");
+    assert(_forwarding->from_age() == ZPageAge::old,
+           "Should only be called for old-to-old");
 
     // If this is called for an in-place relocated page, then this code has the
     // responsibility to clear the old remset bits. Extra care is needed because:
@@ -642,10 +652,6 @@ private:
     }
   }
 
-  void update_remset_promoted_all(zaddress to_addr) const {
-    ZRelocate::add_remset_for_fields(to_addr);
-  }
-
   static bool add_remset_if_young(volatile zpointer* p, zaddress addr) {
     if (ZHeap::heap()->is_young(addr)) {
       ZRelocate::add_remset(p);
@@ -710,30 +716,15 @@ private:
     return;
   }
 
-  void update_remset_promoted_filter_and_remap(zaddress to_addr) const {
+  void update_remset_promoted(zaddress to_addr) const {
+    assert(_forwarding->to_age() == ZPageAge::old,
+           "Should only be called for promotions");
+    assert(_forwarding->from_age() != ZPageAge::old,
+           "Should only be called for promotions");
     ZIterator::basic_oop_iterate(to_oop(to_addr), update_remset_promoted_filter_and_remap_per_field);
   }
 
-  void update_remset_promoted(zaddress to_addr) const {
-    switch (ZRelocateRemsetStrategy) {
-    case 0: update_remset_promoted_all(to_addr); break;
-    case 1: update_remset_promoted_filter_and_remap(to_addr); break;
-    case 2: /* Handled after relocation is done */ break;
-    default: fatal("Unsupported ZRelocateRemsetStrategy"); break;
-    };
-  }
-
-  void update_remset_for_fields(zaddress from_addr, zaddress to_addr) const {
-    if (_forwarding->to_age() == ZPageAge::old) {
-      // Need to deal with remset when moving stuff to old
-      if (_forwarding->from_age() == ZPageAge::old) {
-        update_remset_old_to_old(from_addr, to_addr);
-      } else {
-        update_remset_promoted(to_addr);
-      }
-    }
-  }
-
+  template <ZRelocType reloc_type>
   bool try_relocate_object(zaddress from_addr) {
     zaddress to_addr = try_relocate_object_inner(from_addr);
 
@@ -741,7 +732,11 @@ private:
       return false;
     }
 
-    update_remset_for_fields(from_addr, to_addr);
+    if (reloc_type == ZRelocType::old_to_old) {
+      update_remset_old_to_old(from_addr, to_addr);
+    } else if (reloc_type == ZRelocType::young_to_old) {
+      update_remset_promoted(to_addr);
+    }
 
     return true;
   }
@@ -766,11 +761,12 @@ private:
     return new_page;
   }
 
+  template <ZRelocType reloc_type>
   void relocate_object(oop obj) {
     const zaddress addr = to_zaddress(obj);
     assert(ZHeap::heap()->is_object_live(addr), "Should be live");
 
-    while (!try_relocate_object(addr)) {
+    while (!try_relocate_object<reloc_type>(addr)) {
       // Allocate a new target page, or if that fails, use the page being
       // relocated as the new target, which will cause it to be relocated
       // in-place.
@@ -807,6 +803,16 @@ public:
     _generation->increase_compacted(_other_compacted);
   }
 
+  void relocate_objects() {
+    if (_forwarding->to_age() != ZPageAge::old) {
+      _forwarding->object_iterate([&](oop obj) { relocate_object<ZRelocType::young_to_young>(obj); });
+    } else if (_forwarding->from_age() != ZPageAge::old) {
+      _forwarding->object_iterate([&](oop obj) { relocate_object<ZRelocType::young_to_old>(obj); });
+    } else {
+      _forwarding->object_iterate([&](oop obj) { relocate_object<ZRelocType::old_to_old>(obj); });
+    }
+  }
+
   void do_forwarding(ZForwarding* forwarding) {
     _forwarding = forwarding;
 
@@ -821,7 +827,7 @@ public:
     }
 
     // Relocate objects
-    _forwarding->object_iterate([&](oop obj) { relocate_object(obj); });
+    relocate_objects();
 
     if (forwarding->from_age() == ZPageAge::old) {
       log_trace(gc, page)("Relocate old from: " PTR_FORMAT " " PTR_FORMAT " done", untype(forwarding->page()->start()), untype(forwarding->page()->end()));
@@ -1049,11 +1055,6 @@ void ZRelocate::relocate(ZRelocationSet* relocation_set) {
 
   if (relocation_set->generation()->is_young()) {
     ZRelocateAddRemsetForFlipPromoted task(relocation_set->flip_promoted_pages());
-    workers()->run(&task);
-  }
-
-  if (relocation_set->generation()->is_young() && ZRelocateRemsetStrategy == 2) {
-    ZRelocateAddRemsetForNormalPromoted task;
     workers()->run(&task);
   }
 
