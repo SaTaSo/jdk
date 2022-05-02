@@ -347,8 +347,8 @@ BitMap::get_prev_one_offset_aligned_left(idx_t l_offset, idx_t r_offset) const {
 }
 
 template <typename Function>
-inline bool BitMap::iterate_f(Function function, idx_t beg, idx_t end) {
-  for (idx_t index = beg; true; ++index) {
+inline bool BitMap::iterate_f(Function function, idx_t beg, idx_t end, int stride) {
+  for (idx_t index = beg; true; index += stride) {
     index = get_next_one_offset(index, end);
     if (index >= end) {
       return true;
@@ -363,7 +363,7 @@ inline bool BitMap::iterate(BitMapClosure* cl, idx_t beg, idx_t end) {
     return cl->do_bit(index);
   };
 
-  return iterate_f(cl_to_lambda, beg, end);
+  return iterate_f(cl_to_lambda, beg, end, 1 /* stride */);
 }
 
 template <typename Function>

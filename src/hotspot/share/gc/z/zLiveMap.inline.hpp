@@ -150,7 +150,7 @@ inline void ZLiveMap::iterate_segment(BitMap::idx_t segment, Function function) 
   const BitMap::idx_t start_index = segment_start(segment);
   const BitMap::idx_t end_index   = segment_end(segment);
 
-  _bitmap.iterate_f(function, start_index, end_index);
+  _bitmap.iterate_f(function, start_index, end_index, 2 /* stride */);
 }
 
 template <typename Function>
@@ -159,17 +159,9 @@ inline void ZLiveMap::iterate(ZGenerationId id, Function function) {
     return;
   }
 
-  auto live_only = [&](BitMap::idx_t index) -> bool {
-    if ((index & 1) == 0) {
-      return function(index);
-    }
-    // Don't visit the finalizable bits
-    return true;
-  };
-
   for (BitMap::idx_t segment = first_live_segment(); segment < nsegments; segment = next_live_segment(segment)) {
     // For each live segment
-    iterate_segment(segment, live_only);
+    iterate_segment(segment, function);
   }
 }
 

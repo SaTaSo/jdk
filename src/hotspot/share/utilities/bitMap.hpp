@@ -326,10 +326,10 @@ class BitMap {
   // Returns true if the iteration completed, false if terminated early because
   // the function returned false.
   template <typename Function>
-  bool iterate_f(Function function, idx_t beg, idx_t end);
+  bool iterate_f(Function function, idx_t beg, idx_t end, int stride);
   template <typename Function>
   bool iterate_f(Function function) {
-    return iterate_f(function, 0, _size);
+    return iterate_f(function, 0, _size, 1 /* stride */);
   }
 
   bool iterate(BitMapClosure* cl, idx_t beg, idx_t end);
