@@ -196,6 +196,9 @@ private:
   uint        _tenuring_threshold;
   ZRemembered _remembered;
 
+  void flip_mark_start();
+  void flip_relocate_start();
+
   void mark_start();
   void mark_roots();
   void mark_follow();
@@ -258,6 +261,9 @@ private:
   ZWeakRootsProcessor _weak_roots_processor;
   ZUnload             _unload;
   int                 _total_collections_at_end;
+
+  void flip_mark_start();
+  void flip_relocate_start();
 
   void mark_start();
   void mark_roots();
