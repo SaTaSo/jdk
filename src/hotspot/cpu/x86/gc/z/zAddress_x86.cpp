@@ -51,6 +51,11 @@ void ZGlobalsPointers::pd_set_good_masks() {
     // When run from gtest, we have a G1 barrier set here
     return;
   }
+  if (BarrierSet::barrier_set() == NULL) {
+    // During bootstrapping, we don't have a barrier set here
+    return;
+  }
+
   ZBarrierSetAssembler* bs_asm = ZBarrierSet::assembler();
   bs_asm->patch_barriers();
 }
