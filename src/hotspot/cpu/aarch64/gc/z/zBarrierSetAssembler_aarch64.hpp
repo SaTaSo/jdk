@@ -166,6 +166,9 @@ public:
   void generate_c1_load_barrier_stub(LIR_Assembler* ce,
                                      ZLoadBarrierStubC1* stub) const;
 
+  void generate_c1_load_barrier_runtime_stub(StubAssembler* sasm,
+                                             DecoratorSet decorators) const;
+
   void generate_c1_store_barrier(LIR_Assembler* ce,
                                  LIR_Address* addr,
                                  LIR_Opr new_zaddress,
@@ -175,8 +178,8 @@ public:
   void generate_c1_store_barrier_stub(LIR_Assembler* ce,
                                       ZStoreBarrierStubC1* stub) const;
 
-  void generate_c1_load_barrier_runtime_stub(StubAssembler* sasm,
-                                             DecoratorSet decorators) const;
+  void generate_c1_store_barrier_runtime_stub(StubAssembler* sasm,
+                                              bool self_healing) const;
 #endif // COMPILER1
 
 #ifdef COMPILER2
