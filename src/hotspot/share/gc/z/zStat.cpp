@@ -1459,7 +1459,17 @@ void ZStatRelocation::print() {
   ZStatRelocationSummary medium_stats = {0};
   ZStatRelocationSummary large_stats = {0};
 
+  ZStatTablePrinter age_table(10, 18);
+  log_info(gc, reloc)("Age Table:");
+  log_info(gc, reloc)("%s", age_table()
+                      .fill()
+                      .center("Live")
+                      .center("Garbage")
+                      .end());
+
   for (uint i = 0; i <= ZPageAgeMax; ++i) {
+    size_t live = 0;
+    size_t bytes = 0;
     ZPageAge age = static_cast<ZPageAge>(i);
     auto small = _selector_stats.small(age);
     auto medium = _selector_stats.medium(age);
@@ -1469,6 +1479,30 @@ void ZStatRelocation::print() {
     small_stats.total += small.total();
     small_stats.empty += small.empty();
     small_stats.relocate += small.relocate();
+    live += small.live();
+    bytes += small.npages() * ZPageSizeSmall;
+
+    medium_stats.npages += medium.npages();
+    medium_stats.total += medium.total();
+    medium_stats.empty += medium.empty();
+    medium_stats.relocate += medium.relocate();
+    live += medium.live();
+    bytes += medium.npages() * ZPageSizeMedium;
+
+    large_stats.npages += large.npages();
+    large_stats.total += large.total();
+    large_stats.empty += large.empty();
+    large_stats.relocate += large.relocate();
+    live += large.live();
+    bytes += large.live();
+
+    if (bytes != 0) {
+      log_info(gc, reloc)("%s", age_table()
+                          .left(age == ZPageAge::eden ? "Eden" : (age == ZPageAge::old ? "Old" : "Survivor %d:"), i)
+                          .left(ZTABLE_ARGS(live))
+                          .left(ZTABLE_ARGS(bytes - live))
+                          .end());
+    }
   }
 
   print("Small", small_stats, _small_in_place_count);
