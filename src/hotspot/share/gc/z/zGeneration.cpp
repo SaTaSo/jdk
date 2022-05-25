@@ -29,6 +29,8 @@
 #include "gc/shared/gcVMOperations.hpp"
 #include "gc/shared/suspendibleThreadSet.hpp"
 #include "gc/z/zAllocator.inline.hpp"
+#include "gc/z/zBarrierSet.hpp"
+#include "gc/z/zBarrierSetAssembler.hpp"
 #include "gc/z/zBarrierSetNMethod.hpp"
 #include "gc/z/zBreakpoint.hpp"
 #include "gc/z/zCollectedHeap.hpp"
@@ -728,6 +730,7 @@ void ZGenerationYoung::mark_start() {
 
   // Flip address view
   ZGlobalsPointers::flip_young_mark_start();
+  ZBarrierSet::assembler()->patch_barriers();
 
   // Retire allocating pages
   ZAllocator::eden()->retire_pages();
@@ -790,6 +793,7 @@ void ZGenerationYoung::relocate_start() {
 
   // Flip address view
   ZGlobalsPointers::flip_young_relocate_start();
+  ZBarrierSet::assembler()->patch_barriers();
 
   // Enter relocate phase
   set_phase(Phase::Relocate);
@@ -1057,6 +1061,7 @@ void ZGenerationOld::mark_start() {
 
   // Flip address view
   ZGlobalsPointers::flip_old_mark_start();
+  ZBarrierSet::assembler()->patch_barriers();
 
   // Retire allocating pages
   ZAllocator::old()->retire_pages();
@@ -1210,6 +1215,7 @@ void ZGenerationOld::relocate_start() {
 
   // Flip address view
   ZGlobalsPointers::flip_old_relocate_start();
+  ZBarrierSet::assembler()->patch_barriers();
 
   // Enter relocate phase
   set_phase(Phase::Relocate);
