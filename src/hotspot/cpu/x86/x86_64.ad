@@ -5164,7 +5164,6 @@ instruct loadRange(rRegI dst, memory mem)
 instruct loadP(rRegP dst, memory mem)
 %{
   match(Set dst (LoadP mem));
-  predicate(n->as_Load()->barrier_data() == 0);
 
   ins_cost(125); // XXX
   format %{ "movq    $dst, $mem\t# ptr" %}
@@ -12193,7 +12192,6 @@ instruct compP_rReg(rFlagsRegU cr, rRegP op1, rRegP op2)
 instruct compP_rReg_mem(rFlagsRegU cr, rRegP op1, memory op2)
 %{
   match(Set cr (CmpP op1 (LoadP op2)));
-  predicate(n->in(2)->as_Load()->barrier_data() == 0);
 
   ins_cost(500); // XXX
   format %{ "cmpq    $op1, $op2\t# ptr" %}
@@ -12220,8 +12218,7 @@ instruct compP_rReg_mem(rFlagsRegU cr, rRegP op1, memory op2)
 // and raw pointers have no anti-dependencies.
 instruct compP_mem_rReg(rFlagsRegU cr, rRegP op1, memory op2)
 %{
-  predicate(n->in(2)->in(2)->bottom_type()->reloc() == relocInfo::none &&
-            n->in(2)->as_Load()->barrier_data() == 0);
+  predicate(n->in(2)->in(2)->bottom_type()->reloc() == relocInfo::none);
   match(Set cr (CmpP op1 (LoadP op2)));
 
   format %{ "cmpq    $op1, $op2\t# raw ptr" %}
@@ -12248,8 +12245,7 @@ instruct testP_reg(rFlagsReg cr, rRegP src, immP0 zero)
 // any compare to a zero should be eq/neq.
 instruct testP_mem(rFlagsReg cr, memory op, immP0 zero)
 %{
-  predicate((!UseCompressedOops || (CompressedOops::base() != NULL)) &&
-            n->in(1)->as_Load()->barrier_data() == 0);
+  predicate((!UseCompressedOops || (CompressedOops::base() != NULL)));
   match(Set cr (CmpP (LoadP op) zero));
 
   ins_cost(500); // XXX
@@ -12262,8 +12258,7 @@ instruct testP_mem(rFlagsReg cr, memory op, immP0 zero)
 
 instruct testP_mem_reg0(rFlagsReg cr, memory mem, immP0 zero)
 %{
-  predicate(UseCompressedOops && (CompressedOops::base() == NULL) &&
-            n->in(1)->as_Load()->barrier_data() == 0);
+  predicate(UseCompressedOops && (CompressedOops::base() == NULL));
   match(Set cr (CmpP (LoadP mem) zero));
 
   format %{ "cmpq    R12, $mem\t# ptr (R12_heapbase==0)" %}

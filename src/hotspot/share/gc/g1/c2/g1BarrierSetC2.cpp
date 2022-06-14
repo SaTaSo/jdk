@@ -31,11 +31,14 @@
 #include "gc/g1/g1ThreadLocalData.hpp"
 #include "gc/g1/heapRegion.hpp"
 #include "opto/arraycopynode.hpp"
+#include "opto/block.hpp"
 #include "opto/compile.hpp"
 #include "opto/escape.hpp"
 #include "opto/graphKit.hpp"
 #include "opto/idealKit.hpp"
+#include "opto/machnode.hpp"
 #include "opto/macro.hpp"
+#include "opto/narrowptrnode.hpp"
 #include "opto/rootnode.hpp"
 #include "opto/type.hpp"
 #include "utilities/macros.hpp"
@@ -236,6 +239,7 @@ void G1BarrierSetC2::pre_barrier(GraphKit* kit,
 
   // Now some of the values
   Node* marking = __ load(__ ctrl(), marking_adr, TypeInt::INT, active_type, Compile::AliasIdxRaw);
+  marking->as_Load()->set_barrier_data(get_barrier_number());
 
   // if (!marking)
   __ if_then(marking, BoolTest::ne, zero, unlikely); {
@@ -247,6 +251,10 @@ void G1BarrierSetC2::pre_barrier(GraphKit* kit,
       // load original value
       // alias_idx correct??
       pre_val = __ load(__ ctrl(), adr, val_type, bt, alias_idx);
+      Node* prev_val_verify = pre_val->as_DecodeN()->in(1);
+      if (prev_val_verify->is_Load()) {
+        prev_val_verify->as_Load()->set_barrier_data(get_barrier_number());
+      }
     }
 
     // if (pre_val != NULL)
@@ -261,7 +269,8 @@ void G1BarrierSetC2::pre_barrier(GraphKit* kit,
 
         // Now get the buffer location we will log the previous value into and store it
         Node *log_addr = __ AddP(no_base, buffer, next_index);
-        __ store(__ ctrl(), log_addr, pre_val, T_OBJECT, Compile::AliasIdxRaw, MemNode::unordered);
+        StoreNode* s = (__ store(__ ctrl(), log_addr, pre_val, T_OBJECT, Compile::AliasIdxRaw, MemNode::unordered))->as_Store();
+        s->set_barrier_data(get_barrier_number());
         // update the index
         __ store(__ ctrl(), index_adr, next_index, index_bt, Compile::AliasIdxRaw, MemNode::unordered);
 
@@ -276,6 +285,142 @@ void G1BarrierSetC2::pre_barrier(GraphKit* kit,
 
   // Final sync IdealKit and GraphKit.
   kit->final_sync(ideal);
+}
+
+void G1BarrierSetC2::increment_barrier_number() const {
+  *reinterpret_cast<int*>(Compile::current()->barrier_set_state()) =*reinterpret_cast<int*>(Compile::current()->barrier_set_state()) + 1;
+}
+
+int G1BarrierSetC2::get_barrier_number() const {
+  return *reinterpret_cast<int*>(Compile::current()->barrier_set_state());
+}
+
+void* G1BarrierSetC2::create_barrier_state(Arena* comp_arena) const {
+  int* result = new (comp_arena) int;
+  *result = 0;
+  return result;
+}
+
+static bool verify_block_has_no_safepoint(const Block* block, uint from, uint to) {
+  for (uint i = from; i < to; i++) {
+    Node* node = block->get_node(i);
+    if (node->is_MachCallLeaf()) {
+      // Skip leaf calls; they don't safepoint
+      continue;
+    }
+    if (node->is_MachCall() && !node->as_MachCall()->guaranteed_safepoint()) {
+      // Apparently these calls won't safepoint
+      continue;
+    }
+    if (node->is_MachSafePoint()) {
+#ifdef ASSERT
+      // Safepoint found. Game over.
+      block->get_node(i)->dump();
+#endif
+      return false;
+    }
+  }
+
+  return true;
+}
+
+static bool verify_block_has_no_safepoint(const Block* block) {
+  return verify_block_has_no_safepoint(block, 0, block->number_of_nodes());
+}
+
+static bool verify_no_safepoints_between(Node* access, Block* access_block, Node* dominator, Block* dominator_block) {
+  // Dominating block? Look around for safepoints
+  Compile* const C = Compile::current();
+  PhaseCFG* const cfg = C->cfg();
+  ResourceMark rm;
+  Block_List stack;
+  VectorSet visited(Thread::current()->resource_area());
+  stack.push(dominator_block);
+  if (!verify_block_has_no_safepoint(dominator_block)) {
+    return false;
+  }
+  while (stack.size() > 0) {
+    Block* block = stack.pop();
+    if (visited.test_set(block->_pre_order)) {
+      continue;
+    }
+    if (!verify_block_has_no_safepoint(block)) {
+      return false;
+    }
+    if (block == access_block) {
+      continue;
+    }
+
+    // Push predecessor blocks
+    for (uint p = 1; p < block->num_preds(); ++p) {
+      Block* pred = cfg->get_block_for_node(block->pred(p));
+      stack.push(pred);
+    }
+  }
+
+  return true;
+}
+
+void G1BarrierSetC2::late_barrier_analysis() const {
+  ResourceMark rm;
+  Compile* const C = Compile::current();
+  PhaseCFG* const cfg = C->cfg();
+  Block_List worklist;
+  Node_List barrier_stores;
+  Node_List barrier_loads;
+
+  for (uint i = 0; i < cfg->number_of_blocks(); ++i) {
+    const Block* const block = cfg->get_block(i);
+    for (uint j = 0; j < block->number_of_nodes(); ++j) {
+      const Node* const node = block->get_node(j);
+      if (!node->is_Mach()) {
+        continue;
+      }
+
+      MachNode* const mach = node->as_Mach();
+      switch (mach->ideal_Opcode()) {
+      case Op_LoadP:
+        if (mach->barrier_data() != 0) {
+          barrier_loads.push(mach);
+        }
+        break;
+      case Op_StoreP:
+        if (mach->barrier_data() != 0) {
+          barrier_stores.push(mach);
+        }
+        break;
+
+      default:
+        break;
+      }
+    }
+  }
+
+  for (uint i = 0; i < barrier_loads.size(); i++) {
+    MachNode* const load = barrier_loads.at(i)->as_Mach();
+    Block* const load_block = cfg->get_block_for_node(load);
+    int load_barrier_index = load->barrier_data();
+
+    for (uint j = 0; j < barrier_stores.size(); j++) {
+      MachNode* store = barrier_stores.at(j)->as_Mach();
+      Block* store_block = cfg->get_block_for_node(store);
+      int store_barrier_index = store->barrier_data();
+
+      if (store_barrier_index != load_barrier_index) {
+        continue;
+      }
+
+      if (load_block == store_block) {
+        ShouldNotReachHere();
+      } else if (load_block->dominates(store_block)) {
+        if (!verify_no_safepoints_between(load, load_block, store, store_block)) {
+          // Safepoints
+          ShouldNotReachHere();
+        }
+      } else {
+      }
+    }
+  }
 }
 
 /*
@@ -594,6 +739,8 @@ void G1BarrierSetC2::insert_pre_barrier(GraphKit* kit, Node* base_oop, Node* off
 #undef __
 
 Node* G1BarrierSetC2::load_at_resolved(C2Access& access, const Type* val_type) const {
+  increment_barrier_number();
+  access.set_barrier_data(get_barrier_number());
   DecoratorSet decorators = access.decorators();
   Node* adr = access.addr().node();
   Node* obj = access.base();
@@ -646,7 +793,44 @@ Node* G1BarrierSetC2::load_at_resolved(C2Access& access, const Type* val_type) c
     insert_pre_barrier(kit, obj, offset, load, !need_cpu_mem_bar);
   }
 
+  increment_barrier_number();
+
   return load;
+}
+
+Node* G1BarrierSetC2::store_at_resolved(C2Access& access, C2AccessValue& val) const {
+  DecoratorSet decorators = access.decorators();
+
+  const TypePtr* adr_type = access.addr().type();
+  Node* adr = access.addr().node();
+
+  bool is_array = (decorators & IS_ARRAY) != 0;
+  bool anonymous = (decorators & ON_UNKNOWN_OOP_REF) != 0;
+  bool in_heap = (decorators & IN_HEAP) != 0;
+  bool use_precise = is_array || anonymous;
+  bool tightly_coupled_alloc = (decorators & C2_TIGHTLY_COUPLED_ALLOC) != 0;
+
+  if (!access.is_oop() || tightly_coupled_alloc || (!in_heap && !anonymous)) {
+    return BarrierSetC2::store_at_resolved(access, val);
+  }
+
+  assert(access.is_parse_access(), "entry not supported at optimization time");
+  C2ParseAccess& parse_access = static_cast<C2ParseAccess&>(access);
+  GraphKit* kit = parse_access.kit();
+
+  uint adr_idx = kit->C->get_alias_index(adr_type);
+  assert(adr_idx != Compile::AliasIdxTop, "use other store_to_memory factory" );
+
+  pre_barrier(kit, true /* do_load */, kit->control(), access.base(), adr, adr_idx, val.node(),
+              static_cast<const TypeOopPtr*>(val.type()), NULL /* pre_val */, access.type());
+  Node* store = BarrierSetC2::store_at_resolved(access, val);
+  if (store->is_Store()) {
+    store->as_Store()->set_barrier_data(get_barrier_number());
+  }
+  post_barrier(kit, kit->control(), access.raw_access(), access.base(), adr, adr_idx, val.node(),
+               access.type(), use_precise);
+
+  return store;
 }
 
 bool G1BarrierSetC2::is_gc_barrier_node(Node* node) const {

@@ -83,8 +83,13 @@ protected:
   static const TypeFunc* write_ref_field_post_entry_Type();
 
   virtual Node* load_at_resolved(C2Access& access, const Type* val_type) const;
+  virtual Node* store_at_resolved(C2Access& access, C2AccessValue& val) const;
+  void increment_barrier_number() const;
+  int get_barrier_number() const;
+  void late_barrier_analysis() const;
 
  public:
+  virtual void* create_barrier_state(Arena* comp_arena) const;
   virtual bool is_gc_barrier_node(Node* node) const;
   virtual void eliminate_gc_barrier(PhaseMacroExpand* macro, Node* node) const;
   virtual Node* step_over_gc_barrier(Node* c) const;
