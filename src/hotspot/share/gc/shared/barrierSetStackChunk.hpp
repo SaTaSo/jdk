@@ -19,39 +19,35 @@
  * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
  * or visit www.oracle.com if you need additional information or have any
  * questions.
+ *
  */
 
-#ifndef SHARE_GC_Z_ZCONTINUATION_HPP
-#define SHARE_GC_Z_ZCONTINUATION_HPP
+#ifndef SHARE_GC_SHARED_BARRIERSETSTACKCHUNK_HPP
+#define SHARE_GC_SHARED_BARRIERSETSTACKCHUNK_HPP
 
-#include "memory/allStatic.hpp"
-#include "memory/iterator.hpp"
+#include "memory/allocation.hpp"
 #include "oops/oopsHierarchy.hpp"
+#include "utilities/globalDefinitions.hpp"
 
 class OopClosure;
-class ZHeap;
 
-class ZContinuation : public AllStatic {
+class BarrierSetStackChunk: public CHeapObj<mtGC> {
 public:
-  static bool requires_barriers(const ZHeap* heap, stackChunkOop chunk);
-
-  static oop load_oop(stackChunkOop chunk, void* addr);
-
-  class ZColorStackOopClosure : public OopClosure {
-  private:
-    uintptr_t _color;
-
+  class GCModeEncoder {
   public:
-    ZColorStackOopClosure(stackChunkOop chunk);
-    virtual void do_oop(oop* p) override;
-    virtual void do_oop(narrowOop* p) override;
+    virtual void encode(OopClosure* cl) = 0;
   };
 
-  class ZUncolorStackOopClosure : public OopClosure {
+  class GCModeDecoder {
   public:
-    virtual void do_oop(oop* p) override;
-    virtual void do_oop(narrowOop* p) override;
+    virtual void decode(OopClosure* cl) = 0;
   };
+
+  virtual void encode_gc_mode(stackChunkOop chunk, GCModeEncoder* encoder);
+  virtual void decode_gc_mode(stackChunkOop chunk, GCModeDecoder* decoder);
+
+  virtual oop load_oop(stackChunkOop chunk, oop* addr);
+  virtual oop load_oop(stackChunkOop chunk, narrowOop* addr);
 };
 
-#endif // SHARE_GC_Z_ZCONTINUATION_HPP
+#endif // SHARE_GC_SHARED_BARRIERSETSTACKCHUNK_HPP
