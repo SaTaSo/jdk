@@ -7691,7 +7691,7 @@ address generate_avx_ghash_processBlocks() {
       framesize // inclusive of return address
     };
 
-    CodeBuffer code("jfr_write_checkpoint", 512, 64);
+    CodeBuffer code("jfr_write_checkpoint", 1024, 64);
     MacroAssembler* _masm = new MacroAssembler(&code);
 
     address start = __ pc();
