@@ -24,11 +24,58 @@
 #include "precompiled.hpp"
 #include "gc/z/zAddress.inline.hpp"
 #include "gc/z/zBarrier.inline.hpp"
-#include "gc/z/zContinuation.hpp"
+#include "gc/z/zContinuation.inline.hpp"
 #include "gc/z/zStackChunkGCData.inline.hpp"
 #include "runtime/atomic.hpp"
 
-oop ZContinuation::load_oop(void* addr, stackChunkOop chunk) {
+class ZColorStackOopClosure : public OopClosure {
+private:
+  static THREAD_LOCAL uint64_t _color;
+
+public:
+  virtual void do_oop(oop* p) {
+    // Convert zaddress to zpointer
+    zaddress_unsafe* p_zaddress_unsafe = (zaddress_unsafe*)p;
+    zpointer* p_zpointer = (zpointer*)p;
+    *p_zpointer = ZAddress::color(*p_zaddress_unsafe, _color);
+
+  }
+
+  virtual void do_oop(narrowOop* p) {
+    ShouldNotReachHere();
+  }
+
+  static void set_color(uint64_t color) {
+    _color = color;
+  }
+};
+
+THREAD_LOCAL uint64_t ZColorStackOopClosure::_color;
+
+class ZUncolorStackOopClosure : public OopClosure {
+public:
+  void do_oop(oop* p) override {
+    zpointer ptr = *(volatile zpointer*)p;
+    zaddress addr = ZPointer::uncolor(ptr);
+    *(volatile zaddress*)p = addr;
+  }
+
+  void do_oop(narrowOop* p) override {}
+};
+
+static ZColorStackOopClosure _color_closure;
+static ZUncolorStackOopClosure _uncolor_closure;
+
+OopClosure* ZContinuation::color_closure(stackChunkOop chunk) {
+  _color_closure.set_color(ZStackChunkGCData::color(chunk));
+  return &_color_closure;
+}
+
+OopClosure* ZContinuation::uncolor_closure(stackChunkOop chunk) {
+  return &_uncolor_closure;
+}
+
+oop ZContinuation::load_oop(stackChunkOop chunk, void* addr) {
   volatile uint64_t* value_addr = reinterpret_cast<volatile uint64_t*>(addr);
   uint64_t value = Atomic::load(value_addr);
 

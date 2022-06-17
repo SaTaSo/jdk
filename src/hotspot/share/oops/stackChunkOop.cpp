@@ -25,6 +25,8 @@
 #include "precompiled.hpp"
 #include "code/compiledMethod.hpp"
 #include "code/scopeDesc.hpp"
+#include "gc/shared/barrierSet.hpp"
+#include "gc/shared/barrierSetStackChunk.hpp"
 #include "logging/log.hpp"
 #include "logging/logStream.hpp"
 #include "memory/memRegion.hpp"
@@ -35,9 +37,21 @@
 #include "runtime/registerMap.hpp"
 #include "runtime/smallRegisterMap.inline.hpp"
 #include "runtime/stackChunkFrameStream.inline.hpp"
-#if INCLUDE_ZGC
-#include "gc/z/zContinuation.inline.hpp"
-#endif
+
+class ProxyOopClosure : public OopClosure {
+  OopClosure* _cl;
+
+public:
+  ProxyOopClosure(OopClosure* cl) : _cl(cl) {}
+
+  void do_oop(oop* p) override {
+    _cl->do_oop(p);
+  }
+
+  void do_oop(narrowOop* p) override {
+    _cl->do_oop(p);
+  }
+};
 
 frame stackChunkOopDesc::top_frame(RegisterMap* map) {
   assert(!is_empty(), "");
@@ -175,16 +189,25 @@ public:
 };
 
 template <typename DerivedPointerClosureType>
-class FrameToDerivedPointerClosure {
+class EncodeGCModeConcurrentFrameClosure {
+  stackChunkOop _chunk;
   DerivedPointerClosureType* _cl;
 
 public:
-  FrameToDerivedPointerClosure(DerivedPointerClosureType* cl)
-    : _cl(cl) {}
+  EncodeGCModeConcurrentFrameClosure(stackChunkOop chunk, DerivedPointerClosureType* cl)
+    : _chunk(chunk),
+      _cl(cl) {
+  }
 
   template <ChunkFrames frame_kind, typename RegisterMapT>
   bool do_frame(const StackChunkFrameStream<frame_kind>& f, const RegisterMapT* map) {
     f.iterate_derived_pointers(_cl, map);
+
+    OopClosure* cl = BarrierSet::barrier_set()->barrier_set_stack_chunk()->encode_gc_mode_oop_closure(_chunk);
+    if (cl != NULL) {
+      f.iterate_oops(cl, map);
+    }
+
     return true;
   }
 };
@@ -259,14 +282,8 @@ void stackChunkOopDesc::relativize_derived_pointers_concurrently() {
   }
 
   DerivedPointersSupport::RelativizeClosure derived_cl;
-  FrameToDerivedPointerClosure<decltype(derived_cl)> frame_cl(&derived_cl);
+  EncodeGCModeConcurrentFrameClosure<decltype(derived_cl)> frame_cl(this, &derived_cl);
   iterate_stack(&frame_cl);
-
-#if INCLUDE_ZGC
-  if (UseZGC) {
-    ZContinuation::color_stack_pointers(this);
-  }
-#endif
 
   release_relativization();
 }
@@ -274,7 +291,7 @@ void stackChunkOopDesc::relativize_derived_pointers_concurrently() {
 enum class OopKind { Narrow, Wide };
 
 template <OopKind kind>
-class CompressOopsAndBuildBitmapOopClosure : public OopClosure {
+class EncodeGCModeOopClosure : public OopClosure {
   stackChunkOop _chunk;
   BitMapView _bm;
 
@@ -292,7 +309,7 @@ class CompressOopsAndBuildBitmapOopClosure : public OopClosure {
   }
 
 public:
-  CompressOopsAndBuildBitmapOopClosure(stackChunkOop chunk)
+  EncodeGCModeOopClosure(stackChunkOop chunk)
     : _chunk(chunk), _bm(chunk->bitmap()) {}
 
   virtual void do_oop(oop* p) override {
@@ -322,7 +339,7 @@ public:
     DerivedPointersSupport::RelativizeClosure derived_cl;
     f.iterate_derived_pointers(&derived_cl, map);
 
-    CompressOopsAndBuildBitmapOopClosure<kind> cl(_chunk);
+    EncodeGCModeOopClosure<kind> cl(_chunk);
     f.iterate_oops(&cl, map);
 
     return true;
@@ -400,39 +417,22 @@ template void stackChunkOopDesc::do_barriers0<stackChunkOopDesc::BarrierType::St
 template void stackChunkOopDesc::do_barriers0<stackChunkOopDesc::BarrierType::Load> (const StackChunkFrameStream<ChunkFrames::CompiledOnly>& f, const SmallRegisterMap* map);
 template void stackChunkOopDesc::do_barriers0<stackChunkOopDesc::BarrierType::Store>(const StackChunkFrameStream<ChunkFrames::CompiledOnly>& f, const SmallRegisterMap* map);
 
-class UncompressOopsOopClosure : public OopClosure {
-public:
-  void do_oop(oop* p) override {
-    assert(UseCompressedOops, "Only needed with compressed oops");
-    oop obj = CompressedOops::decode(*(narrowOop*)p);
-    assert(obj == nullptr || dbg_is_good_oop(obj), "p: " INTPTR_FORMAT " obj: " INTPTR_FORMAT, p2i(p), p2i((oopDesc*)obj));
-    *p = obj;
-  }
-
-  void do_oop(narrowOop* p) override {}
-};
-
 template <typename RegisterMapT>
 void stackChunkOopDesc::fix_thawed_frame(const frame& f, const RegisterMapT* map) {
   if (!(is_gc_mode() || requires_barriers())) {
     return;
   }
 
-  if (has_bitmap() && UseCompressedOops) {
-    UncompressOopsOopClosure oop_closure;
+  OopClosure* cl = BarrierSet::barrier_set()->barrier_set_stack_chunk()->decode_gc_mode_oop_closure(this);
+  if (cl != NULL) {
+    ProxyOopClosure oop_closure(cl);
     if (f.is_interpreted_frame()) {
       f.oops_interpreted_do(&oop_closure, nullptr);
     } else {
-      OopMapDo<UncompressOopsOopClosure, DerivedOopClosure, SkipNullValue> visitor(&oop_closure, nullptr);
+      OopMapDo<ProxyOopClosure, DerivedOopClosure, SkipNullValue> visitor(&oop_closure, nullptr);
       visitor.oops_do(&f, map, f.oop_map());
     }
   }
-
-#if INCLUDE_ZGC
-  if (UseZGC) {
-    ZContinuation::uncolor_stack_pointers(f, map);
-  }
-#endif
 
   if (f.is_compiled_frame() && f.oop_map()->has_derived_oops()) {
     DerivedPointersSupport::DerelativizeClosure derived_closure;

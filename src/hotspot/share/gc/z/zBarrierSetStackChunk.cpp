@@ -19,25 +19,28 @@
  * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
  * or visit www.oracle.com if you need additional information or have any
  * questions.
+ *
  */
 
-#ifndef SHARE_GC_Z_ZCONTINUATION_HPP
-#define SHARE_GC_Z_ZCONTINUATION_HPP
+#include "precompiled.hpp"
+#include "gc/z/zBarrierSetStackChunk.hpp"
+#include "gc/z/zContinuation.hpp"
+#include "utilities/debug.hpp"
 
-#include "memory/allStatic.hpp"
-#include "oops/oopsHierarchy.hpp"
+OopClosure* ZBarrierSetStackChunk::encode_gc_mode_oop_closure(stackChunkOop chunk) {
+  return ZContinuation::color_closure(chunk);
+}
 
-class OopClosure;
-class ZHeap;
+OopClosure* ZBarrierSetStackChunk::decode_gc_mode_oop_closure(stackChunkOop chunk) {
+  return ZContinuation::uncolor_closure(chunk);
+}
 
-class ZContinuation : public AllStatic {
-public:
-  static bool requires_barriers(const ZHeap* heap, stackChunkOop chunk);
+oop ZBarrierSetStackChunk::load_oop(stackChunkOop chunk, oop* addr) {
+  return ZContinuation::load_oop(chunk, addr);
+}
 
-  static OopClosure* color_closure(stackChunkOop chunk);
-  static OopClosure* uncolor_closure(stackChunkOop chunk);
 
-  static oop load_oop(stackChunkOop chunk, void* addr);
-};
-
-#endif // SHARE_GC_Z_ZCONTINUATION_HPP
+oop ZBarrierSetStackChunk::load_oop(stackChunkOop chunk, narrowOop* addr) {
+  ShouldNotReachHere();
+  return NULL;
+}

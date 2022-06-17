@@ -19,25 +19,15 @@
  * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
  * or visit www.oracle.com if you need additional information or have any
  * questions.
+ *
  */
 
-#ifndef SHARE_GC_Z_ZCONTINUATION_HPP
-#define SHARE_GC_Z_ZCONTINUATION_HPP
+#ifndef SHARE_GC_SHENANDOAH_SHENANDOAHBARRIERSETSTACKCHUNK_HPP
+#define SHARE_GC_SHENANDOAH_SHENANDOAHBARRIERSETSTACKCHUNK_HPP
 
-#include "memory/allStatic.hpp"
-#include "oops/oopsHierarchy.hpp"
+#include "gc/shared/barrierSetStackChunk.hpp"
 
-class OopClosure;
-class ZHeap;
-
-class ZContinuation : public AllStatic {
-public:
-  static bool requires_barriers(const ZHeap* heap, stackChunkOop chunk);
-
-  static OopClosure* color_closure(stackChunkOop chunk);
-  static OopClosure* uncolor_closure(stackChunkOop chunk);
-
-  static oop load_oop(stackChunkOop chunk, void* addr);
+class ShenandoahBarrierSetStackChunk : public BarrierSetStackChunk {
 };
 
-#endif // SHARE_GC_Z_ZCONTINUATION_HPP
+#endif // SHARE_GC_SHENANDOAH_SHENANDOAHBARRIERSETSTACKCHUNK_HPP

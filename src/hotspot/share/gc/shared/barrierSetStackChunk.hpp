@@ -19,25 +19,25 @@
  * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
  * or visit www.oracle.com if you need additional information or have any
  * questions.
+ *
  */
 
-#ifndef SHARE_GC_Z_ZCONTINUATION_HPP
-#define SHARE_GC_Z_ZCONTINUATION_HPP
+#ifndef SHARE_GC_SHARED_BARRIERSETSTACKCHUNK_HPP
+#define SHARE_GC_SHARED_BARRIERSETSTACKCHUNK_HPP
 
-#include "memory/allStatic.hpp"
+#include "memory/allocation.hpp"
 #include "oops/oopsHierarchy.hpp"
+#include "utilities/globalDefinitions.hpp"
 
 class OopClosure;
-class ZHeap;
 
-class ZContinuation : public AllStatic {
+class BarrierSetStackChunk: public CHeapObj<mtGC> {
 public:
-  static bool requires_barriers(const ZHeap* heap, stackChunkOop chunk);
+  virtual OopClosure* encode_gc_mode_oop_closure(stackChunkOop chunk);
+  virtual OopClosure* decode_gc_mode_oop_closure(stackChunkOop chunk);
 
-  static OopClosure* color_closure(stackChunkOop chunk);
-  static OopClosure* uncolor_closure(stackChunkOop chunk);
-
-  static oop load_oop(stackChunkOop chunk, void* addr);
+  virtual oop load_oop(stackChunkOop chunk, oop* addr);
+  virtual oop load_oop(stackChunkOop chunk, narrowOop* addr);
 };
 
-#endif // SHARE_GC_Z_ZCONTINUATION_HPP
+#endif // SHARE_GC_SHARED_BARRIERSETSTACKCHUNK_HPP
