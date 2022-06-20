@@ -38,21 +38,6 @@
 #include "runtime/smallRegisterMap.inline.hpp"
 #include "runtime/stackChunkFrameStream.inline.hpp"
 
-class ProxyOopClosure : public OopClosure {
-  OopClosure* _cl;
-
-public:
-  ProxyOopClosure(OopClosure* cl) : _cl(cl) {}
-
-  void do_oop(oop* p) override {
-    _cl->do_oop(p);
-  }
-
-  void do_oop(narrowOop* p) override {
-    _cl->do_oop(p);
-  }
-};
-
 frame stackChunkOopDesc::top_frame(RegisterMap* map) {
   assert(!is_empty(), "");
   StackChunkFrameStream<ChunkFrames::Mixed> fs(this);
@@ -203,10 +188,12 @@ public:
   bool do_frame(const StackChunkFrameStream<frame_kind>& f, const RegisterMapT* map) {
     f.iterate_derived_pointers(_cl, map);
 
-    OopClosure* cl = BarrierSet::barrier_set()->barrier_set_stack_chunk()->encode_gc_mode_oop_closure(_chunk);
-    if (cl != NULL) {
-      f.iterate_oops(cl, map);
-    }
+    BarrierSetStackChunk* bs_chunk = BarrierSet::barrier_set()->barrier_set_stack_chunk();
+    bs_chunk->encode_gc_mode(_chunk, [&](OopClosure* cl){
+      if (cl != NULL) {
+        f.iterate_oops(cl, map);
+      }
+    });
 
     return true;
   }
@@ -423,16 +410,17 @@ void stackChunkOopDesc::fix_thawed_frame(const frame& f, const RegisterMapT* map
     return;
   }
 
-  OopClosure* cl = BarrierSet::barrier_set()->barrier_set_stack_chunk()->decode_gc_mode_oop_closure(this);
-  if (cl != NULL) {
-    ProxyOopClosure oop_closure(cl);
-    if (f.is_interpreted_frame()) {
-      f.oops_interpreted_do(&oop_closure, nullptr);
-    } else {
-      OopMapDo<ProxyOopClosure, DerivedOopClosure, SkipNullValue> visitor(&oop_closure, nullptr);
-      visitor.oops_do(&f, map, f.oop_map());
+  BarrierSetStackChunk* bs_chunk = BarrierSet::barrier_set()->barrier_set_stack_chunk();
+  bs_chunk->decode_gc_mode(this, [&](OopClosure* cl) {
+    if (cl != NULL) {
+      if (f.is_interpreted_frame()) {
+        f.oops_interpreted_do(cl, nullptr);
+      } else {
+        OopMapDo<OopClosure, DerivedOopClosure, SkipNullValue> visitor(cl, nullptr);
+        visitor.oops_do(&f, map, f.oop_map());
+      }
     }
-  }
+  });
 
   if (f.is_compiled_frame() && f.oop_map()->has_derived_oops()) {
     DerivedPointersSupport::DerelativizeClosure derived_closure;

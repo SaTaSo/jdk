@@ -25,6 +25,7 @@
 #define SHARE_GC_Z_ZCONTINUATION_HPP
 
 #include "memory/allStatic.hpp"
+#include "memory/iterator.hpp"
 #include "oops/oopsHierarchy.hpp"
 
 class OopClosure;
@@ -34,10 +35,23 @@ class ZContinuation : public AllStatic {
 public:
   static bool requires_barriers(const ZHeap* heap, stackChunkOop chunk);
 
-  static OopClosure* color_closure(stackChunkOop chunk);
-  static OopClosure* uncolor_closure(stackChunkOop chunk);
-
   static oop load_oop(stackChunkOop chunk, void* addr);
+
+  class ZColorStackOopClosure : public OopClosure {
+  private:
+    uintptr_t _color;
+
+  public:
+    ZColorStackOopClosure(stackChunkOop chunk);
+    virtual void do_oop(oop* p) override;
+    virtual void do_oop(narrowOop* p) override;
+  };
+
+  class ZUncolorStackOopClosure : public OopClosure {
+  public:
+    virtual void do_oop(oop* p) override;
+    virtual void do_oop(narrowOop* p) override;
+  };
 };
 
 #endif // SHARE_GC_Z_ZCONTINUATION_HPP

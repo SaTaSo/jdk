@@ -28,63 +28,42 @@
 #include "gc/z/zStackChunkGCData.inline.hpp"
 #include "runtime/atomic.hpp"
 
-class ZColorStackOopClosure : public OopClosure {
-private:
-  static THREAD_LOCAL uint64_t _color;
-
-public:
-  virtual void do_oop(oop* p) {
-    // Convert zaddress to zpointer
-    zaddress_unsafe* p_zaddress_unsafe = (zaddress_unsafe*)p;
-    zpointer* p_zpointer = (zpointer*)p;
-    *p_zpointer = ZAddress::color(*p_zaddress_unsafe, _color);
-
-  }
-
-  virtual void do_oop(narrowOop* p) {
-    ShouldNotReachHere();
-  }
-
-  static void set_color(uint64_t color) {
-    _color = color;
-  }
-};
-
-THREAD_LOCAL uint64_t ZColorStackOopClosure::_color;
-
-class ZUncolorStackOopClosure : public OopClosure {
-public:
-  void do_oop(oop* p) override {
-    zpointer ptr = *(volatile zpointer*)p;
-    zaddress addr = ZPointer::uncolor(ptr);
-    *(volatile zaddress*)p = addr;
-  }
-
-  void do_oop(narrowOop* p) override {}
-};
-
-static ZColorStackOopClosure _color_closure;
-static ZUncolorStackOopClosure _uncolor_closure;
-
-OopClosure* ZContinuation::color_closure(stackChunkOop chunk) {
-  _color_closure.set_color(ZStackChunkGCData::color(chunk));
-  return &_color_closure;
+ZContinuation::ZColorStackOopClosure::ZColorStackOopClosure(stackChunkOop chunk)
+    : _color(ZStackChunkGCData::color(chunk)) {
 }
 
-OopClosure* ZContinuation::uncolor_closure(stackChunkOop chunk) {
-  return &_uncolor_closure;
+void ZContinuation::ZColorStackOopClosure::do_oop(oop* p) {
+  // Convert zaddress to zpointer
+  zaddress_unsafe* p_zaddress_unsafe = (zaddress_unsafe*)p;
+  zpointer* p_zpointer = (zpointer*)p;
+  *p_zpointer = ZAddress::color(*p_zaddress_unsafe, _color);
+
+}
+
+void ZContinuation::ZColorStackOopClosure::do_oop(narrowOop* p) {
+  ShouldNotReachHere();
+}
+
+void ZContinuation::ZUncolorStackOopClosure::do_oop(oop* p) {
+  zpointer ptr = *(volatile zpointer*)p;
+  zaddress addr = ZPointer::uncolor(ptr);
+  *(volatile zaddress*)p = addr;
+}
+
+void ZContinuation::ZUncolorStackOopClosure::do_oop(narrowOop* p) {
+  ShouldNotReachHere();
 }
 
 oop ZContinuation::load_oop(stackChunkOop chunk, void* addr) {
-  volatile uint64_t* value_addr = reinterpret_cast<volatile uint64_t*>(addr);
-  uint64_t value = Atomic::load(value_addr);
+  volatile uintptr_t* value_addr = reinterpret_cast<volatile uintptr_t*>(addr);
+  uintptr_t value = Atomic::load(value_addr);
 
   if ((value & ~ZPointerAllMetadataMask) == 0) {
     // Must be null of some sort
     return (oop)NULL;
   }
 
-  uint64_t impossible_zaddress_mask = ~((ZAddressHeapBase - 1) | ZAddressHeapBase);
+  uintptr_t impossible_zaddress_mask = ~((ZAddressHeapBase - 1) | ZAddressHeapBase);
 
   if ((value & impossible_zaddress_mask) != 0) {
     // If it isn't a zaddress, it's a zpointer
@@ -98,7 +77,7 @@ oop ZContinuation::load_oop(stackChunkOop chunk, void* addr) {
   // matches the color of the chunk, which was populated when the chunk
   // was allocated. Therefore, we can create a zpointer based on the address
   // and the chunk color.
-  uint64_t color = ZStackChunkGCData::color(chunk);
+  uintptr_t color = ZStackChunkGCData::color(chunk);
   zpointer zptr = ZAddress::color(zaddr, color);
 
   if (!ZPointer::is_load_good(zptr)) {
