@@ -173,6 +173,23 @@ public:
   };
 };
 
+template <ChunkFrames frame_kind, typename RegisterMapT>
+class GCModeEncoderImpl : public BarrierSetStackChunk::GCModeEncoder {
+private:
+  const StackChunkFrameStream<frame_kind>& _f;
+  const RegisterMapT* _map;
+
+public:
+  GCModeEncoderImpl(const StackChunkFrameStream<frame_kind>& f, const RegisterMapT* map)
+    : _f(f),
+      _map(map) {
+  }
+
+  virtual void encode(OopClosure* cl) override {
+    _f.iterate_oops(cl, _map);
+  }
+};
+
 template <typename DerivedPointerClosureType>
 class EncodeGCModeConcurrentFrameClosure {
   stackChunkOop _chunk;
@@ -189,11 +206,8 @@ public:
     f.iterate_derived_pointers(_cl, map);
 
     BarrierSetStackChunk* bs_chunk = BarrierSet::barrier_set()->barrier_set_stack_chunk();
-    bs_chunk->encode_gc_mode(_chunk, [&](OopClosure* cl){
-      if (cl != NULL) {
-        f.iterate_oops(cl, map);
-      }
-    });
+    GCModeEncoderImpl<frame_kind, RegisterMapT> encoder(f, map);
+    bs_chunk->encode_gc_mode(_chunk, &encoder);
 
     return true;
   }
@@ -405,22 +419,36 @@ template void stackChunkOopDesc::do_barriers0<stackChunkOopDesc::BarrierType::Lo
 template void stackChunkOopDesc::do_barriers0<stackChunkOopDesc::BarrierType::Store>(const StackChunkFrameStream<ChunkFrames::CompiledOnly>& f, const SmallRegisterMap* map);
 
 template <typename RegisterMapT>
+class GCModeDecoderImpl : public BarrierSetStackChunk::GCModeDecoder {
+private:
+  const frame& _f;
+  const RegisterMapT* _map;
+
+public:
+  GCModeDecoderImpl(const frame& f, const RegisterMapT* map)
+    : _f(f),
+      _map(map) {
+  }
+
+  virtual void decode(OopClosure* cl) override {
+    if (_f.is_interpreted_frame()) {
+      _f.oops_interpreted_do(cl, nullptr);
+    } else {
+      OopMapDo<OopClosure, DerivedOopClosure, SkipNullValue> visitor(cl, nullptr);
+      visitor.oops_do(&_f, _map, _f.oop_map());
+    }
+  }
+};
+
+template <typename RegisterMapT>
 void stackChunkOopDesc::fix_thawed_frame(const frame& f, const RegisterMapT* map) {
   if (!(is_gc_mode() || requires_barriers())) {
     return;
   }
 
   BarrierSetStackChunk* bs_chunk = BarrierSet::barrier_set()->barrier_set_stack_chunk();
-  bs_chunk->decode_gc_mode(this, [&](OopClosure* cl) {
-    if (cl != NULL) {
-      if (f.is_interpreted_frame()) {
-        f.oops_interpreted_do(cl, nullptr);
-      } else {
-        OopMapDo<OopClosure, DerivedOopClosure, SkipNullValue> visitor(cl, nullptr);
-        visitor.oops_do(&f, map, f.oop_map());
-      }
-    }
-  });
+  GCModeDecoderImpl<RegisterMapT> decoder(f, map);
+  bs_chunk->decode_gc_mode(this, &decoder);
 
   if (f.is_compiled_frame() && f.oop_map()->has_derived_oops()) {
     DerivedPointersSupport::DerelativizeClosure derived_closure;

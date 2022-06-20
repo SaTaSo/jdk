@@ -43,14 +43,13 @@ public:
   void do_oop(narrowOop* p) override {}
 };
 
-static UncompressOopsOopClosure _uncompress_oop_closure;
-
-void BarrierSetStackChunk::encode_gc_mode(stackChunkOop chunk, std::function<void(OopClosure*)> encode_fn) {
+void BarrierSetStackChunk::encode_gc_mode(stackChunkOop chunk, GCModeEncoder* encoder) {
 }
 
-void BarrierSetStackChunk::decode_gc_mode(stackChunkOop chunk, std::function<void(OopClosure*)> decode_fn) {
+void BarrierSetStackChunk::decode_gc_mode(stackChunkOop chunk, GCModeDecoder* decoder) {
   if (chunk->has_bitmap() && UseCompressedOops) {
-    decode_fn(&_uncompress_oop_closure);
+    UncompressOopsOopClosure cl;
+    decoder->decode(&cl);
   }
 }
 

@@ -29,14 +29,22 @@
 #include "oops/oopsHierarchy.hpp"
 #include "utilities/globalDefinitions.hpp"
 
-#include <functional>
-
 class OopClosure;
 
 class BarrierSetStackChunk: public CHeapObj<mtGC> {
 public:
-  virtual void encode_gc_mode(stackChunkOop chunk, std::function<void(OopClosure*)> encode_fn);
-  virtual void decode_gc_mode(stackChunkOop chunk, std::function<void(OopClosure*)> decode_fn);
+  class GCModeEncoder {
+  public:
+    virtual void encode(OopClosure* cl) = 0;
+  };
+
+  class GCModeDecoder {
+  public:
+    virtual void decode(OopClosure* cl) = 0;
+  };
+
+  virtual void encode_gc_mode(stackChunkOop chunk, GCModeEncoder* encoder);
+  virtual void decode_gc_mode(stackChunkOop chunk, GCModeDecoder* decoder);
 
   virtual oop load_oop(stackChunkOop chunk, oop* addr);
   virtual oop load_oop(stackChunkOop chunk, narrowOop* addr);

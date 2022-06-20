@@ -27,14 +27,14 @@
 #include "gc/z/zContinuation.hpp"
 #include "utilities/debug.hpp"
 
-void ZBarrierSetStackChunk::encode_gc_mode(stackChunkOop chunk, std::function<void(OopClosure*)> encode_fn) {
+void ZBarrierSetStackChunk::encode_gc_mode(stackChunkOop chunk, GCModeEncoder* encoder) {
   ZContinuation::ZColorStackOopClosure cl(chunk);
-  encode_fn(&cl);
+  encoder->encode(&cl);
 }
 
-void ZBarrierSetStackChunk::decode_gc_mode(stackChunkOop chunk, std::function<void(OopClosure*)> decode_fn) {
+void ZBarrierSetStackChunk::decode_gc_mode(stackChunkOop chunk, GCModeDecoder* decoder) {
   ZContinuation::ZUncolorStackOopClosure cl;
-  decode_fn(&cl);
+  decoder->decode(&cl);
 }
 
 oop ZBarrierSetStackChunk::load_oop(stackChunkOop chunk, oop* addr) {

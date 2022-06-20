@@ -33,8 +33,8 @@ class OopClosure;
 
 class ZBarrierSetStackChunk : public BarrierSetStackChunk {
 public:
-  virtual void encode_gc_mode(stackChunkOop chunk, std::function<void(OopClosure*)> encode_fn) override;
-  virtual void decode_gc_mode(stackChunkOop chunk, std::function<void(OopClosure*)> decode_fn) override;
+  virtual void encode_gc_mode(stackChunkOop chunk, GCModeEncoder* encoder) override;
+  virtual void decode_gc_mode(stackChunkOop chunk, GCModeDecoder* decoder) override;
 
   virtual oop load_oop(stackChunkOop chunk, oop* addr) override;
   virtual oop load_oop(stackChunkOop chunk, narrowOop* addr) override;
