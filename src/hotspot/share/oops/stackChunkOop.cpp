@@ -289,46 +289,6 @@ void stackChunkOopDesc::relativize_derived_pointers_concurrently() {
   release_relativization();
 }
 
-enum class OopKind { Narrow, Wide };
-
-template <OopKind kind>
-class EncodeGCModeOopClosure : public OopClosure {
-  stackChunkOop _chunk;
-  BitMapView _bm;
-
-  void convert_oop_to_narrowOop(oop* p) {
-    oop obj = *p;
-    *p = nullptr;
-    *(narrowOop*)p = CompressedOops::encode(obj);
-  }
-
-  template <typename T>
-  void do_oop_work(T* p) {
-    BitMap::idx_t index = _chunk->bit_index_for(p);
-    assert(!_bm.at(index), "must not be set already");
-    _bm.set_bit(index);
-  }
-
-public:
-  EncodeGCModeOopClosure(stackChunkOop chunk)
-    : _chunk(chunk), _bm(chunk->bitmap()) {}
-
-  virtual void do_oop(oop* p) override {
-    if (kind == OopKind::Narrow) {
-      // Convert all oops to narrow before marking the oop in the bitmap.
-      convert_oop_to_narrowOop(p);
-      do_oop_work((narrowOop*)p);
-    } else {
-      do_oop_work(p);
-    }
-  }
-
-  virtual void do_oop(narrowOop* p) override {
-    do_oop_work(p);
-  }
-};
-
-template <OopKind kind>
 class TransformStackChunkClosure {
   stackChunkOop _chunk;
 
@@ -340,8 +300,9 @@ public:
     DerivedPointersSupport::RelativizeClosure derived_cl;
     f.iterate_derived_pointers(&derived_cl, map);
 
-    EncodeGCModeOopClosure<kind> cl(_chunk);
-    f.iterate_oops(&cl, map);
+    BarrierSetStackChunk* bs_chunk = BarrierSet::barrier_set()->barrier_set_stack_chunk();
+    GCModeEncoderImpl<frame_kind, RegisterMapT> encoder(f, map);
+    bs_chunk->encode_gc_mode(_chunk, &encoder);
 
     return true;
   }
@@ -355,13 +316,8 @@ void stackChunkOopDesc::transform() {
   set_has_bitmap(true);
   bitmap().clear();
 
-  if (UseCompressedOops) {
-    TransformStackChunkClosure<OopKind::Narrow> closure(this);
-    iterate_stack(&closure);
-  } else {
-    TransformStackChunkClosure<OopKind::Wide> closure(this);
-    iterate_stack(&closure);
-  }
+  TransformStackChunkClosure closure(this);
+  iterate_stack(&closure);
 }
 
 template <stackChunkOopDesc::BarrierType barrier, bool compressedOopsWithBitmap>
