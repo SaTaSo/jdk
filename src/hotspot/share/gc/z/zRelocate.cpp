@@ -1140,9 +1140,9 @@ private:
   ZJavaThreadsIterator _threads_iter;
 
 public:
-  ZRelocateStoreBufferInstallBasePointersTask() :
+  ZRelocateStoreBufferInstallBasePointersTask(ZGeneration* generation) :
     ZTask("ZRelocateStoreBufferInstallBasePointersTask"),
-    _threads_iter() {}
+    _threads_iter(generation) {}
 
   virtual void work() {
     ZRelocateStoreBufferInstallBasePointersThreadClosure fix_store_buffer_cl;
@@ -1324,7 +1324,7 @@ void ZRelocate::relocate(ZRelocationSet* relocation_set) {
     // Install the store buffer's base pointers before the
     // relocate task destroys the liveness information in
     // the relocated pages.
-    ZRelocateStoreBufferInstallBasePointersTask buffer_task;
+    ZRelocateStoreBufferInstallBasePointersTask buffer_task(_generation);
     workers()->run(&buffer_task);
   }
 

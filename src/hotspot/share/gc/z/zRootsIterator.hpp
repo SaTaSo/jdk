@@ -29,6 +29,8 @@
 #include "memory/iterator.hpp"
 #include "runtime/threadSMR.hpp"
 
+class ZGeneration;
+
 template <typename Iterator>
 class ZParallelApply {
 private:
@@ -36,8 +38,8 @@ private:
   volatile bool _completed;
 
 public:
-  ZParallelApply() :
-      _iter(),
+  ZParallelApply(ZGeneration* generation) :
+      _iter(generation),
       _completed(false) {}
 
   template <typename ClosureType>
@@ -49,10 +51,14 @@ public:
 };
 
 class ZOopStorageSetIteratorStrong {
+private:
   OopStorageSetStrongParState<true /* concurrent */, false /* is_const */> _iter;
+  ZGeneration* const _generation;
 
 public:
-  ZOopStorageSetIteratorStrong();
+  ZOopStorageSetIteratorStrong(ZGeneration* generation) :
+      _iter(),
+      _generation(generation) {}
 
   void apply(OopClosure* cl);
 };
@@ -60,9 +66,12 @@ public:
 class ZOopStorageSetIteratorWeak {
 private:
   OopStorageSetWeakParState<true /* concurrent */, false /* is_const */> _iter;
+  ZGeneration* const _generation;
 
 public:
-  ZOopStorageSetIteratorWeak();
+  ZOopStorageSetIteratorWeak(ZGeneration* generation) :
+      _iter(),
+      _generation(generation) {}
 
   void apply(OopClosure* cl);
 
@@ -70,17 +79,35 @@ public:
 };
 
 class ZCLDsIteratorStrong {
+private:
+  ZGeneration* const _generation;
+
 public:
+  ZCLDsIteratorStrong(ZGeneration* generation) :
+      _generation(generation) {}
+
   void apply(CLDClosure* cl);
 };
 
 class ZCLDsIteratorWeak {
+private:
+  ZGeneration* const _generation;
+
 public:
+  ZCLDsIteratorWeak(ZGeneration* generation) :
+      _generation(generation) {}
+
   void apply(CLDClosure* cl);
 };
 
 class ZCLDsIteratorAll {
+private:
+  ZGeneration* const _generation;
+
 public:
+  ZCLDsIteratorAll(ZGeneration* generation) :
+      _generation(generation) {}
+
   void apply(CLDClosure* cl);
 };
 
@@ -88,11 +115,15 @@ class ZJavaThreadsIterator {
 private:
   ThreadsListHandle _threads;
   volatile uint     _claimed;
+  ZGeneration* const _generation;
 
   uint claim();
 
 public:
-  ZJavaThreadsIterator();
+  ZJavaThreadsIterator(ZGeneration* generation) :
+      _threads(),
+      _claimed(0),
+      _generation(generation) {}
 
   void apply(ThreadClosure* cl);
 };
@@ -101,9 +132,10 @@ class ZNMethodsIteratorImpl {
 private:
   const bool _enabled;
   const bool _secondary;
+  ZGeneration* const _generation;
 
 protected:
-  ZNMethodsIteratorImpl(bool enabled, bool secondary);
+  ZNMethodsIteratorImpl(ZGeneration* generation, bool enabled, bool secondary);
   ~ZNMethodsIteratorImpl();
 
 public:
@@ -112,20 +144,20 @@ public:
 
 class ZNMethodsIteratorStrong : public ZNMethodsIteratorImpl {
 public:
-  ZNMethodsIteratorStrong() :
-      ZNMethodsIteratorImpl(!ClassUnloading /* enabled */, false /* secondary */) {}
+  ZNMethodsIteratorStrong(ZGeneration* generation) :
+      ZNMethodsIteratorImpl(generation, !ClassUnloading /* enabled */, false /* secondary */) {}
 };
 
 class ZNMethodsIteratorWeak : public ZNMethodsIteratorImpl {
 public:
-  ZNMethodsIteratorWeak() :
-      ZNMethodsIteratorImpl(true /* enabled */, true /* secondary */) {}
+  ZNMethodsIteratorWeak(ZGeneration* generation) :
+      ZNMethodsIteratorImpl(generation, true /* enabled */, true /* secondary */) {}
 };
 
 class ZNMethodsIteratorAll : public ZNMethodsIteratorImpl {
 public:
-  ZNMethodsIteratorAll() :
-      ZNMethodsIteratorImpl(true /* enabled */, true /* secondary */) {}
+  ZNMethodsIteratorAll(ZGeneration* generation) :
+      ZNMethodsIteratorImpl(generation, true /* enabled */, true /* secondary */) {}
 };
 
 class ZRootsIteratorStrongUncolored {
@@ -134,6 +166,10 @@ private:
   ZParallelApply<ZNMethodsIteratorStrong> _nmethods_strong;
 
 public:
+  ZRootsIteratorStrongUncolored(ZGeneration* generation) :
+      _java_threads(generation),
+      _nmethods_strong(generation) {}
+
   void apply(ThreadClosure* thread_cl,
              NMethodClosure* nm_cl);
 };
@@ -143,6 +179,9 @@ private:
   ZParallelApply<ZNMethodsIteratorWeak> _nmethods_weak;
 
 public:
+  ZRootsIteratorWeakUncolored(ZGeneration* generation) :
+      _nmethods_weak(generation) {}
+
   void apply(NMethodClosure* nm_cl);
 };
 
@@ -152,6 +191,10 @@ private:
   ZParallelApply<ZNMethodsIteratorAll> _nmethods_all;
 
 public:
+  ZRootsIteratorAllUncolored(ZGeneration* generation) :
+      _java_threads(generation),
+      _nmethods_all(generation) {}
+
   void apply(ThreadClosure* thread_cl,
              NMethodClosure* nm_cl);
 };
@@ -162,6 +205,10 @@ private:
   ZParallelApply<ZCLDsIteratorStrong>          _clds_strong;
 
 public:
+  ZRootsIteratorStrongColored(ZGeneration* generation) :
+      _oop_storage_set_strong(generation),
+      _clds_strong(generation) {}
+
   void apply(OopClosure* cl,
              CLDClosure* cld_cl);
 };
@@ -171,6 +218,9 @@ private:
   ZParallelApply<ZOopStorageSetIteratorWeak> _oop_storage_set_weak;
 
 public:
+  ZRootsIteratorWeakColored(ZGeneration* generation) :
+      _oop_storage_set_weak(generation) {}
+
   void apply(OopClosure* cl);
 
   void report_num_dead();
@@ -183,6 +233,11 @@ private:
   ZParallelApply<ZCLDsIteratorAll>             _clds_all;
 
 public:
+  ZRootsIteratorAllColored(ZGeneration* generation) :
+      _oop_storage_set_strong(generation),
+      _oop_storage_set_weak(generation),
+      _clds_all(generation) {}
+
   void apply(OopClosure* cl,
              CLDClosure* cld_cl);
 };

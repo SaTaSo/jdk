@@ -768,8 +768,8 @@ public:
   ZMarkOldRootsTask(ZMark* mark) :
       ZTask("ZMarkOldRootsTask"),
       _mark(mark),
-      _roots_colored(),
-      _roots_uncolored(),
+      _roots_colored(ZGeneration::old()),
+      _roots_uncolored(ZGeneration::old()),
       _cl_colored(),
       _cld_cl(&_cl_colored),
       _thread_cl(),
@@ -820,8 +820,8 @@ public:
   ZMarkYoungRootsTask(ZMark* mark) :
       ZTask("ZMarkYoungRootsTask"),
       _mark(mark),
-      _roots_colored(),
-      _roots_uncolored(),
+      _roots_colored(ZGeneration::young()),
+      _roots_uncolored(ZGeneration::young()),
       _cl_colored(),
       _cld_cl(&_cl_colored),
       _thread_cl(),

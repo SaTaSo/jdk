@@ -58,7 +58,6 @@ private:
   ZHeapIteratorQueue* const      _queue;
   ZHeapIteratorArrayQueue* const _array_queue;
   const uint                     _worker_id;
-  ZStatTimerDisable              _timer_disable;
   ObjectClosure*                 _object_cl;
   OopFieldClosure*               _field_cl;
 
@@ -242,14 +241,13 @@ public:
 
 ZHeapIterator::ZHeapIterator(uint nworkers, bool visit_weaks) :
     _visit_weaks(visit_weaks),
-    _timer_disable(),
     _bitmaps(ZAddressOffsetMax),
     _bitmaps_lock(),
     _queues(nworkers),
     _array_queues(nworkers),
-    _roots_colored(),
-    _roots_uncolored(),
-    _roots_weak_colored(),
+    _roots_colored(NULL /* generation */),
+    _roots_uncolored(NULL /* generation */),
+    _roots_weak_colored(NULL /* generation */),
     _terminator(nworkers, &_queues) {
 
   // Create queues
