@@ -38,7 +38,6 @@
 #endif
 
 class nmethod;
-class nmethodLocker;
 
 // CompilerCounters
 //
@@ -230,13 +229,12 @@ class CompileBroker: AllStatic {
 
   enum ThreadType {
     compiler_t,
-    sweeper_t,
     deoptimizer_t
   };
 
   static Handle create_thread_oop(const char* name, TRAPS);
   static JavaThread* make_thread(ThreadType type, jobject thread_oop, CompileQueue* queue, AbstractCompiler* comp, JavaThread* THREAD);
-  static void init_compiler_sweeper_threads();
+  static void init_compiler_threads();
   static void possibly_add_compiler_threads(JavaThread* THREAD);
   static bool compilation_is_prohibited(const methodHandle& method, int osr_bci, int comp_level, bool excluded);
 

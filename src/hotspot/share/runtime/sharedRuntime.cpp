@@ -1072,8 +1072,6 @@ Handle SharedRuntime::find_callee_info(Bytecodes::Code& bc, CallInfo& callinfo, 
 Method* SharedRuntime::extract_attached_method(vframeStream& vfst) {
   CompiledMethod* caller = vfst.nm();
 
-  nmethodLocker caller_lock(caller);
-
   address pc = vfst.frame_pc();
   { // Get call instruction under lock because another thread may be busy patching it.
     CompiledICLocker ic_locker(caller);
@@ -1292,7 +1290,6 @@ bool SharedRuntime::resolve_sub_helper_internal(methodHandle callee_method, cons
     // Patch call site to C2I adapter if callee nmethod is deoptimized or unloaded.
     callee = NULL;
   }
-  nmethodLocker nl_callee(callee);
 #ifdef ASSERT
   address dest_entry_point = callee == NULL ? 0 : callee->entry_point(); // used below
 #endif
@@ -1374,11 +1371,6 @@ methodHandle SharedRuntime::resolve_sub_helper(bool is_virtual, bool is_optimize
   guarantee(caller_cb != NULL && caller_cb->is_compiled(), "must be called from compiled method");
   CompiledMethod* caller_nm = caller_cb->as_compiled_method_or_null();
 
-  // make sure caller is not getting deoptimized
-  // and removed before we are done with it.
-  // CLEANUP - with lazy deopt shouldn't need this lock
-  nmethodLocker caller_lock(caller_nm);
-
   // determine call info & receiver
   // note: a) receiver is NULL for static calls
   //       b) an exception is thrown if receiver is NULL for non-static calls
@@ -1393,7 +1385,7 @@ methodHandle SharedRuntime::resolve_sub_helper(bool is_virtual, bool is_optimize
          (!is_virtual && invoke_code == Bytecodes::_invokedynamic) ||
          ( is_virtual && invoke_code != Bytecodes::_invokestatic ), "inconsistent bytecode");
 
-  assert(caller_nm->is_alive() && !caller_nm->is_unloading(), "It should be alive");
+  assert(!caller_nm->is_unloading(), "It should not be unloading");
 
 #ifndef PRODUCT
   // tracing/debugging/statistics
@@ -1884,10 +1876,6 @@ methodHandle SharedRuntime::reresolve_call_site(TRAPS) {
       // Location of call instruction
       call_addr = caller_nm->call_instruction_address(pc);
     }
-    // Make sure nmethod doesn't get deoptimized and removed until
-    // this is done with it.
-    // CLEANUP - with lazy deopt shouldn't need this lock
-    nmethodLocker nmlock(caller_nm);
 
     // Check relocations for the matching call to 1) avoid false positives,
     // and 2) determine the type.
@@ -2305,7 +2293,7 @@ class MethodArityHistogram {
 
   static void add_method_to_histogram(nmethod* nm) {
     Method* method = (nm == NULL) ? NULL : nm->method();
-    if ((method != NULL) && nm->is_alive()) {
+    if (method != NULL) {
       ArgumentCount args(method->signature());
       int arity   = args.size() + (method->is_static() ? 0 : 1);
       int argsize = method->size_of_parameters();
@@ -3102,6 +3090,9 @@ bool AdapterHandlerEntry::compare_code(AdapterHandlerEntry* other) {
 void AdapterHandlerLibrary::create_native_wrapper(const methodHandle& method) {
   ResourceMark rm;
   nmethod* nm = NULL;
+
+  // Let the code cache know we are about to allocate
+  CodeCache::on_allocation();
 
   assert(method->is_native(), "must be native");
   assert(method->is_special_native_intrinsic() ||

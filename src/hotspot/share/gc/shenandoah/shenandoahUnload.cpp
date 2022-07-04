@@ -176,7 +176,7 @@ void ShenandoahUnload::unload() {
     {
       ShenandoahTimingsTracker t(ShenandoahPhaseTimings::conc_class_unload_purge_coderoots);
       SuspendibleThreadSetJoiner sts;
-      ShenandoahCodeRoots::purge(heap->workers());
+      ShenandoahCodeRoots::purge();
     }
 
     {

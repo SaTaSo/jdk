@@ -162,7 +162,7 @@ void ZUnload::purge() {
 
   {
     SuspendibleThreadSetJoiner sts;
-    ZNMethod::purge(_workers);
+    ZNMethod::purge();
   }
 
   ClassLoaderDataGraph::purge(/*at_safepoint*/false);

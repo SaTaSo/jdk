@@ -307,6 +307,9 @@ AdapterBlob::AdapterBlob(int size, CodeBuffer* cb) :
 AdapterBlob* AdapterBlob::create(CodeBuffer* cb) {
   ThreadInVMfromUnknown __tiv;  // get to VM state in case we block on CodeCache_lock
 
+  // Let the code cache know we are about to allocate
+  CodeCache::on_allocation();
+
   AdapterBlob* blob = NULL;
   unsigned int size = CodeBlob::allocation_size(cb, sizeof(AdapterBlob));
   {
