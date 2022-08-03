@@ -576,7 +576,7 @@ void CompiledMethod::run_nmethod_entry_barrier() {
 }
 
 // Only called by whitebox test
-void CompiledMethod::cleanup_inline_caches() {
+void CompiledMethod::cleanup_inline_caches_whitebox() {
   assert_locked_or_safepoint(CodeCache_lock);
   CompiledICLocker ic_locker(this);
   guarantee(cleanup_inline_caches_impl(false /* unloading_occurred */, true /* clean_all */),

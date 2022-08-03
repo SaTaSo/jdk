@@ -695,8 +695,8 @@ int CodeCache::alignment_offset() {
 
 // Calculate the number of GCs after which an nmethod is expected to have been
 // used in order to not be classed as cold.
-void CodeCache::calculate_cold_gc_count() {
-  if (!MethodFlushing || !UseCodeAging || !UseCodeCacheFlushing || NmethodSweepActivity == 0) {
+void CodeCache::update_cold_gc_count() {
+  if (!MethodFlushing || !UseCodeCacheFlushing || NmethodSweepActivity == 0) {
     // No aging
     return;
   }
@@ -736,7 +736,7 @@ void CodeCache::calculate_cold_gc_count() {
   _unloading_allocation_rates.add(allocation_rate);
   _unloading_gc_intervals.add(gc_interval);
 
-  size_t aggressive_sweeping_free_threshold = 0.01 * StartAggressiveSweepingAt * max;
+  size_t aggressive_sweeping_free_threshold = StartAggressiveSweepingAt / 100.0 * max;
   if (free < aggressive_sweeping_free_threshold) {
     // We are already in the red zone; be very aggressive to avoid disaster
     // But not more aggressive than 2. This ensures that an nmethod must
@@ -752,10 +752,10 @@ void CodeCache::calculate_cold_gc_count() {
   // aggressive sweeping starts, based on sampled allocation rates.
   double average_gc_interval = _unloading_gc_intervals.avg();
   double average_allocation_rate = _unloading_allocation_rates.avg();
-  double time_to_aggressive = ((double)(free)) / average_allocation_rate;
+  double time_to_aggressive = ((double)(free - aggressive_sweeping_free_threshold)) / average_allocation_rate;
   double cold_timeout = time_to_aggressive / NmethodSweepActivity;
 
-  // Convert time to GC cycles, and crop at max_jint. The reason for
+  // Convert time to GC cycles, and crop at INT_MAX. The reason for
   // that is that the _cold_gc_count will be added to an epoch number
   // and that addition must not overflow, or we can crash the VM.
   // But not more aggressive than 2. This ensures that an nmethod must
@@ -764,7 +764,7 @@ void CodeCache::calculate_cold_gc_count() {
 
   log_info(codecache)("Allocation rate: %.3f, time to oom: %.3f, cold timeout: %.3f, cold gc count: " UINT64_FORMAT
                       ", free ratio: %.3f, last free ratio: %.3f, gc interval: %.3f",
-                      average_allocation_rate, time_to_aggressive, cold_timeout, _cold_gc_count,
+                      average_allocation_rate / K, time_to_aggressive, cold_timeout, _cold_gc_count,
                       free_ratio, last_free_ratio, average_gc_interval);
 }
 
@@ -781,7 +781,7 @@ void CodeCache::on_allocation() {
   size_t free = unallocated_capacity();
   size_t max = max_capacity();
   double free_ratio = ((double)free) / ((double)max);
-  if (free_ratio <= 0.01 * StartAggressiveSweepingAt)  {
+  if (free_ratio <= StartAggressiveSweepingAt / 100.0)  {
     // In case the GC is concurrent, we make sure only one thread requests the GC.
     if (Atomic::cmpxchg(&_unloading_threshold_gc_requested, false, true) == false) {
       log_info(codecache)("Triggering aggressive GC due to having less than %.3f free memory", free_ratio);
@@ -796,7 +796,7 @@ void CodeCache::on_allocation() {
     return;
   }
   double allocated_since_last_ratio = last_free_ratio - free_ratio;
-  double threshold = 0.01 * SweeperThreshold;
+  double threshold = SweeperThreshold / 100.0;
   double used_ratio = 1.0 - free_ratio;
   if (used_ratio > threshold) {
     // After threshold is reached, scale it by free_ratio so that more aggressive
@@ -856,7 +856,7 @@ void CodeCache::on_gc_marking_cycle_start() {
 void CodeCache::on_gc_marking_cycle_finish() {
   assert(is_gc_marking_cycle_active(), "Marking cycle started before last one finished");
   ++_gc_epoch;
-  calculate_cold_gc_count();
+  update_cold_gc_count();
 }
 
 void CodeCache::arm_all_nmethods() {
@@ -947,26 +947,27 @@ void CodeCache::purge_exception_caches() {
 }
 
 // Register an is_unloading nmethod to be flushed after unlinking
-void CodeCache::register_unloading(nmethod* nm) {
-  assert(nm->unloading_next() == NULL, "Only register for unloading once");
+void CodeCache::register_unlinked(nmethod* nm) {
+  assert(nm->unlinked_next() == NULL, "Only register for unloading once");
   for (;;) {
     // Only need acquire when reading the head, when the next
     // pointer is walked, which it is not here.
-    nmethod* head = Atomic::load(&_unloading_head);
+    nmethod* head = Atomic::load(&_unlinked_head);
     nmethod* next = head != NULL ? head : nm; // Self looped means end of list
-    nm->set_unloading_next(next);
-    if (Atomic::cmpxchg(&_unloading_head, head, nm) == head) {
+    nm->set_unlinked_next(next);
+    if (Atomic::cmpxchg(&_unlinked_head, head, nm) == head) {
       break;
     }
   }
 }
 
 // Flush all the nmethods the GC unlinked
-void CodeCache::flush_unloading_nmethods() {
-  nmethod* nm = _unloading_head;
+void CodeCache::flush_unlinked_nmethods() {
+  nmethod* nm = _unlinked_head;
+  _unlinked_head = NULL;
   size_t freed_memory = 0;
   while (nm != NULL) {
-    nmethod* next = nm->unloading_next();
+    nmethod* next = nm->unlinked_next();
     freed_memory += nm->total_size();
     nm->flush();
     if (next == nm) {
@@ -985,12 +986,10 @@ void CodeCache::flush_unloading_nmethods() {
     event.set_codeCacheMaxCapacity(CodeCache::max_capacity());
     event.commit();
   }
-
-  _unloading_head = NULL;
 }
 
 uint8_t CodeCache::_unloading_cycle = 1;
-nmethod* volatile CodeCache::_unloading_head = NULL;
+nmethod* volatile CodeCache::_unlinked_head = NULL;
 
 void CodeCache::increment_unloading_cycle() {
   // 2-bit value (see IsUnloadingState in nmethod.cpp for details)
@@ -1013,7 +1012,7 @@ CodeCache::UnloadingScope::UnloadingScope(BoolObjectClosure* is_alive)
 CodeCache::UnloadingScope::~UnloadingScope() {
   IsUnloadingBehaviour::set_current(_saved_behaviour);
   DependencyContext::cleaning_end();
-  CodeCache::flush_unloading_nmethods();
+  CodeCache::flush_unlinked_nmethods();
 }
 
 void CodeCache::verify_oops() {
@@ -1214,11 +1213,12 @@ void CodeCache::clear_inline_caches() {
   }
 }
 
-void CodeCache::cleanup_inline_caches() {
+// Only used by whitebox API
+void CodeCache::cleanup_inline_caches_whitebox() {
   assert_locked_or_safepoint(CodeCache_lock);
   NMethodIterator iter(NMethodIterator::only_not_unloading);
   while(iter.next()) {
-    iter.method()->cleanup_inline_caches();
+    iter.method()->cleanup_inline_caches_whitebox();
   }
 }
 
@@ -1298,7 +1298,7 @@ void CodeCache::old_nmethods_do(MetadataClosure* f) {
     length = old_compiled_method_table->length();
     for (int i = 0; i < length; i++) {
       CompiledMethod* cm = old_compiled_method_table->at(i);
-      // Only walk alive nmethods, the dead ones will get removed by the GC.
+      // Only walk !is_unloading nmethods, the other ones will get removed by the GC.
       if (!cm->is_unloading()) {
         old_compiled_method_table->at(i)->metadata_do(f);
       }

@@ -42,10 +42,10 @@
 #include "classfile/vmSymbols.hpp"
 #include "code/codeCache.hpp"
 #include "code/scopeDesc.hpp"
+#include "compiler/compilationLog.hpp"
 #include "compiler/compilationPolicy.hpp"
 #include "compiler/compileBroker.hpp"
 #include "compiler/compilerEvent.hpp"
-#include "compiler/compilationLog.hpp"
 #include "compiler/compileLog.hpp"
 #include "compiler/compileTask.hpp"
 #include "compiler/disassembler.hpp"
@@ -1073,7 +1073,7 @@ void ciEnv::register_method(ciMethod* target,
     }
 
     // Notify code cache unloading that we are about to allocate, which may
-    // or may not require freeing up memory first
+    // or may not require freeing up memory first.
     CodeCache::on_allocation();
 
     // To prevent compile queue updates.
@@ -1209,6 +1209,7 @@ void ciEnv::register_method(ciMethod* target,
     }
   }
 
+  NoSafepointVerifier nsv;
   if (nm != NULL) {
     // Compilation succeeded, post what we know about it
     nm->post_compiled_method(task());

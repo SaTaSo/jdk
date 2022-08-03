@@ -63,7 +63,7 @@ bool ShenandoahBarrierSetNMethod::nmethod_entry_barrier(nmethod* nm) {
   // Heal oops
   ShenandoahNMethod::heal_nmethod(nm);
 
-  // CodeCache sweeper support
+  // CodeCache unloading support
   nm->mark_as_maybe_on_stack();
 
   // Disarm

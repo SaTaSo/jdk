@@ -363,7 +363,7 @@ public:
 
  public:
   // Serial version used by whitebox test
-  void cleanup_inline_caches();
+  void cleanup_inline_caches_whitebox();
 
   virtual void clear_inline_caches();
   void clear_ic_callsites();

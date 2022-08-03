@@ -253,8 +253,8 @@ class CompileBroker: AllStatic {
 #endif
 
   static void invoke_compiler_on_method(CompileTask* task);
-  static void post_compile(CompilerThread* thread, CompileTask* task, bool success, ciEnv* ci_env,
-                           int compilable, const char* failure_reason);
+  static void handle_compile_error(CompilerThread* thread, CompileTask* task, ciEnv* ci_env,
+                                   int compilable, const char* failure_reason);
   static void update_compile_perf_data(CompilerThread *thread, const methodHandle& method, bool is_osr);
 
   static void collect_statistics(CompilerThread* thread, elapsedTimer time, CompileTask* task);

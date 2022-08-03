@@ -605,7 +605,7 @@ nmethod::nmethod(
   ByteSize basic_lock_sp_offset,
   OopMapSet* oop_maps )
   : CompiledMethod(method, "native nmethod", type, nmethod_size, sizeof(nmethod), code_buffer, offsets->value(CodeOffsets::Frame_Complete), frame_size, oop_maps, false, true),
-  _unloading_next(NULL),
+  _unlinked_next(NULL),
   _native_receiver_sp_offset(basic_lock_owner_sp_offset),
   _native_basic_lock_sp_offset(basic_lock_sp_offset),
   _is_unloading_state(0)
@@ -740,7 +740,7 @@ nmethod::nmethod(
 #endif
   )
   : CompiledMethod(method, "nmethod", type, nmethod_size, sizeof(nmethod), code_buffer, offsets->value(CodeOffsets::Frame_Complete), frame_size, oop_maps, false, true),
-  _unloading_next(NULL),
+  _unlinked_next(NULL),
   _native_receiver_sp_offset(in_ByteSize(-1)),
   _native_basic_lock_sp_offset(in_ByteSize(-1)),
   _is_unloading_state(0)
@@ -1288,17 +1288,14 @@ bool nmethod::make_not_entrant() {
       return false;
     }
 
-    // This logic is equivalent to the logic below for patching the
-    // verified entry point of regular methods. We check that the
-    // nmethod is in use to ensure that it is invalidated only once.
     if (is_osr_method()) {
+      // This logic is equivalent to the logic below for patching the
+      // verified entry point of regular methods.
       // this effectively makes the osr nmethod not entrant
       invalidate_osr_method();
-    }
-
-    // The caller can be calling the method statically or through an inline
-    // cache call.
-    if (!is_osr_method()) {
+    } else {
+      // The caller can be calling the method statically or through an inline
+      // cache call.
       NativeJump::patch_verified_entry(entry_point(), verified_entry_point(),
                                        SharedRuntime::get_handle_wrong_method_stub());
     }
@@ -1309,7 +1306,8 @@ bool nmethod::make_not_entrant() {
     }
 
     // Change state
-    guarantee(try_transition(not_entrant), "Transition can't fail");
+    bool success = try_transition(not_entrant);
+    assert(success, "Transition can't fail");
 
     // Log the transition once
     log_state_change();
@@ -1340,7 +1338,7 @@ bool nmethod::make_not_entrant() {
 
 // For concurrent GCs, there must be a handshake between unlink and flush
 void nmethod::unlink() {
-  if (_unloading_next != NULL) {
+  if (_unlinked_next != NULL) {
     // Already unlinked. It can be invoked twice because concurrent code cache
     // unloading might need to restart when inline cache cleaning fails due to
     // running out of ICStubs, which can only be refilled at safepoints
@@ -1374,18 +1372,18 @@ void nmethod::unlink() {
   // Register for flushing when it is safe. For concurrent class unloading,
   // that would be after the unloading handshake, and for STW class unloading
   // that would be when getting back to the VM thread.
-  CodeCache::register_unloading(this);
+  CodeCache::register_unlinked(this);
 }
 
 void nmethod::flush() {
+  MutexLocker ml(CodeCache_lock, Mutex::_no_safepoint_check_flag);
+
   // completely deallocate this method
   Events::log(Thread::current(), "flushing nmethod " INTPTR_FORMAT, p2i(this));
   log_debug(codecache)("*flushing %s nmethod %3d/" INTPTR_FORMAT ". Live blobs:" UINT32_FORMAT
                        "/Free CodeCache:" SIZE_FORMAT "Kb",
                        is_osr_method() ? "osr" : "",_compile_id, p2i(this), CodeCache::blob_count(),
                        CodeCache::unallocated_capacity(CodeCache::get_code_blob_type(this))/1024);
-
-  MutexLocker ml(CodeCache_lock, Mutex::_no_safepoint_check_flag);
 
   // We need to deallocate any ExceptionCache data.
   // Note that we do not need to grab the nmethod lock for this, it
@@ -1471,13 +1469,12 @@ void nmethod::flush_dependencies(bool delete_immediately) {
 
 void nmethod::post_compiled_method(CompileTask* task) {
   task->mark_success();
-
-  // JVMTI -- compiled method notification (must be done outside lock)
-  post_compiled_method_load_event();
-
   task->set_nm_content_size(content_size());
   task->set_nm_insts_size(insts_size());
   task->set_nm_total_size(total_size());
+
+  // JVMTI -- compiled method notification (must be done outside lock)
+  post_compiled_method_load_event();
 
   if (CompilationLog::log() != NULL) {
     CompilationLog::log()->log_nmethod(JavaThread::current(), this);
@@ -1613,7 +1610,7 @@ bool nmethod::is_cold() {
 }
 
 // The _is_unloading_state encodes a tuple comprising the unloading cycle
-// and the result of IsUnloadingBehaviour::is_unloading() fpr that cycle.
+// and the result of IsUnloadingBehaviour::is_unloading() for that cycle.
 // This is the bit layout of the _is_unloading_state byte: 00000CCU
 // CC refers to the cycle, which has 2 bits, and U refers to the result of
 // IsUnloadingBehaviour::is_unloading() for that unloading cycle.
@@ -1664,10 +1661,11 @@ bool nmethod::is_unloading() {
     return false;
   }
 
-  // The IsUnloadingBehaviour is responsible for checking if there are any dead
-  // oops in the CompiledMethod, by calling oops_do on it.
+  // The IsUnloadingBehaviour is responsible for calculating if the nmethod
+  // should be unloaded. This can be either because there is a dead oop,
+  // or because is_cold() heuristically determines it is time to unload.
   state_unloading_cycle = current_cycle;
-  state_is_unloading = IsUnloadingBehaviour::current()->is_unloading(this) || is_cold();
+  state_is_unloading = IsUnloadingBehaviour::is_unloading(this);
   state = IsUnloadingState::create(state_is_unloading, state_unloading_cycle);
 
   RawAccess<MO_RELAXED>::store(&_is_unloading_state, state);

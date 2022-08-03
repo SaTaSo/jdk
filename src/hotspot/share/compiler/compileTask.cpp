@@ -77,10 +77,6 @@ void CompileTask::free(CompileTask* task) {
     if (task->_failure_reason_on_C_heap && task->_failure_reason != NULL) {
       os::free((void*) task->_failure_reason);
     }
-    task->_nm_content_size = 0;
-    task->_nm_insts_size = 0;
-    task->_nm_total_size = 0;
-    task->_directive = NULL;
     task->_failure_reason = NULL;
     task->_failure_reason_on_C_heap = false;
 

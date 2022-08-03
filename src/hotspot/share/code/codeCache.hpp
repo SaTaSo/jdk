@@ -105,7 +105,7 @@ class CodeCache : AllStatic {
   static TruncatedSeq      _unloading_gc_intervals;
   static TruncatedSeq      _unloading_allocation_rates;
   static volatile bool     _unloading_threshold_gc_requested;
-  static nmethod* volatile _unloading_head;
+  static nmethod* volatile _unlinked_head;
 
   static ExceptionCache* volatile _exception_cache_purge_list;
 
@@ -193,7 +193,7 @@ class CodeCache : AllStatic {
 
   // Code cache unloading heuristics
   static uint64_t cold_gc_count();
-  static void calculate_cold_gc_count();
+  static void update_cold_gc_count();
   static void on_allocation();
 
   // The GC epoch and marking_cycle code below is there to support sweeping
@@ -205,8 +205,8 @@ class CodeCache : AllStatic {
   static void on_gc_marking_cycle_finish();
   static void arm_all_nmethods();
 
-  static void flush_unloading_nmethods();
-  static void register_unloading(nmethod* nm);
+  static void flush_unlinked_nmethods();
+  static void register_unlinked(nmethod* nm);
   static void do_unloading(BoolObjectClosure* is_alive, bool unloading_occurred);
   static uint8_t unloading_cycle() { return _unloading_cycle; }
 
@@ -249,7 +249,7 @@ class CodeCache : AllStatic {
   static bool is_non_nmethod(address addr);
 
   static void clear_inline_caches();                  // clear all inline caches
-  static void cleanup_inline_caches();                // clean unloaded/zombie nmethods from inline caches
+  static void cleanup_inline_caches_whitebox();       // clean bad nmethods from inline caches
 
   // Returns true if an own CodeHeap for the given CodeBlobType is available
   static bool heap_available(int code_blob_type);
@@ -385,7 +385,7 @@ template <class T, class Filter, bool is_relaxed> class CodeBlobIterator : publi
     _heap = Filter::heaps()->begin();
     _end = Filter::heaps()->end();
     // If set to NULL, initialized by first call to next()
-    _code_blob = (CodeBlob*)nm;
+    _code_blob = nm;
     if (nm != NULL) {
       while(!(*_heap)->contains_blob(_code_blob)) {
         ++_heap;

@@ -995,12 +995,6 @@ const int ObjectAlignmentInBytes = 8;
           "can be flushed")                                                 \
           range(0, max_intx)                                                \
                                                                             \
-  product(bool, UseCodeAging, true,                                         \
-          "Insert counter to detect warm methods")                          \
-                                                                            \
-  product(bool, StressCodeAging, false, DIAGNOSTIC,                         \
-          "Start with counters compiled in")                                \
-                                                                            \
   develop(bool, StressCodeBuffers, false,                                   \
           "Exercise code buffer expansion and other rare state changes")    \
                                                                             \

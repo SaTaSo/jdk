@@ -2059,15 +2059,16 @@ static void codecache_print(outputStream* out, bool detailed) {
   }
 }
 
-void CompileBroker::post_compile(CompilerThread* thread, CompileTask* task, bool success, ciEnv* ci_env,
-                                 int compilable, const char* failure_reason) {
-  if (!success && AbortVMOnCompilationFailure) {
-    if (compilable == ciEnv::MethodCompilable_not_at_tier) {
-      fatal("Not compilable at tier %d: %s", task->comp_level(), failure_reason);
-    }
-    if (compilable == ciEnv::MethodCompilable_never) {
-      fatal("Never compilable: %s", failure_reason);
-    }
+void CompileBroker::handle_compile_error(CompilerThread* thread, CompileTask* task, ciEnv* ci_env,
+                                         int compilable, const char* failure_reason) {
+  if (!AbortVMOnCompilationFailure) {
+    return;
+  }
+  if (compilable == ciEnv::MethodCompilable_not_at_tier) {
+    fatal("Not compilable at tier %d: %s", task->comp_level(), failure_reason);
+  }
+  if (compilable == ciEnv::MethodCompilable_never) {
+    fatal("Never compilable: %s", failure_reason);
   }
 }
 
@@ -2185,7 +2186,9 @@ void CompileBroker::invoke_compiler_on_method(CompileTask* task) {
         assert(failure_reason != NULL, "must specify failure_reason");
       }
     }
-    post_compile(thread, task, task->is_success(), NULL, compilable, failure_reason);
+    if (!task->is_success()) {
+      handle_compile_error(thread, task, NULL, compilable, failure_reason);
+    }
     if (event.should_commit()) {
       post_compilation_event(event, task);
     }
@@ -2246,6 +2249,8 @@ void CompileBroker::invoke_compiler_on_method(CompileTask* task) {
       }
     }
 
+    DirectivesStack::release(directive);
+
     if (!ci_env.failing() && !task->is_success()) {
       //assert(false, "compiler should always document failure");
       // The compiler elected, without comment, not to register a result.
@@ -2262,7 +2267,9 @@ void CompileBroker::invoke_compiler_on_method(CompileTask* task) {
       ci_env.report_failure(failure_reason);
     }
 
-    post_compile(thread, task, !ci_env.failing(), &ci_env, compilable, failure_reason);
+    if (ci_env.failing()) {
+      handle_compile_error(thread, task, &ci_env, compilable, failure_reason);
+    }
     if (event.should_commit()) {
       post_compilation_event(event, task);
     }
@@ -2286,7 +2293,6 @@ void CompileBroker::invoke_compiler_on_method(CompileTask* task) {
   DTRACE_METHOD_COMPILE_END_PROBE(method, compiler_name(task_level), task->is_success());
 
   collect_statistics(thread, time, task);
-  DirectivesStack::release(directive);
 
   if (PrintCompilation && PrintCompilation2) {
     tty->print("%7d ", (int) tty->time_stamp().milliseconds());  // print timestamp

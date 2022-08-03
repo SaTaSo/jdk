@@ -364,5 +364,5 @@ void ZNMethod::unlink(ZWorkers* workers, bool unloading_occurred) {
 }
 
 void ZNMethod::purge() {
-  CodeCache::flush_unloading_nmethods();
+  CodeCache::flush_unlinked_nmethods();
 }

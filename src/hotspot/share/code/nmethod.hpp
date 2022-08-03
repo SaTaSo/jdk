@@ -203,7 +203,7 @@ class nmethod : public CompiledMethod {
   address _verified_entry_point;             // entry point without class check
   address _osr_entry_point;                  // entry point for on stack replacement
 
-  nmethod* _unloading_next;
+  nmethod* _unlinked_next;
 
   // Shared fields for all nmethod's
   int _entry_bci;      // != InvocationEntryBci if this nmethod is an on-stack replacement method
@@ -436,11 +436,13 @@ class nmethod : public CompiledMethod {
   bool  is_not_entrant() const                    { return _state == not_entrant; }
 
   void clear_unloading_state();
+  // Heuristically deduce an nmethod isn't worth keeping around
+  bool is_cold();
   virtual bool is_unloading();
   virtual void do_unloading(bool unloading_occurred);
 
-  nmethod* unloading_next() const                 { return _unloading_next; }
-  void set_unloading_next(nmethod* next)          { _unloading_next = next; }
+  nmethod* unlinked_next() const                  { return _unlinked_next; }
+  void set_unlinked_next(nmethod* next)           { _unlinked_next = next; }
 
 #if INCLUDE_RTM_OPT
   // rtm state accessing and manipulating
@@ -528,9 +530,6 @@ public:
 
   // Evolution support. We make old (discarded) compiled methods point to new Method*s.
   void set_method(Method* method) { _method = method; }
-
-  // Heuristically deduce an nmethod isn't worth keeping around
-  bool is_cold();
 
 #if INCLUDE_JVMCI
   // Gets the JVMCI name of this nmethod.

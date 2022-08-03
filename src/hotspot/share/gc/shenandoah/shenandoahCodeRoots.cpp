@@ -210,6 +210,7 @@ public:
       ShenandoahNMethod::heal_nmethod_metadata(nm_data);
       // Code cache unloading needs to know about on-stack nmethods. Arm the nmethods to get
       // mark_as_maybe_on_stack() callbacks when they are used again.
+      _bs->arm(nm, 0);
     }
 
     // Clear compiled ICs and exception caches
@@ -279,7 +280,7 @@ void ShenandoahCodeRoots::unlink(WorkerThreads* workers, bool unloading_occurred
 void ShenandoahCodeRoots::purge() {
   assert(ShenandoahHeap::heap()->unload_classes(), "Only when running concurrent class unloading");
 
-  CodeCache::flush_unloading_nmethods();
+  CodeCache::flush_unlinked_nmethods();
 }
 
 ShenandoahCodeRootsIterator::ShenandoahCodeRootsIterator() :
