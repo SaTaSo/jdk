@@ -701,7 +701,7 @@ void CodeCache::update_cold_gc_count() {
     return;
   }
 
-  double last_free_ratio = _last_unloading_free_ratio;
+  size_t last_used = _last_unloading_used;
   double last_time = _last_unloading_time;
 
   double time = os::elapsedTime();
@@ -709,12 +709,12 @@ void CodeCache::update_cold_gc_count() {
 
   size_t free = unallocated_capacity();
   size_t max = max_capacity();
-  double free_ratio = ((double)free) / ((double)max);
+  size_t used = max - free;
   double gc_interval = time - last_time;
 
   _unloading_threshold_gc_requested = false;
   _last_unloading_time = time;
-  _last_unloading_free_ratio = free_ratio;
+  _last_unloading_used = used;
 
   if (last_time == 0.0) {
     // The first GC doesn't have enough information to make good
@@ -723,7 +723,7 @@ void CodeCache::update_cold_gc_count() {
     return;
   }
 
-  if (duration <= 0.0 || last_free_ratio <= free_ratio) {
+  if (duration <= 0.0 || last_used >= used) {
     // Dodge corner cases where there is no pressure or negative pressure
     // on the code cache. Just don't unload when this happens.
     _cold_gc_count = INT_MAX;
@@ -731,7 +731,7 @@ void CodeCache::update_cold_gc_count() {
     return;
   }
 
-  double allocation_rate = max * (last_free_ratio - free_ratio) / duration;
+  double allocation_rate = (used - last_used) / duration;
 
   _unloading_allocation_rates.add(allocation_rate);
   _unloading_gc_intervals.add(gc_interval);
@@ -762,10 +762,13 @@ void CodeCache::update_cold_gc_count() {
   // have been unused at least between two GCs to be considered cold still.
   _cold_gc_count = MAX2(MIN2((uint64_t)(cold_timeout / average_gc_interval), (uint64_t)INT_MAX), (uint64_t)2);
 
-  log_info(codecache)("Allocation rate: %.3f, time to oom: %.3f, cold timeout: %.3f, cold gc count: " UINT64_FORMAT
-                      ", free ratio: %.3f, last free ratio: %.3f, gc interval: %.3f",
+  double used_ratio = double(used) / double(max);
+  double last_used_ratio = double(last_used) / double(max);
+  log_info(codecache)("Allocation rate: %.3f KB/s, time to aggressive unloading: %.3f s, cold timeout: %.3f s, cold gc count: " UINT64_FORMAT
+                      ", used: %.3f MB (%.3f%%), last used: %.3f MB (%.3f%%), gc interval: %.3f s",
                       average_allocation_rate / K, time_to_aggressive, cold_timeout, _cold_gc_count,
-                      free_ratio, last_free_ratio, average_gc_interval);
+                      double(used) / M, used_ratio * 100.0, double(last_used) / M, last_used_ratio * 100.0, average_gc_interval);
+
 }
 
 uint64_t CodeCache::cold_gc_count() {
@@ -780,24 +783,27 @@ void CodeCache::on_allocation() {
 
   size_t free = unallocated_capacity();
   size_t max = max_capacity();
-  double free_ratio = ((double)free) / ((double)max);
+  size_t used = max - free;
+  double free_ratio = double(free) / double(max);
   if (free_ratio <= StartAggressiveSweepingAt / 100.0)  {
     // In case the GC is concurrent, we make sure only one thread requests the GC.
     if (Atomic::cmpxchg(&_unloading_threshold_gc_requested, false, true) == false) {
-      log_info(codecache)("Triggering aggressive GC due to having less than %.3f free memory", free_ratio);
+      log_info(codecache)("Triggering aggressive GC due to having only %.3f%% free memory", free_ratio * 100.0);
       Universe::heap()->collect(GCCause::_codecache_GC_aggressive);
     }
     return;
   }
 
-  double last_free_ratio = _last_unloading_free_ratio;
-  if (last_free_ratio < free_ratio) {
-    // Dropped since last GC; no need to sweep yet
+  size_t last_used = _last_unloading_used;
+  if (last_used >= used) {
+    // No increase since last GC; no need to sweep yet
     return;
   }
-  double allocated_since_last_ratio = last_free_ratio - free_ratio;
+  size_t allocated_since_last = used - last_used;
+  double allocated_since_last_ratio = double(allocated_since_last) / double(max);
   double threshold = SweeperThreshold / 100.0;
-  double used_ratio = 1.0 - free_ratio;
+  double used_ratio = double(used) / double(max);
+  double last_used_ratio = double(last_used) / double(max);
   if (used_ratio > threshold) {
     // After threshold is reached, scale it by free_ratio so that more aggressive
     // GC is triggered as we approach code cache exhaustion
@@ -808,8 +814,8 @@ void CodeCache::on_allocation() {
   if (allocated_since_last_ratio > threshold) {
     // In case the GC is concurrent, we make sure only one thread requests the GC.
     if (Atomic::cmpxchg(&_unloading_threshold_gc_requested, false, true) == false) {
-      log_info(codecache)("Triggering threshold (%.3f) GC due to allocating %.3f since last unloading (%.3f free -> %.3f free)",
-                          threshold, allocated_since_last_ratio, last_free_ratio, free_ratio);
+      log_info(codecache)("Triggering threshold (%.3f%%) GC due to allocating %.3f%% since last unloading (%.3f%% used -> %.3f%% used)",
+                          threshold * 100.0, allocated_since_last_ratio * 100.0, last_used_ratio * 100.0, used_ratio * 100.0);
       Universe::heap()->collect(GCCause::_codecache_GC_threshold);
     }
   }
@@ -826,7 +832,7 @@ uint64_t CodeCache::_gc_epoch = 2;
 uint64_t CodeCache::_cold_gc_count = INT_MAX;
 
 double CodeCache::_last_unloading_time = 0.0;
-double CodeCache::_last_unloading_free_ratio = 1.0;
+size_t CodeCache::_last_unloading_used = 0;
 volatile bool CodeCache::_unloading_threshold_gc_requested = false;
 TruncatedSeq CodeCache::_unloading_gc_intervals(10 /* samples */);
 TruncatedSeq CodeCache::_unloading_allocation_rates(10 /* samples */);

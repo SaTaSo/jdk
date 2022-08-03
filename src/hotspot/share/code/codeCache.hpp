@@ -100,7 +100,7 @@ class CodeCache : AllStatic {
   static uint8_t           _unloading_cycle;          // Global state for recognizing old nmethods that need to be unloaded
   static uint64_t          _gc_epoch;                 // Global state for tracking when nmethods were found to be on-stack
   static uint64_t          _cold_gc_count;            // Global state for determining how many GCs are needed before an nmethod is cold
-  static double            _last_unloading_free_ratio;
+  static size_t            _last_unloading_used;
   static double            _last_unloading_time;
   static TruncatedSeq      _unloading_gc_intervals;
   static TruncatedSeq      _unloading_allocation_rates;
