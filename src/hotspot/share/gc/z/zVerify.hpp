@@ -24,9 +24,15 @@
 #ifndef SHARE_GC_Z_ZVERIFY_HPP
 #define SHARE_GC_Z_ZVERIFY_HPP
 
+#include "gc/z/zAddress.hpp"
 #include "memory/allStatic.hpp"
+#include "memory/resourceArea.hpp"
+#include "utilities/resourceHash.hpp"
+
+#include <unordered_set>
 
 class frame;
+class ZForwarding;
 class ZPageAllocator;
 
 class ZVerify : public AllStatic {
@@ -41,6 +47,17 @@ public:
   static void before_zoperation();
   static void after_mark();
   static void after_weak_processing();
+};
+
+class ZRememberedVerify {
+private:
+  ResourceMark                             _rm;
+  ResourceHashtable<zaddress_unsafe, bool> _buffered_objects;
+
+public:
+  ZRememberedVerify();
+  void before_relocation(ZForwarding* forwarding);
+  void after_relocation(ZForwarding* forwarding);
 };
 
 #endif // SHARE_GC_Z_ZVERIFY_HPP

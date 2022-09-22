@@ -43,6 +43,7 @@
 #include "gc/z/zStackWatermark.hpp"
 #include "gc/z/zTask.hpp"
 #include "gc/z/zUncoloredRoot.inline.hpp"
+#include "gc/z/zVerify.hpp"
 #include "gc/z/zWorkers.hpp"
 #include "prims/jvmtiTagMap.hpp"
 #include "runtime/atomic.hpp"
@@ -592,6 +593,7 @@ private:
   ZGeneration* const _generation;
   size_t             _other_promoted;
   size_t             _other_compacted;
+  ZRememberedVerify  _remembered_verify;
 
   ZPage* target(ZPageAge age) {
     return _target[static_cast<uint>(age) - 1];
@@ -950,7 +952,8 @@ public:
       _target(),
       _generation(generation),
       _other_promoted(0),
-      _other_compacted(0) {}
+      _other_compacted(0),
+      _remembered_verify() {}
 
   ~ZRelocateWork() {
     for (uint i = 0; i < ZAllocator::_relocation_allocators; ++i) {
@@ -1069,9 +1072,12 @@ public:
     }
 
     verify_remset();
+    _remembered_verify.before_relocation(_forwarding);
 
     // Relocate objects
     _forwarding->object_iterate([&](oop obj) { relocate_object(obj); });
+
+    _remembered_verify.after_relocation(_forwarding);
 
     // Verify
     if (ZVerifyForwarding) {
