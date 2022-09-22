@@ -440,3 +440,181 @@ void ZVerify::after_weak_processing() {
     objects(true /* verify_weaks */);
   }
 }
+
+#define BAD_REMSET_ARG(p, ptr, o) \
+  "Missing remembered set at " PTR_FORMAT " pointing at " PTR_FORMAT \
+  " (" PTR_FORMAT " + " INTX_FORMAT ")" \
+  , p2i(p), untype(ptr), o, p2i(p) - o
+
+class ZVerifyRemsetBeforeOopClosure : public BasicOopIterateClosure {
+private:
+  ZForwarding* _forwarding;
+  uintptr_t _obj_addr;
+
+public:
+  ZVerifyRemsetBeforeOopClosure(ZForwarding* forwarding) :
+      _forwarding(forwarding) {}
+
+  void set_obj_addr(uintptr_t addr) {
+    _obj_addr = addr;
+  }
+
+  virtual void do_oop(oop* p_) {
+    zpointer* p = (zpointer*)p_;
+    zpointer ptr = *p;
+
+    if (ZPointer::is_remembered_exact(ptr)) {
+      // When the remembered bits are 11, it means that it is intentionally
+      // not part of the remembered set
+      return;
+    }
+
+    ZPage* page = _forwarding->page();
+
+    if (ZGeneration::old()->active_remset_is_current()) {
+      guarantee(page->is_remembered(p), BAD_REMSET_ARG(p, ptr, _obj_addr));
+    } else {
+      guarantee(page->was_remembered(p), BAD_REMSET_ARG(p, ptr, _obj_addr));
+    }
+  }
+
+  virtual void do_oop(narrowOop* p) {
+    ShouldNotReachHere();
+  }
+
+  virtual ReferenceIterationMode reference_iteration_mode() {
+    return DO_FIELDS;
+  }
+};
+
+ZRememberedVerify::ZRememberedVerify() :
+    _rm(),
+    _buffered_objects() {
+  if (!ZVerifyRemembered || !ZBufferStoreBarriers) {
+    return;
+  }
+
+  // Gather base pointer information from store barrier buffers as we currently
+  // can't verify oop locations inside of objects touched by the store barrier
+  // buffer.
+  ZLock lock;
+
+  for (JavaThreadIteratorWithHandle jtiwh; JavaThread* jt = jtiwh.next(); ) {
+    ZStoreBarrierBuffer* buffer = ZThreadLocalData::store_barrier_buffer(jt);
+
+    ZLocker<ZLock> locker(&lock);
+
+    for (int i = 0; i < (int)ZStoreBarrierBuffer::_buffer_length; ++i) {
+      zaddress_unsafe base = buffer->_base_pointers[i];
+      if (base != zaddress_unsafe::null) {
+        bool created = false;
+        _buffered_objects.put_if_absent(base, true, &created);
+      }
+    }
+  }
+}
+
+void ZRememberedVerify::before_relocation(ZForwarding* forwarding) {
+  if (!ZVerifyRemembered) {
+    return;
+  }
+
+  if (forwarding->from_age() != ZPageAge::old) {
+    // Only supports verification of old-to-old relocations now
+    return;
+  }
+
+  // Verify that the inactive remset is cleared
+  if (ZGeneration::old()->active_remset_is_current()) {
+    forwarding->page()->verify_remset_cleared_previous();
+  } else {
+    forwarding->page()->verify_remset_cleared_current();
+  }
+
+  ZVerifyRemsetBeforeOopClosure cl(forwarding);
+
+  forwarding->object_iterate([&](oop obj) {
+    zaddress_unsafe addr = to_zaddress_unsafe(cast_from_oop<uintptr_t>(obj));
+    cl.set_obj_addr(untype(addr));
+    if (_buffered_objects.get(addr) == NULL) {
+      // If no field in this object was in the store barrier buffer
+      // when relocation started, we should be able to verify trivially
+      obj->oop_iterate(&cl);
+    }
+  });
+}
+
+class ZVerifyRemsetAfterOopClosure : public BasicOopIterateClosure {
+private:
+  ZForwarding* _forwarding;
+  uintptr_t _obj_addr;
+
+public:
+  ZVerifyRemsetAfterOopClosure(ZForwarding* forwarding) :
+      _forwarding(forwarding) {}
+
+  void set_obj_addr(uintptr_t addr) {
+    _obj_addr = addr;
+  }
+
+  virtual void do_oop(oop* p_) {
+    volatile zpointer* p = (volatile zpointer*)p_;
+    zpointer ptr = Atomic::load(p);
+
+    if (ZPointer::is_remembered_exact(ptr)) {
+      // When the remembered bits are 11, it means that it is intentionally
+      // not part of the remembered set
+      return;
+    }
+
+    if (ZPointer::is_store_good(ptr)) {
+      // In to-space, there could be stores racing with the verification.
+      // Such stores may not have reliably manifested in the remembered
+      // sets yet.
+      return;
+    }
+
+    ZPage* page = ZHeap::heap()->page(p);
+
+    if (ZGeneration::old()->active_remset_is_current()) {
+      guarantee(page->is_remembered(p), BAD_REMSET_ARG(p, ptr, _obj_addr));
+    } else {
+      guarantee(page->was_remembered(p), BAD_REMSET_ARG(p, ptr, _obj_addr));
+    }
+  }
+
+  virtual void do_oop(narrowOop* p) {
+    ShouldNotReachHere();
+  }
+
+  virtual ReferenceIterationMode reference_iteration_mode() {
+    return DO_FIELDS;
+  }
+};
+
+void ZRememberedVerify::after_relocation(ZForwarding* forwarding) {
+  if (!ZVerifyRemembered) {
+    return;
+  }
+
+  if (forwarding->to_age() != ZPageAge::old) {
+    // Only supports verification of old-to-old relocations now
+    return;
+  }
+
+  ZVerifyRemsetAfterOopClosure cl(forwarding);
+
+  forwarding->object_iterate([&](oop obj) {
+    zaddress_unsafe fromspace_addr = to_zaddress_unsafe(cast_from_oop<uintptr_t>(obj));
+    if (_buffered_objects.get(fromspace_addr) == NULL) {
+      // If no field in this object was in the store barrier buffer
+      // when relocation started, we should be able to verify trivially
+      ZGeneration* remap_generation = forwarding->from_age() == ZPageAge::old ? (ZGeneration*)ZGeneration::old()
+                                                                              : (ZGeneration*)ZGeneration::young();
+      zaddress tospace_addr = remap_generation->relocate_or_remap_object(fromspace_addr);
+      cl.set_obj_addr(untype(tospace_addr));
+      oop tospace_obj = to_oop(tospace_addr);
+      tospace_obj->oop_iterate(&cl);
+    }
+  });
+}
