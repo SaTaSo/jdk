@@ -236,6 +236,12 @@ zaddress ZBarrier::heap_store_slow_path(volatile zpointer* p, zaddress addr, zpo
   return addr;
 }
 
+zaddress ZBarrier::no_keepalive_heap_store_slow_path(volatile zpointer* p, zaddress addr) {
+  remember(p);
+
+  return addr;
+}
+
 zaddress ZBarrier::native_store_slow_path(zaddress addr) {
   if (!is_null(addr)) {
     mark<ZMark::DontResurrect, ZMark::AnyThread, ZMark::Follow, ZMark::Strong>(addr);
