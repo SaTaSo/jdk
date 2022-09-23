@@ -490,10 +490,10 @@ void ZReferenceProcessor::verify_pending_references() {
 #endif
 }
 
-zpointer ZReferenceProcessor::swap_pending_list(zpointer pending_list) {
+zaddress ZReferenceProcessor::swap_pending_list(zpointer pending_list) {
   oop pending_list_oop = to_oop(ZBarrier::load_barrier_on_oop_field_preloaded(NULL, pending_list));
   oop prev = Universe::swap_reference_pending_list(pending_list_oop);
-  return ZAddress::store_good(to_zaddress(prev));
+  return to_zaddress(prev);
 }
 
 void ZReferenceProcessor::enqueue_references() {
@@ -513,7 +513,13 @@ void ZReferenceProcessor::enqueue_references() {
     SuspendibleThreadSetJoiner sts_joiner;
 
     // Prepend internal pending list to external pending list
-    *_pending_list_tail = swap_pending_list(_pending_list.get());
+    const zaddress prev_pending_list_head = swap_pending_list(_pending_list.get());
+
+    // Hand-rolled store, with correct barrier if the _pending_list_tail is in the heap
+    if (_pending_list_tail != _pending_list.addr()) {
+      ZBarrier::store_barrier_on_heap_oop_field(_pending_list_tail, false /* heal */);
+    }
+    *_pending_list_tail = ZAddress::store_good(prev_pending_list_head);
 
     // Notify ReferenceHandler thread
     ml.notify_all();

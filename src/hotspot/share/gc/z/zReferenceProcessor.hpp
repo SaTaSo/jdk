@@ -65,7 +65,7 @@ private:
   void work();
   void collect_statistics();
 
-  zpointer swap_pending_list(zpointer pending_list);
+  zaddress swap_pending_list(zpointer pending_list);
 
 public:
   ZReferenceProcessor(ZWorkers* workers);

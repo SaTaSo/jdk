@@ -426,6 +426,7 @@ public:
 template <DecoratorSet decorators, typename BarrierSetT>
 inline void ZBarrierSet::AccessBarrier<decorators, BarrierSetT>::clone_in_heap(oop src, oop dst, size_t size) {
   assert_is_valid(to_zaddress(src));
+  assert(size <= 24000, "Show me where?");
 
   // Fix the oops
   ZLoadBarrierOopClosure cl;
@@ -433,6 +434,8 @@ inline void ZBarrierSet::AccessBarrier<decorators, BarrierSetT>::clone_in_heap(o
 
   // Clone the object
   Raw::clone_in_heap(src, dst, size);
+
+  assert(ZHeap::heap()->is_young(to_zaddress(dst)), "Must be young, or else fishy!");
 
   // Color store good before handing out
   ZColorStoreGoodOopClosure cl_sg;
