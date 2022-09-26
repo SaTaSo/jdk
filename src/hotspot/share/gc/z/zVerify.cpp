@@ -576,10 +576,9 @@ public:
 
     ZPage* page = ZHeap::heap()->page(p);
 
-    if (ZGeneration::old()->active_remset_is_current()) {
-      guarantee(page->is_remembered(p), BAD_REMSET_ARG(p, ptr, _obj_addr));
-    } else {
-      guarantee(page->was_remembered(p), BAD_REMSET_ARG(p, ptr, _obj_addr));
+    if (!page->is_remembered(p) && !page->was_remembered(p)) {
+      guarantee(ZGeneration::young()->is_phase_mark(), "Should be in the mark phase " BAD_REMSET_ARG(p, ptr, _obj_addr));
+      guarantee(_forwarding->relocated_remembered_fields_published_contains(p), BAD_REMSET_ARG(p, ptr, _obj_addr));
     }
   }
 

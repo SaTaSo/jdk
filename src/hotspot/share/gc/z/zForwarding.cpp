@@ -360,6 +360,16 @@ void ZForwarding::relocated_remembered_fields_notify_concurrent_scan_of() {
   assert(res == 2, "Unexpected value");
 }
 
+bool ZForwarding::relocated_remembered_fields_published_contains(volatile zpointer* p) {
+  for (volatile zpointer* elem : _relocated_remembered_fields_array) {
+    if (elem == p) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 void ZForwarding::verify() const {
   guarantee(_ref_count != 0, "Invalid reference count");
   guarantee(_page != NULL, "Invalid page");
