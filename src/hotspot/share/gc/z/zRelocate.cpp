@@ -47,6 +47,7 @@
 #include "prims/jvmtiTagMap.hpp"
 #include "runtime/atomic.hpp"
 #include "utilities/debug.hpp"
+#include "utilities/spinYield.hpp"
 
 static const ZStatCriticalPhase ZCriticalPhaseRelocationStall("Relocation Stall");
 static const ZStatSubPhase ZSubPhaseConcurrentRelocateRememberedSetFlipPromotedYoung("Concurrent Relocate Remset FP", ZGenerationId::young);
@@ -87,7 +88,8 @@ ZRelocateQueue::ZRelocateQueue() :
     _nworkers(0),
     _nsynchronized(0),
     _synchronize(false),
-    _needs_attention(0) {}
+    _needs_attention(0),
+    _finished_processing(false) {}
 
 bool ZRelocateQueue::needs_attention() const {
   return Atomic::load(&_needs_attention) != 0;
@@ -111,6 +113,7 @@ void ZRelocateQueue::join(uint nworkers) {
   log_debug(gc, reloc)("Joining workers: %u", nworkers);
 
   _nworkers = nworkers;
+  _finished_processing = false;
 }
 
 void ZRelocateQueue::resize_workers(uint nworkers) {
@@ -169,14 +172,32 @@ void ZRelocateQueue::add_and_wait_for_in_place_relocation(ZForwarding* forwardin
   add_and_wait_inner(forwarding);
 }
 
+void ZRelocateQueue::signal_finished_processing() {
+  Atomic::store(&_finished_processing, true);
+}
+
+void ZRelocateQueue::wait_until_gc_shutdown() {
+  SpinYield sy;
+  while (!Atomic::load(&_finished_processing)) {
+    sy.wait();
+  }
+}
+
 bool ZRelocateQueue::add_and_wait(ZForwarding* forwarding) {
+  // During GC shutdown, we don't want to return out of here and start pinning
+  // objects, until the GC has shutdown.
   if (ZAbort::should_abort()) {
+    wait_until_gc_shutdown();
     return false;
   }
 
   add_and_wait_inner(forwarding);
 
-  return !ZAbort::should_abort();
+  if (ZAbort::should_abort()) {
+    wait_until_gc_shutdown();
+    return false;
+  }
+  return true;
 }
 
 bool ZRelocateQueue::prune() {
@@ -296,6 +317,7 @@ void ZRelocateQueue::clear() {
     _queue.clear();
     dec_needs_attention();
   }
+  signal_finished_processing();
 }
 
 void ZRelocateQueue::synchronize() {

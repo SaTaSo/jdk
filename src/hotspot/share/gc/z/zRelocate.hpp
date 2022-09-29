@@ -41,10 +41,14 @@ private:
   uint                 _nsynchronized;
   bool                 _synchronize;
   volatile int         _needs_attention;
+  volatile bool        _finished_processing;
 
   bool needs_attention() const;
   void inc_needs_attention();
   void dec_needs_attention();
+
+  void signal_finished_processing();
+  void wait_until_gc_shutdown();
 
   void add_and_wait_inner(ZForwarding* forwarding);
 
