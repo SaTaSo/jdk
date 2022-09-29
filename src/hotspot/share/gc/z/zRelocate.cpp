@@ -824,7 +824,10 @@ private:
       // Need to deal with remset when moving objects to the old generation
       if (_forwarding->from_age() == ZPageAge::old) {
         update_remset_old_to_old(from_addr, to_addr);
-      } else {
+      } else if (!ZAbort::should_abort() || ZHeap::heap()->is_old(to_addr)) {
+        // During VM shutdown, a mutator may pin the object before the GC relocates it.
+        // Then it will get stuck in the young generation, and hence won't really be
+        // a promotion any longer.
         update_remset_promoted(to_addr);
       }
     }
