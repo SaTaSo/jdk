@@ -85,6 +85,10 @@ void ZPage::reset_seqnum() {
   Atomic::store(&_seqnum_other, ZGeneration::generation(_generation_id == ZGenerationId::young ? ZGenerationId::old : ZGenerationId::young)->seqnum());
 }
 
+void ZPage::remset_clear() {
+  _remembered_set.clear_all("clear free page");
+}
+
 void ZPage::reset_remembered_set(ZPageAge prev_age, ZPageResetType type) {
   if (is_young()) {
     // Remset not needed
@@ -96,12 +100,6 @@ void ZPage::reset_remembered_set(ZPageAge prev_age, ZPageResetType type) {
     if (!_remembered_set.is_initialized()) {
       _remembered_set.initialize(size());
       return;
-    }
-
-    // Workaround for free_empty_pages
-    if (_remembered_set.is_dirty()) {
-      log_msg(" (cleaning dirty remset)");
-      _remembered_set.clean();
     }
 
     verify_remset_cleared_previous();
@@ -138,11 +136,6 @@ void ZPage::reset_remembered_set(ZPageAge prev_age, ZPageResetType type) {
 
   case ZPageResetType::Allocation:
     // Workaround for free_empty_pages
-    if (_remembered_set.is_dirty()) {
-      log_msg(" (cleaning dirty remset)");
-      _remembered_set.clean();
-    }
-
     verify_remset_cleared_previous();
     verify_remset_cleared_current();
     break;
@@ -267,7 +260,6 @@ bool ZPage::is_remset_cleared_previous() const {
 
 #ifdef ASSERT
 void ZPage::verify_remset_cleared_current() const {
-  assert(!_remembered_set.is_dirty(), "Remset is dirty");
   if (!is_remset_cleared_current()) {
     log_msg(" Current remset not cleared");
     assert(is_remset_cleared_current(), "Should be cleared "
@@ -277,7 +269,6 @@ void ZPage::verify_remset_cleared_current() const {
 }
 
 void ZPage::verify_remset_cleared_previous() const {
-  assert(!_remembered_set.is_dirty(), "Remset is dirty");
   if (!is_remset_cleared_previous()) {
     log_msg(" Previous remset not cleared");
     assert(is_remset_cleared_previous(), "Should be cleared "

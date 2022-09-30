@@ -171,7 +171,7 @@ public:
   void clear_remset_range_non_par_current(uintptr_t l_offset, size_t size);
   void swap_remset_bitmaps();
 
-  void remset_mark_dirty();
+  void remset_clear();
 
   BitMapReverseIterator remset_reverse_iterator_previous();
   BitMapIterator remset_iterator_limited_current(uintptr_t l_offset, size_t size);
