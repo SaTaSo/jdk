@@ -464,6 +464,18 @@ static bool rule_major_allocation_rate(ZDirectorStats& stats) {
 }
 
 static uint calculate_old_workers(ZDirectorStats& stats) {
+  // Boost old GC if the amount of freeeable young memory is 5% or less.
+  // and the usage is high; now freeing old memory is "urgent".
+  const size_t soft_max_capacity = stats._heap._soft_max_heap_size;
+  const size_t used = stats._heap._used;
+  const size_t free_including_headroom = soft_max_capacity - MIN2(soft_max_capacity, used);
+  const size_t free = free_including_headroom - MIN2(free_including_headroom, ZHeuristics::relocation_headroom());
+  const double free_percent = percent_of(free, soft_max_capacity);
+
+  if (is_young_small(stats) && free_percent <= 5.0) {
+    return ConcGCThreads;
+  }
+
   // Calculate max serial/parallel times of an old collection. The times
   // are moving averages, we add ~3.3 sigma to account for the variance.
   const double old_serial_gc_time = stats._old_stats._cycle._avg_serial_time + (stats._old_stats._cycle._sd_serial_time * one_in_1000);
