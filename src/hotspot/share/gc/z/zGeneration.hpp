@@ -31,6 +31,7 @@
 #include "gc/z/zRelocate.hpp"
 #include "gc/z/zRelocationSet.hpp"
 #include "gc/z/zRemembered.hpp"
+#include "gc/z/zResurrection.hpp"
 #include "gc/z/zStat.hpp"
 #include "gc/z/zTracer.hpp"
 #include "gc/z/zUnload.hpp"
@@ -70,6 +71,11 @@ protected:
   ZRelocate             _relocate;
   ZRelocationSet        _relocation_set;
 
+  ZResurrection         _resurrection;
+  ZReferenceProcessor   _reference_processor;
+  ZWeakRootsProcessor   _weak_roots_processor;
+  ZUnload               _unload;
+
   volatile size_t       _freed;
   volatile size_t       _promoted;
   volatile size_t       _compacted;
@@ -82,6 +88,7 @@ protected:
   ZStatWorkers          _stat_workers;
   ZStatMark             _stat_mark;
   ZStatRelocation       _stat_relocation;
+  ZStatReferences       _stat_references;
 
   ConcurrentGCTimer*    _gc_timer;
 
@@ -138,6 +145,7 @@ public:
   ZStatWorkers* stat_workers();
   ZStatMark* stat_mark();
   ZStatRelocation* stat_relocation();
+  ZStatReferences* stat_references();
 
   void at_collection_start(ConcurrentGCTimer* gc_timer);
   void at_collection_end();
@@ -162,6 +170,14 @@ public:
   template <bool resurrect, bool gc_thread, bool follow, bool finalizable>
   void mark_object_if_active(zaddress addr);
   void mark_flush_and_free(Thread* thread);
+
+  // Reference processing
+  ReferenceDiscoverer* reference_discoverer();
+  void set_soft_reference_policy(bool clear);
+
+  bool is_resurrection_blocked() const;
+  void resurrection_block();
+  void resurrection_unblock();
 
   // Relocation
   void synchronize_relocation();
@@ -206,6 +222,7 @@ private:
   void mark_roots();
   void mark_follow();
   bool mark_end();
+  void process_non_strong_references();
   void relocate_start();
   void relocate();
 
@@ -214,6 +231,7 @@ private:
   bool pause_mark_end();
   void concurrent_mark_continue();
   void concurrent_mark_free();
+  void concurrent_process_non_strong_references();
   void concurrent_reset_relocation_set();
   void concurrent_select_relocation_set();
   void pause_relocate_start();
@@ -260,11 +278,8 @@ class ZGenerationOld : public ZGeneration {
   friend class VM_ZRelocateStartOld;
 
 private:
-  ZReferenceProcessor _reference_processor;
-  ZWeakRootsProcessor _weak_roots_processor;
-  ZUnload             _unload;
-  uint                _total_collections_at_end;
-  uint32_t            _young_seqnum_at_reloc_start;
+  uint     _total_collections_at_end;
+  uint32_t _young_seqnum_at_reloc_start;
 
   void flip_mark_start();
   void flip_relocate_start();
@@ -298,10 +313,6 @@ public:
 
   // Statistics
   bool should_record_stats();
-
-  // Reference processing
-  ReferenceDiscoverer* reference_discoverer();
-  void set_soft_reference_policy(bool clear);
 
   uint total_collections_at_end() const;
 

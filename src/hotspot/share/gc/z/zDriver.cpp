@@ -117,6 +117,44 @@ GCCause::Cause ZDriver::gc_cause() {
   return _gc_cause;
 }
 
+static bool should_clear_soft_references(GCCause::Cause cause) {
+  // Clear soft references if implied by the GC cause
+  switch (cause) {
+  case GCCause::_wb_full_gc:
+  case GCCause::_metadata_GC_clear_soft_refs:
+  case GCCause::_z_allocation_stall:
+    return true;
+
+  case GCCause::_wb_breakpoint:
+  case GCCause::_dcmd_gc_run:
+  case GCCause::_java_lang_system_gc:
+  case GCCause::_full_gc_alot:
+  case GCCause::_scavenge_alot:
+  case GCCause::_jvmti_force_gc:
+  case GCCause::_z_timer:
+  case GCCause::_z_warmup:
+  case GCCause::_z_allocation_rate:
+  case GCCause::_z_proactive:
+  case GCCause::_z_high_usage:
+  case GCCause::_metadata_GC_threshold:
+  case GCCause::_codecache_GC_threshold:
+  case GCCause::_codecache_GC_aggressive:
+    break;
+
+  default:
+    fatal("Unsupported GC cause (%s)", GCCause::to_string(cause));
+    break;
+  }
+
+  // Clear soft references if threads are stalled waiting for an old collection
+  if (ZHeap::heap()->is_alloc_stalling_for_old()) {
+    return true;
+  }
+
+  // Don't clear
+  return false;
+}
+
 ZDriverMinor::ZDriverMinor() :
     ZDriver(),
     _port(),
@@ -177,6 +215,9 @@ public:
       _gc_cause_setter(ZDriver::minor(), _gc_cause),
       _stat_timer(ZPhaseCollectionMinor, gc_timer),
       _tracer(true /* minor */) {
+    // Set up soft reference policy
+    ZGeneration::young()->set_soft_reference_policy(false /* clear */);
+
     // Select number of worker threads to use
     ZGeneration::young()->set_active_workers(request.young_nworkers());
   }
@@ -225,42 +266,6 @@ void ZDriverMinor::run_service() {
 void ZDriverMinor::stop_service() {
   const ZDriverRequest request(GCCause::_no_gc, 0, 0);
   _port.send_async(request);
-}
-
-static bool should_clear_soft_references(GCCause::Cause cause) {
-  // Clear soft references if implied by the GC cause
-  switch (cause) {
-  case GCCause::_wb_full_gc:
-  case GCCause::_metadata_GC_clear_soft_refs:
-  case GCCause::_z_allocation_stall:
-    return true;
-
-  case GCCause::_wb_breakpoint:
-  case GCCause::_dcmd_gc_run:
-  case GCCause::_java_lang_system_gc:
-  case GCCause::_full_gc_alot:
-  case GCCause::_jvmti_force_gc:
-  case GCCause::_z_timer:
-  case GCCause::_z_warmup:
-  case GCCause::_z_allocation_rate:
-  case GCCause::_z_proactive:
-  case GCCause::_metadata_GC_threshold:
-  case GCCause::_codecache_GC_threshold:
-  case GCCause::_codecache_GC_aggressive:
-    break;
-
-  default:
-    fatal("Unsupported GC cause (%s)", GCCause::to_string(cause));
-    break;
-  }
-
-  // Clear soft references if threads are stalled waiting for an old collection
-  if (ZHeap::heap()->is_alloc_stalling_for_old()) {
-    return true;
-  }
-
-  // Don't clear
-  return false;
 }
 
 static bool should_preclean_young(GCCause::Cause cause) {
@@ -378,6 +383,7 @@ public:
       _tracer(false /* minor */) {
     // Set up soft reference policy
     const bool clear = should_clear_soft_references(request.cause());
+    ZGeneration::young()->set_soft_reference_policy(false /* clear */);
     ZGeneration::old()->set_soft_reference_policy(clear);
 
     // Select number of worker threads to use

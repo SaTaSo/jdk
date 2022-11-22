@@ -34,7 +34,7 @@ public:
   ZUnload(ZWorkers* workers);
 
   void prepare();
-  void unlink();
+  void unlink(ZGeneration* generation);
   void purge();
   void finish();
 };

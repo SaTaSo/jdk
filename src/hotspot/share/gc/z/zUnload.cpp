@@ -40,9 +40,6 @@
 #include "memory/metaspaceUtils.hpp"
 #include "oops/access.inline.hpp"
 
-static const ZStatSubPhase ZSubPhaseConcurrentClassesUnlink("Concurrent Classes Unlink", ZGenerationId::old);
-static const ZStatSubPhase ZSubPhaseConcurrentClassesPurge("Concurrent Classes Purge", ZGenerationId::old);
-
 class ZIsUnloadingOopClosure : public OopClosure {
 private:
   const uintptr_t _color;
@@ -58,8 +55,20 @@ public:
     zaddress_unsafe addr = Atomic::load(ZUncoloredRoot::cast(p));
     ZUncoloredRoot::process_no_keepalive(&addr, _color);
 
-    if (!is_null(addr) && ZHeap::heap()->is_old(safe(addr)) && !ZHeap::heap()->is_object_live(safe(addr))) {
-      _is_unloading = true;
+    if (is_null(addr)) {
+      return;
+    }
+
+    zaddress addr_safe = safe(addr);
+
+    if (ZHeap::heap()->is_old(addr_safe)) {
+      if (ZGeneration::old()->is_resurrection_blocked() && !ZHeap::heap()->is_object_live(addr_safe)) {
+        _is_unloading = true;
+      }
+    } else {
+      if (ZGeneration::young()->is_resurrection_blocked() && !ZHeap::heap()->is_object_live(addr_safe)) {
+        _is_unloading = true;
+      }
     }
   }
 
@@ -137,18 +146,17 @@ void ZUnload::prepare() {
   DependencyContext::cleaning_start();
 }
 
-void ZUnload::unlink() {
+void ZUnload::unlink(ZGeneration* generation) {
   if (!ClassUnloading) {
     return;
   }
 
-  ZStatTimerOld timer(ZSubPhaseConcurrentClassesUnlink);
   SuspendibleThreadSetJoiner sts_joiner;
   bool unloading_occurred;
 
   {
     MutexLocker ml(ClassLoaderDataGraph_lock);
-    unloading_occurred = SystemDictionary::do_unloading(ZGeneration::old()->gc_timer());
+    unloading_occurred = SystemDictionary::do_unloading(generation->gc_timer());
   }
 
   Klass::clean_weak_klass_links(unloading_occurred);
@@ -160,8 +168,6 @@ void ZUnload::purge() {
   if (!ClassUnloading) {
     return;
   }
-
-  ZStatTimerOld timer(ZSubPhaseConcurrentClassesPurge);
 
   {
     SuspendibleThreadSetJoiner sts_joiner;
