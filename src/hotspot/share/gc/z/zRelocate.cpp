@@ -1222,6 +1222,9 @@ void ZRelocate::relocate(ZRelocationSet* relocation_set) {
 }
 
 ZPageAge ZRelocate::compute_to_age(ZPageAge from_age) {
+  if (NeverTenure) {
+    return ZPageAge::survivor1;
+  }
   if (from_age == ZPageAge::old) {
     return ZPageAge::old;
   } else {

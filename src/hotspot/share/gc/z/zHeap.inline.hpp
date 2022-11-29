@@ -80,8 +80,20 @@ inline bool ZHeap::is_object_strongly_live(zaddress addr) const {
   return page->is_object_strongly_live(addr);
 }
 
+inline bool ZHeap::is_alloc_stalling_for_young() const {
+  return _page_allocator.is_alloc_stalling_for_young();
+}
+
 inline bool ZHeap::is_alloc_stalling_for_old() const {
   return _page_allocator.is_alloc_stalling_for_old();
+}
+
+inline bool ZHeap::is_alloc_stalling_for_oldest() const {
+  if (NeverTenure) {
+    return _page_allocator.is_alloc_stalling_for_young();
+  } else {
+    return _page_allocator.is_alloc_stalling_for_old();
+  }
 }
 
 inline void ZHeap::handle_alloc_stalling_for_young() {
@@ -90,6 +102,14 @@ inline void ZHeap::handle_alloc_stalling_for_young() {
 
 inline void ZHeap::handle_alloc_stalling_for_old() {
   _page_allocator.handle_alloc_stalling_for_old();
+}
+
+inline void ZHeap::handle_alloc_stalling_for_oldest() {
+  if (NeverTenure) {
+    _page_allocator.handle_alloc_stalling_for_young();
+  } else {
+    _page_allocator.handle_alloc_stalling_for_old();
+  }
 }
 
 inline bool ZHeap::is_oop(uintptr_t addr) const {

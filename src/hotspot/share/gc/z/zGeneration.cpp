@@ -1129,7 +1129,6 @@ public:
 };
 
 bool ZGenerationOld::pause_mark_end() {
-  ZDriverLocker locker;
   return VM_ZMarkEndOld().pause();
 }
 

@@ -67,11 +67,27 @@ inline bool ZGeneration::is_old() const {
   return _id == ZGenerationId::old;
 }
 
+inline bool ZGeneration::is_oldest() const {
+  if (NeverTenure) {
+    return _id == ZGenerationId::young;
+  }
+
+  return _id == ZGenerationId::old;
+}
+
 inline ZGenerationYoung* ZGeneration::young() {
   return _young;
 }
 
 inline ZGenerationOld* ZGeneration::old() {
+  return _old;
+}
+
+inline ZGeneration* ZGeneration::oldest() {
+  if (NeverTenure) {
+    return _young;
+  }
+
   return _old;
 }
 

@@ -121,9 +121,11 @@ public:
   ZGenerationIdOptional id_optional() const;
   bool is_young() const;
   bool is_old() const;
+  bool is_oldest() const;
 
   static ZGenerationYoung* young();
   static ZGenerationOld* old();
+  static ZGeneration* oldest();
   static ZGeneration* generation(ZGenerationId id);
 
   // Statistics

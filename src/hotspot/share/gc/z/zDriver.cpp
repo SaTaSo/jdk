@@ -89,6 +89,14 @@ ZDriverMajor* ZDriver::major() {
   return _major;
 }
 
+ZDriver* ZDriver::smallest() {
+  if (NeverTenure) {
+    return _major;
+  }
+
+  return _minor;
+}
+
 ZDriverLocker::ZDriverLocker() {
   ZDriver::lock();
 }
@@ -106,8 +114,10 @@ ZDriverUnlocker::~ZDriverUnlocker() {
 }
 
 ZDriver::ZDriver() :
-    _gc_cause(GCCause::_no_gc) {
-}
+    _gc_cause(GCCause::_no_gc),
+    _used_at_start(),
+    _port(),
+    _gc_timer() {}
 
 void ZDriver::set_gc_cause(GCCause::Cause cause) {
   _gc_cause = cause;
@@ -115,6 +125,18 @@ void ZDriver::set_gc_cause(GCCause::Cause cause) {
 
 GCCause::Cause ZDriver::gc_cause() {
   return _gc_cause;
+}
+
+bool ZDriver::is_busy() const {
+  return _port.is_busy();
+}
+
+void ZDriver::set_used_at_start(size_t used) {
+  _used_at_start = used;
+}
+
+size_t ZDriver::used_at_start() const {
+  return _used_at_start;
 }
 
 static bool should_clear_soft_references(GCCause::Cause cause) {
@@ -126,6 +148,7 @@ static bool should_clear_soft_references(GCCause::Cause cause) {
     return true;
 
   case GCCause::_wb_breakpoint:
+  case GCCause::_wb_young_gc:
   case GCCause::_dcmd_gc_run:
   case GCCause::_java_lang_system_gc:
   case GCCause::_full_gc_alot:
@@ -146,8 +169,8 @@ static bool should_clear_soft_references(GCCause::Cause cause) {
     break;
   }
 
-  // Clear soft references if threads are stalled waiting for an old collection
-  if (ZHeap::heap()->is_alloc_stalling_for_old()) {
+  // Clear soft references if threads are stalled waiting for an oldest collection
+  if (ZHeap::heap()->is_alloc_stalling_for_oldest()) {
     return true;
   }
 
@@ -157,20 +180,15 @@ static bool should_clear_soft_references(GCCause::Cause cause) {
 
 ZDriverMinor::ZDriverMinor() :
     ZDriver(),
-    _port(),
-    _gc_timer(),
-    _jfr_tracer(),
-    _used_at_start() {
+    _jfr_tracer() {
   ZDriver::set_minor(this);
   set_name("ZDriverMinor");
   create_and_start();
 }
 
-bool ZDriverMinor::is_busy() const {
-  return _port.is_busy();
-}
-
 void ZDriverMinor::collect(const ZDriverRequest& request) {
+  guarantee(!NeverTenure, "Shouldn't do minor collections if there is no old generation");
+
   switch (request.cause()) {
   case GCCause::_wb_young_gc:
   case GCCause::_scavenge_alot:
@@ -190,14 +208,6 @@ void ZDriverMinor::collect(const ZDriverRequest& request) {
 
 GCTracer* ZDriverMinor::jfr_tracer() {
   return &_jfr_tracer;
-}
-
-void ZDriverMinor::set_used_at_start(size_t used) {
-  _used_at_start = used;
-}
-
-size_t ZDriverMinor::used_at_start() const {
-  return _used_at_start;
 }
 
 class ZDriverScopeMinor : public StackObj {
@@ -269,6 +279,11 @@ void ZDriverMinor::stop_service() {
 }
 
 static bool should_preclean_young(GCCause::Cause cause) {
+  if (NeverTenure) {
+    // We are not promoting anything to the old generation
+    return false;
+  }
+
   // Preclean young if implied by the GC cause
   switch (cause) {
   case GCCause::_wb_full_gc:
@@ -306,17 +321,10 @@ static bool should_preclean_young(GCCause::Cause cause) {
 
 ZDriverMajor::ZDriverMajor() :
     ZDriver(),
-    _port(),
-    _gc_timer(),
-    _jfr_tracer(),
-    _used_at_start() {
+    _jfr_tracer() {
   ZDriver::set_major(this);
   set_name("ZDriverMajor");
   create_and_start();
-}
-
-bool ZDriverMajor::is_busy() const {
-  return _port.is_busy();
 }
 
 void ZDriverMajor::collect(const ZDriverRequest& request) {
@@ -337,6 +345,7 @@ void ZDriverMajor::collect(const ZDriverRequest& request) {
   case GCCause::_z_allocation_rate:
   case GCCause::_z_allocation_stall:
   case GCCause::_z_proactive:
+  case GCCause::_z_high_usage:
   case GCCause::_codecache_GC_threshold:
   case GCCause::_metadata_GC_threshold:
     // Start asynchronous GC
@@ -358,14 +367,6 @@ GCTracer* ZDriverMajor::jfr_tracer() {
   return &_jfr_tracer;
 }
 
-void ZDriverMajor::set_used_at_start(size_t used) {
-  _used_at_start = used;
-}
-
-size_t ZDriverMajor::used_at_start() const {
-  return _used_at_start;
-}
-
 class ZDriverScopeMajor : public StackObj {
 private:
   GCIdMark                     _gc_id;
@@ -383,8 +384,7 @@ public:
       _tracer(false /* minor */) {
     // Set up soft reference policy
     const bool clear = should_clear_soft_references(request.cause());
-    ZGeneration::young()->set_soft_reference_policy(false /* clear */);
-    ZGeneration::old()->set_soft_reference_policy(clear);
+    ZGeneration::oldest()->set_soft_reference_policy(clear);
 
     // Select number of worker threads to use
     ZGeneration::young()->set_active_workers(request.young_nworkers());
@@ -417,11 +417,18 @@ void ZDriverMajor::collect_young(const ZDriverRequest& request) {
 
   abortpoint();
 
-  // Handle allocations waiting for a young collection
-  handle_alloc_stalling_for_young();
+  if (!NeverTenure) {
+    // Handle allocations waiting for a young collection
+    handle_alloc_stalling_for_young();
+  }
 }
 
 void ZDriverMajor::collect_old() {
+  if (NeverTenure) {
+    // Nothing to do
+    return;
+  }
+
   ZGCIdMajor major_id(gc_id(), 'O');
   ZGeneration::old()->collect(&_gc_timer);
 }
@@ -438,12 +445,12 @@ void ZDriverMajor::gc(const ZDriverRequest& request) {
   collect_old();
 }
 
-static void handle_alloc_stalling_for_old() {
-  ZHeap::heap()->handle_alloc_stalling_for_old();
+static void handle_alloc_stalling_for_oldest() {
+  ZHeap::heap()->handle_alloc_stalling_for_oldest();
 }
 
 void ZDriverMajor::handle_alloc_stalls() const {
-  handle_alloc_stalling_for_old();
+  handle_alloc_stalling_for_oldest();
 }
 
 void ZDriverMajor::run_service() {

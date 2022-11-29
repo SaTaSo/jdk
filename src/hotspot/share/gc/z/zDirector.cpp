@@ -86,8 +86,16 @@ ZDirector::ZDirector() :
 
 // Minor GC rules
 
+ZDirectorGenerationStats& oldest_stats(ZDirectorStats& stats) {
+  if (NeverTenure) {
+    return stats._young_stats;
+  }
+
+  return stats._old_stats;
+}
+
 static bool rule_minor_timer(ZDirectorStats& stats) {
-  if (ZCollectionIntervalMinor <= 0) {
+  if (ZCollectionIntervalMinor <= 0 || NeverTenure) {
     // Rule disabled
     return false;
   }
@@ -108,13 +116,16 @@ static double estimated_gc_workers(double serial_gc_time, double parallelizable_
 }
 
 static uint discrete_young_gc_workers(double gc_workers) {
-  const uint max_young_nworkers = ZDriver::major()->is_busy() ? MAX2(ConcGCThreads - 1, 1u) : ConcGCThreads;
+  // If both minor and major wants to run, we give minor all threads except 1, to avoid starvation
+  // of the major collection.
+  const bool minor_major_overlap = !NeverTenure && ZDriver::major()->is_busy();
+  const uint max_young_nworkers = minor_major_overlap ? MAX2(ConcGCThreads - 1, 1u) : ConcGCThreads;
   return clamp<uint>(ceil(gc_workers), 1, max_young_nworkers);
 }
 
 static double select_young_gc_workers(ZDirectorStats& stats, double serial_gc_time, double parallelizable_gc_time, double alloc_rate_sd_percent, double time_until_oom) {
   // Use all workers until we're warm
-  if (!stats._old_stats._cycle._is_warm) {
+  if (!oldest_stats(stats)._cycle._is_warm) {
     const double not_warm_gc_workers = ConcGCThreads;
     log_debug(gc, director)("Select Minor GC Workers (Not Warm), GCWorkers: %.3f", not_warm_gc_workers);
     return not_warm_gc_workers;
@@ -151,7 +162,7 @@ static double select_young_gc_workers(ZDirectorStats& stats, double serial_gc_ti
 }
 
 ZDriverRequest rule_minor_allocation_rate_dynamic(ZDirectorStats& stats, double serial_gc_time_passed, double parallel_gc_time_passed) {
-  if (!stats._old_stats._cycle._is_time_trustable) {
+  if (!oldest_stats(stats)._cycle._is_time_trustable) {
     // Rule disabled
     return ZDriverRequest(GCCause::_no_gc, ConcGCThreads, 0);
   }
@@ -218,7 +229,7 @@ ZDriverRequest rule_minor_allocation_rate_dynamic(ZDirectorStats& stats, double 
 }
 
 static bool rule_minor_allocation_rate_static(ZDirectorStats& stats) {
-  if (!stats._old_stats._cycle._is_time_trustable) {
+  if (!oldest_stats(stats)._cycle._is_time_trustable) {
     // Rule disabled
     return false;
   }
@@ -362,7 +373,8 @@ static bool rule_major_timer(ZDirectorStats& stats) {
   }
 
   // Perform GC if timer has expired.
-  const double time_since_last_gc = stats._old_stats._cycle._time_since_last;
+
+  const double time_since_last_gc = oldest_stats(stats)._cycle._time_since_last;
   const double time_until_gc = ZCollectionIntervalMajor - time_since_last_gc;
 
   log_debug(gc, director)("Rule Major: Timer, Interval: %.3fs, TimeUntilGC: %.3fs",
@@ -377,7 +389,7 @@ static bool rule_major_warmup(ZDirectorStats& stats) {
     return false;
   }
 
-  if (stats._old_stats._cycle._is_warm) {
+  if (oldest_stats(stats)._cycle._is_warm) {
     // Rule disabled
     return false;
   }
@@ -387,7 +399,7 @@ static bool rule_major_warmup(ZDirectorStats& stats) {
   // duration, which is needed by the other rules.
   const size_t soft_max_capacity = stats._heap._soft_max_heap_size;
   const size_t used = stats._heap._used;
-  const double used_threshold_percent = (stats._old_stats._cycle._nwarmup_cycles + 1) * 0.1;
+  const double used_threshold_percent = (oldest_stats(stats)._cycle._nwarmup_cycles + 1) * 0.1;
   const size_t used_threshold = soft_max_capacity * used_threshold_percent;
 
   log_debug(gc, director)("Rule Major: Warmup %.0f%%, Used: " SIZE_FORMAT "MB, UsedThreshold: " SIZE_FORMAT "MB",
@@ -407,7 +419,7 @@ static double gc_time(ZDirectorGenerationStats generation_stats) {
 }
 
 static double calculate_extra_young_gc_time(ZDirectorStats& stats) {
-  if (!stats._old_stats._cycle._is_time_trustable) {
+  if (!oldest_stats(stats)._cycle._is_time_trustable) {
     return 0.0;
   }
 
@@ -435,7 +447,7 @@ static double calculate_extra_young_gc_time(ZDirectorStats& stats) {
 }
 
 static bool rule_major_allocation_rate(ZDirectorStats& stats) {
-  if (!stats._old_stats._cycle._is_time_trustable) {
+  if (!oldest_stats(stats)._cycle._is_time_trustable) {
     // Rule disabled
     return false;
   }
@@ -538,7 +550,7 @@ static bool rule_major_proactive(ZDirectorStats& stats) {
     return false;
   }
 
-  if (!stats._old_stats._cycle._is_warm) {
+  if (!oldest_stats(stats)._cycle._is_warm) {
     // Rule disabled
     return false;
   }
@@ -552,11 +564,11 @@ static bool rule_major_proactive(ZDirectorStats& stats) {
   // 10% of the max capacity since the previous GC, or more than 5 minutes has
   // passed since the previous GC. This helps avoid superfluous GCs when running
   // applications with very low allocation rate.
-  const size_t used_after_last_gc = stats._old_stats._stat_heap._used_at_relocate_end;
+  const size_t used_after_last_gc = oldest_stats(stats)._stat_heap._used_at_relocate_end;
   const size_t used_increase_threshold = stats._heap._soft_max_heap_size * 0.10; // 10%
   const size_t used_threshold = used_after_last_gc + used_increase_threshold;
   const size_t used = stats._heap._used;
-  const double time_since_last_gc = stats._old_stats._cycle._time_since_last;
+  const double time_since_last_gc = oldest_stats(stats)._cycle._time_since_last;
   const double time_since_last_gc_threshold = 5 * 60; // 5 minutes
   if (used < used_threshold && time_since_last_gc < time_since_last_gc_threshold) {
     // Don't even consider doing a proactive GC
@@ -585,7 +597,7 @@ static bool rule_major_proactive(ZDirectorStats& stats) {
 }
 
 static GCCause::Cause make_minor_gc_decision(ZDirectorStats& stats) {
-  if (ZDriver::minor()->is_busy()) {
+  if (ZDriver::smallest()->is_busy()) {
     return GCCause::_no_gc;
   }
 
@@ -681,14 +693,22 @@ static ZWorkerResizeInfo wanted_young_nworkers(ZDirectorStats& stats) {
 }
 
 static ZWorkerResizeInfo wanted_old_nworkers(ZDirectorStats& stats) {
+  if (NeverTenure) {
+    return {
+      false, // _is_active
+      0,     // _current_nworkers
+      0      // _desired_nworkers
+    };
+  }
+
   const ZWorkerResizeStats resize_stats = stats._old_stats._resize;
 
   if (!resize_stats._is_active) {
     // Collection is not running
     return {
-       resize_stats._is_active,        // _is_active
-       resize_stats._nworkers_current, // _current_nworkers
-       resize_stats._nworkers_current  // _desired_nworkers
+      resize_stats._is_active,        // _is_active
+      resize_stats._nworkers_current, // _current_nworkers
+      resize_stats._nworkers_current  // _desired_nworkers
     };
   }
 
@@ -759,7 +779,8 @@ static uint initial_young_workers(ZDirectorStats& stats) {
   }
 
   const ZDriverRequest request = rule_minor_allocation_rate_dynamic(stats, 0.0 /* serial_gc_time_passed */, 0.0 /* parallel_gc_time_passed */);
-  if (!ZDriver::major()->is_busy()) {
+  const bool minor_major_overlap = !NeverTenure && ZDriver::major()->is_busy();
+  if (!minor_major_overlap) {
     return request.young_nworkers();
   }
 
@@ -786,7 +807,11 @@ static bool start_gc(ZDirectorStats& stats) {
 
   const GCCause::Cause minor_cause = make_minor_gc_decision(stats);
   if (minor_cause != GCCause::_no_gc) {
-    if (!ZDriver::major()->is_busy() && rule_major_allocation_rate(stats)) {
+    if (NeverTenure) {
+      // Promote minor collections to major collections as there is no old gen
+      const ZDriverRequest request(minor_cause, initial_young_workers(stats), 0);
+      ZDriver::major()->collect(request);
+    } else if (!ZDriver::major()->is_busy() && rule_major_allocation_rate(stats)) {
       // Merge minor GC into major GC
       const ZDriverRequest request(GCCause::_z_allocation_rate, initial_young_workers(stats), initial_old_workers(stats));
       ZDriver::major()->collect(request);

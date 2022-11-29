@@ -939,8 +939,10 @@ void ZMark::mark_roots() {
     ZMarkOldRootsTask task(this);
     workers()->run(&task);
   } else {
-    // Mark from old-to-young pointers
-    ZGeneration::young()->scan_remembered_sets();
+    if (!NeverTenure) {
+      // Mark from old-to-young pointers
+      ZGeneration::young()->scan_remembered_sets();
+    }
 
     ZMarkYoungRootsTask task(this);
     workers()->run(&task);

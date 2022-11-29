@@ -187,7 +187,11 @@ void ZCollectedHeap::collect(GCCause::Cause cause) {
   case GCCause::_wb_young_gc:
   case GCCause::_scavenge_alot:
     // Start Minor GC
-    _driver_minor->collect(request);
+    if (NeverTenure) {
+      _driver_major->collect(request);
+    } else {
+      _driver_minor->collect(request);
+    }
     break;
 
   case GCCause::_wb_full_gc:

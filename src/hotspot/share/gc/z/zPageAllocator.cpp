@@ -524,8 +524,8 @@ bool ZPageAllocator::alloc_page_stall(ZPageAllocation* allocation) {
   check_out_of_memory_during_initialization();
 
   // Start asynchronous minor GC
-  const ZDriverRequest request(GCCause::_z_allocation_stall, 1, 0);
-  ZDriver::minor()->collect(request);
+  const ZDriverRequest request(GCCause::_z_allocation_stall, ConcGCThreads, 0);
+  ZDriver::smallest()->collect(request);
 
   // Wait for allocation to complete or fail
   const bool result = allocation->wait();
@@ -929,7 +929,32 @@ static bool has_alloc_seen_old(const ZPageAllocation* allocation) {
   return allocation->old_seqnum() != ZGeneration::old()->seqnum();
 }
 
+static bool has_alloc_seen_oldest(const ZPageAllocation* allocation) {
+  if (NeverTenure) {
+    return allocation->young_seqnum() != ZGeneration::young()->seqnum();
+  } else {
+    return allocation->old_seqnum() != ZGeneration::old()->seqnum();
+  }
+}
+
+bool ZPageAllocator::is_alloc_stalling_for_young() const {
+  ZLocker<ZLock> locker(&_lock);
+
+  ZPageAllocation* const allocation = _stalled.first();
+  if (allocation == NULL) {
+    // No stalled allocations
+    return false;
+  }
+
+  return !has_alloc_seen_young(allocation);
+}
+
 bool ZPageAllocator::is_alloc_stalling_for_old() const {
+  if (NeverTenure) {
+    // No old collection; not waiting for one
+    return false;
+  }
+
   ZLocker<ZLock> locker(&_lock);
 
   ZPageAllocation* const allocation = _stalled.first();
@@ -944,7 +969,7 @@ bool ZPageAllocator::is_alloc_stalling_for_old() const {
 void ZPageAllocator::notify_out_of_memory() {
   // Fail allocation requests that were enqueued before the last major GC started
   for (ZPageAllocation* allocation = _stalled.first(); allocation != NULL; allocation = _stalled.first()) {
-    if (!has_alloc_seen_old(allocation)) {
+    if (!has_alloc_seen_oldest(allocation)) {
       // Not out of memory, keep remaining allocation requests enqueued
       return;
     }
@@ -962,19 +987,28 @@ void ZPageAllocator::restart_gc() const {
     return;
   }
 
-  if (!has_alloc_seen_young(allocation)) {
+  if (NeverTenure) {
+    if (!has_alloc_seen_young(allocation)) {
+      // Start asynchronous minor GC, keep allocation requests enqueued
+      const ZDriverRequest request(GCCause::_z_allocation_stall, ConcGCThreads, 0);
+      ZDriver::major()->collect(request);
+    }
+  } else if (!has_alloc_seen_young(allocation)) {
     // Start asynchronous minor GC, keep allocation requests enqueued
-    const ZDriverRequest request(GCCause::_z_allocation_stall, 1, 0);
+    const ZDriverRequest request(GCCause::_z_allocation_stall, ConcGCThreads, 0);
     ZDriver::minor()->collect(request);
   } else {
     // Start asynchronous major GC, keep allocation requests enqueued
-    const ZDriverRequest request(GCCause::_z_allocation_stall, 1, 1);
+    const ZDriverRequest request(GCCause::_z_allocation_stall, ConcGCThreads, ConcGCThreads);
     ZDriver::major()->collect(request);
   }
 }
 
 void ZPageAllocator::handle_alloc_stalling_for_young() {
   ZLocker<ZLock> locker(&_lock);
+  if (NeverTenure) {
+    notify_out_of_memory();
+  }
   restart_gc();
 }
 

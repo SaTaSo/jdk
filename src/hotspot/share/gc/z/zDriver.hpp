@@ -43,7 +43,11 @@ private:
   static ZDriverMinor* _minor;
   static ZDriverMajor* _major;
 
+protected:
   GCCause::Cause    _gc_cause;
+  size_t            _used_at_start;
+  ZDriverPort       _port;
+  ConcurrentGCTimer _gc_timer;
 
   static void lock();
   static void unlock();
@@ -56,19 +60,22 @@ public:
 
   static ZDriverMinor* minor();
   static ZDriverMajor* major();
+  static ZDriver* smallest();
 
   ZDriver();
 
   void set_gc_cause(GCCause::Cause cause);
   GCCause::Cause gc_cause();
+
+  virtual void collect(const ZDriverRequest& request) = 0;
+  bool is_busy() const;
+  void set_used_at_start(size_t used);
+  size_t used_at_start() const;
 };
 
 class ZDriverMinor : public ZDriver {
 private:
-  ZDriverPort       _port;
-  ConcurrentGCTimer _gc_timer;
   ZMinorTracer      _jfr_tracer;
-  size_t            _used_at_start;
 
   void gc(const ZDriverRequest& request);
   void handle_alloc_stalls() const;
@@ -80,22 +87,14 @@ protected:
 public:
   ZDriverMinor();
 
-  bool is_busy() const;
-
-  void collect(const ZDriverRequest& request);
+  virtual void collect(const ZDriverRequest& request) override;
 
   GCTracer* jfr_tracer();
-
-  void set_used_at_start(size_t used);
-  size_t used_at_start() const;
 };
 
 class ZDriverMajor : public ZDriver {
 private:
-  ZDriverPort       _port;
-  ConcurrentGCTimer _gc_timer;
   ZMajorTracer      _jfr_tracer;
-  size_t            _used_at_start;
 
   void collect_young(const ZDriverRequest& request);
 
@@ -110,14 +109,9 @@ protected:
 public:
   ZDriverMajor();
 
-  bool is_busy() const;
-
-  void collect(const ZDriverRequest& request);
+  virtual void collect(const ZDriverRequest& request) override;
 
   GCTracer* jfr_tracer();
-
-  void set_used_at_start(size_t used);
-  size_t used_at_start() const;
 };
 
 class ZDriverLocker : public StackObj {

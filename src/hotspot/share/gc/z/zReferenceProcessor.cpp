@@ -89,7 +89,7 @@ static void reference_set_next(zaddress reference, zaddress next) {
 }
 
 void ZReferenceProcessor::soft_reference_update_clock() {
-  if (!_generation->is_old()) {
+  if (!_generation->is_oldest()) {
     // Handle soft references in the old generation
     return;
   }
@@ -159,7 +159,7 @@ bool ZReferenceProcessor::is_softly_live(zaddress reference, ReferenceType type)
     return false;
   }
 
-  if (!_generation->is_old()) {
+  if (!_generation->is_oldest()) {
     // This will end up in the old generation; clear it there instead.
     return true;
   }
