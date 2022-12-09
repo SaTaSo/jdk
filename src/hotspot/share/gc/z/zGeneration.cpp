@@ -56,6 +56,7 @@
 #include "prims/jvmtiTagMap.hpp"
 #include "runtime/atomic.hpp"
 #include "runtime/continuation.hpp"
+#include "runtime/globals_extension.hpp"
 #include "runtime/handshake.hpp"
 #include "runtime/safepoint.hpp"
 #include "runtime/threads.hpp"
@@ -735,6 +736,10 @@ void ZGenerationYoung::select_tenuring_threshold(ZRelocationSetSelectorStats sta
 }
 
 uint ZGenerationYoung::compute_tenuring_threshold(ZRelocationSetSelectorStats stats) {
+  if (!FLAG_IS_DEFAULT(ZTenuringThreshold)) {
+    return ZTenuringThreshold;
+  }
+
   const size_t old_live_total = ZGeneration::old()->stat_heap()->live_at_mark_end();
 
   size_t young_live_total = 0;

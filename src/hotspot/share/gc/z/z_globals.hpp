@@ -79,6 +79,10 @@
           "Time between statistics print outs (in seconds)")                \
           range(1, (uint)-1)                                                \
                                                                             \
+  product(uint, ZTenuringThreshold, 10, DIAGNOSTIC,                         \
+          "After what age should objects move to the old generation")       \
+  range(0, 15)                                                              \
+                                                                            \
   product(bool, ZStressRelocateInPlace, false, DIAGNOSTIC,                  \
           "Always relocate pages in-place")                                 \
                                                                             \
