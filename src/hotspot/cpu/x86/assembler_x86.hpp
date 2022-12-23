@@ -1735,7 +1735,7 @@ private:
 
   void orq(Address dst, int32_t imm32);
   void orq(Address dst, Register src);
-  void orq(Register dst, int32_t imm32, bool compress_encoding = true);
+  void orq(Register dst, int32_t imm32);
   void orq(Register dst, Address src);
   void orq(Register dst, Register src);
 
