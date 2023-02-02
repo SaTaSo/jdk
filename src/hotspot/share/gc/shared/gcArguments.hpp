@@ -45,6 +45,8 @@ protected:
 
 public:
   virtual void initialize();
+  virtual void initialize_ergonomics();
+
   virtual size_t conservative_max_heap_alignment() = 0;
 
   // Used by heap size heuristics to determine max

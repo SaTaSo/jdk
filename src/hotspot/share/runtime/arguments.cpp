@@ -1555,6 +1555,7 @@ void Arguments::set_conservative_max_heap_alignment() {
 
 jint Arguments::set_ergonomics_flags() {
   GCConfig::initialize();
+  GCConfig::arguments()->initialize_ergonomics();
 
   set_conservative_max_heap_alignment();
 
@@ -1600,13 +1601,18 @@ void Arguments::set_heap_size() {
   // Also, memory limits will be calculated based on
   // available os physical memory, not our MaxRAM limit,
   // unless MaxRAM is also specified.
-  bool override_coop_limit = (!FLAG_IS_DEFAULT(MaxRAMPercentage) ||
+#ifdef _LP64
+  bool may_use_coop = FLAG_IS_DEFAULT(UseCompressedOops) || UseCompressedOops;
+  bool override_coop_limit = may_use_coop && (!FLAG_IS_DEFAULT(MaxRAMPercentage) ||
                            !FLAG_IS_DEFAULT(MaxRAMFraction) ||
                            !FLAG_IS_DEFAULT(MinRAMPercentage) ||
                            !FLAG_IS_DEFAULT(MinRAMFraction) ||
                            !FLAG_IS_DEFAULT(InitialRAMPercentage) ||
                            !FLAG_IS_DEFAULT(InitialRAMFraction) ||
                            !FLAG_IS_DEFAULT(MaxRAM));
+#else
+  bool override_coop_limit = false;
+#endif
   if (override_coop_limit) {
     if (FLAG_IS_DEFAULT(MaxRAM)) {
       phys_mem = os::physical_memory();

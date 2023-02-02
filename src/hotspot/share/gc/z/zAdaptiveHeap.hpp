@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,28 +21,42 @@
  * questions.
  */
 
-#ifndef SHARE_GC_Z_ZARGUMENTS_HPP
-#define SHARE_GC_Z_ZARGUMENTS_HPP
+#ifndef SHARE_GC_Z_ZADAPTIVEHEAP_HPP
+#define SHARE_GC_Z_ZADAPTIVEHEAP_HPP
 
-#include "gc/shared/gcArguments.hpp"
+#include "gc/z/zGenerationId.hpp"
+#include "memory/allocation.hpp"
+#include "gc/z/zStat.hpp"
 
-class CollectedHeap;
 
-class ZArguments : public GCArguments {
+class ZAdaptiveHeap : public AllStatic {
 private:
-  void initialize_adaptive_heap_sizing();
+  static bool _enabled;
 
-  virtual void initialize_alignments();
-  virtual void initialize_ergonomics();
+  struct ZGenerationData {
+    double _last_cpu_time;
+    volatile double _generation_cpu_overhead;
+    NumberSeq _process_cpu_time;
 
-  virtual void initialize();
-  virtual size_t conservative_max_heap_alignment();
-  virtual size_t heap_virtual_to_physical_ratio();
-  virtual CollectedHeap* create_heap();
+    ZGenerationData() :
+        _last_cpu_time(),
+        _generation_cpu_overhead(),
+        _process_cpu_time(0.7 /* alpha */) {}
+  };
 
-  virtual bool is_supported() const;
+  static ZGenerationData& young_data();
+  static ZGenerationData& old_data();
 
-  bool is_os_supported() const;
+  static ZGenerationData _generation_data[2];
+
+  static double process_cpu_time();
+
+public:
+  static bool is_enabled();
+  static void try_enable();
+  static void disable();
+
+  static void adapt(ZGenerationId generation, ZStatCycleStats stats);
 };
 
-#endif // SHARE_GC_Z_ZARGUMENTS_HPP
+#endif // SHARE_GC_Z_ZADAPTIVEHEAP_HPP

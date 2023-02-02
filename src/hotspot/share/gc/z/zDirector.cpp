@@ -306,11 +306,11 @@ template <typename PrintFn = void(*)(size_t, double)>
 static bool is_high_usage(ZDirectorStats& stats, PrintFn* print_function = nullptr) {
   // Calculate amount of free memory available. Note that we take the
   // relocation headroom into account to avoid in-place relocation.
-  const size_t soft_max_capacity = stats._heap._soft_max_heap_size;
+  const size_t max_capacity = ZHeap::heap()->max_capacity();
   const size_t used = stats._heap._used;
-  const size_t free_including_headroom = soft_max_capacity - MIN2(soft_max_capacity, used);
+  const size_t free_including_headroom = max_capacity - MIN2(max_capacity, used);
   const size_t free = free_including_headroom - MIN2(free_including_headroom, ZHeuristics::relocation_headroom());
-  const double free_percent = percent_of(free, soft_max_capacity);
+  const double free_percent = percent_of(free, max_capacity);
 
   if (print_function != nullptr) {
     (*print_function)(free, free_percent);
@@ -372,11 +372,11 @@ static bool rule_minor_high_usage(ZDirectorStats& stats) {
   // memory is still slowly but surely heading towards zero. In this situation,
   // we start a GC cycle to avoid a potential allocation stall later.
 
-  const size_t soft_max_capacity = stats._heap._soft_max_heap_size;
+  const size_t max_capacity = ZHeap::heap()->max_capacity();
   const size_t used = stats._heap._used;
-  const size_t free_including_headroom = soft_max_capacity - MIN2(soft_max_capacity, used);
+  const size_t free_including_headroom = max_capacity - MIN2(max_capacity, used);
   const size_t free = free_including_headroom - MIN2(free_including_headroom, ZHeuristics::relocation_headroom());
-  const double free_percent = percent_of(free, soft_max_capacity);
+  const double free_percent = percent_of(free, max_capacity);
 
   auto print_function = [&](size_t free, double free_percent) {
     log_debug(gc, director)("Rule Minor: High Usage, Free: " SIZE_FORMAT "MB(%.1f%%)",
@@ -607,7 +607,7 @@ static bool rule_major_proactive(ZDirectorStats& stats) {
   const double parallelizable_young_gc_time = stats._young_stats._cycle._avg_parallelizable_time + (stats._young_stats._cycle._sd_parallelizable_time * one_in_1000);
   const double serial_gc_time = serial_old_gc_time + serial_young_gc_time;
   const double parallelizable_gc_time = parallelizable_old_gc_time + parallelizable_young_gc_time;
-  const double gc_duration = serial_gc_time + (parallelizable_gc_time / ConcGCThreads);
+  const double gc_duration = serial_gc_time + parallelizable_gc_time;
   const double acceptable_gc_interval = gc_duration * ((assumed_throughput_drop_during_gc / acceptable_throughput_drop) - 1.0);
   const double time_until_gc = acceptable_gc_interval - time_since_last_gc;
 

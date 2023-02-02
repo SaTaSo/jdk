@@ -60,6 +60,9 @@ void GCArguments::initialize() {
   }
 }
 
+void GCArguments::initialize_ergonomics() {
+}
+
 void GCArguments::initialize_heap_sizes() {
   initialize_alignments();
   initialize_heap_flags_and_sizes();
