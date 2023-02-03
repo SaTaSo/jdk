@@ -153,12 +153,14 @@ static double select_young_gc_workers(ZDirectorStats& stats, double serial_gc_ti
 ZDriverRequest rule_minor_allocation_rate_dynamic(ZDirectorStats& stats,
                                                   double serial_gc_time_passed,
                                                   double parallel_gc_time_passed,
-                                                  double allocation_spike_tolerance,
-                                                  size_t capacity) {
+                                                  bool is_soft) {
   if (!stats._old_stats._cycle._is_time_trustable) {
     // Rule disabled
     return ZDriverRequest(GCCause::_no_gc, ConcGCThreads, 0);
   }
+
+  double allocation_spike_tolerance = is_soft ? 1.0 : ZAllocationSpikeTolerance;
+  size_t capacity = is_soft ? stats._heap._soft_max_heap_size : ZHeap::heap()->max_capacity();
 
   // Calculate amount of free memory available. Note that we take the
   // relocation headroom into account to avoid in-place relocation.
@@ -177,7 +179,8 @@ ZDriverRequest rule_minor_allocation_rate_dynamic(ZDirectorStats& stats,
   const double alloc_rate_avg = alloc_rate_stats._avg;
   const double alloc_rate_sd = alloc_rate_stats._sd;
   const double alloc_rate_sd_percent = alloc_rate_sd / (alloc_rate_avg + 1.0);
-  const double alloc_rate = (MAX2(alloc_rate_predict, alloc_rate_avg) * allocation_spike_tolerance) + (alloc_rate_sd * one_in_1000) + 1.0;
+  const double alloc_rate_conservative = (MAX2(alloc_rate_predict, alloc_rate_avg) * allocation_spike_tolerance) + (alloc_rate_sd * one_in_1000) + 1.0;
+  const double alloc_rate = is_soft ? (alloc_rate_avg + 1.0) : alloc_rate_conservative;
   const double time_until_oom = (free / alloc_rate) / (1.0 + alloc_rate_sd_percent);
 
   // Calculate max serial/parallel times of a GC cycle. The times are
@@ -226,8 +229,7 @@ ZDriverRequest rule_soft_minor_allocation_rate_dynamic(ZDirectorStats& stats,
     return rule_minor_allocation_rate_dynamic(stats,
                                               0.0 /* serial_gc_time_passed */,
                                               0.0 /* parallel_gc_time_passed */,
-                                              1.0 /* allocation spike tolerance */,
-                                              stats._heap._soft_max_heap_size /* capacity */);
+                                              true /* is_soft */);
 }
 
 ZDriverRequest rule_hard_minor_allocation_rate_dynamic(ZDirectorStats& stats,
@@ -236,8 +238,7 @@ ZDriverRequest rule_hard_minor_allocation_rate_dynamic(ZDirectorStats& stats,
   return rule_minor_allocation_rate_dynamic(stats,
                                             0.0 /* serial_gc_time_passed */,
                                             0.0 /* parallel_gc_time_passed */,
-                                            ZAllocationSpikeTolerance /* allocation spike tolerance */,
-                                            ZHeap::heap()->max_capacity() /* capacity */);
+                                            false /* is_soft */);
 }
 
 static bool rule_minor_allocation_rate_static(ZDirectorStats& stats) {
