@@ -342,6 +342,7 @@ public:
   #define TYPE_PTR_SENTINAL  ((const TypePtr*)-1)
   // Passing TYPE_PTR_SENTINAL as adr_type asks for computation of the adr_type if possible
   const Node* get_base_and_disp(intptr_t &offset, const TypePtr* &adr_type) const;
+  const Node* get_base_and_disp_inner(const MachOper* oper, intptr_t &offset, const TypePtr* &adr_type) const;
 
   // Helper for get_base_and_disp: find the base and index input nodes.
   // Returns the MachOper as determined by memory_operand(), for use, if
@@ -349,6 +350,7 @@ public:
   // are set to NodeSentinel. If (MachOper *) NULL is returned, base and
   // index are set to NULL.
   const MachOper* memory_inputs(Node* &base, Node* &index) const;
+  const MachOper* memory_inputs_inner(const MachOper* oper, Node* &base, Node* &index) const;
 
   // Helper for memory_inputs:  Which operand carries the necessary info?
   // By default, returns NULL, which means there is no such operand.

@@ -606,7 +606,13 @@ static bool is_concrete(intptr_t offset) {
 static const Node* get_base_and_offset(const MachNode* mach, intptr_t& offset) {
   const TypePtr* adr_type = NULL;
   offset = 0;
-  const Node* const base = mach->get_base_and_disp(offset, adr_type);
+  const Node* base = mach->get_base_and_disp(offset, adr_type);
+
+  if (offset == 0 && base != NULL && base != NodeSentinel && base->as_Mach()->ideal_Opcode() == Op_AddP) {
+    // Look through indirect memory operands
+    const MachOper* oper = base->as_Mach()->_opnds[1];
+    base = base->as_Mach()->get_base_and_disp_inner(oper, offset, adr_type);
+  }
 
   if (base == NULL || base == NodeSentinel ||
       is_undefined(offset) || (is_concrete(offset) && offset < 0)) {

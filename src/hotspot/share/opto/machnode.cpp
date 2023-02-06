@@ -220,8 +220,10 @@ const RegMask &MachNode::in_RegMask( uint idx ) const {
 
 //-----------------------------memory_inputs--------------------------------
 const MachOper*  MachNode::memory_inputs(Node* &base, Node* &index) const {
-  const MachOper* oper = memory_operand();
+  return memory_inputs_inner(memory_operand(), base, index);
+}
 
+const MachOper*  MachNode::memory_inputs_inner(const MachOper* oper, Node* &base, Node* &index) const {
   if (oper == (MachOper*)-1) {
     base = NodeSentinel;
     index = NodeSentinel;
@@ -251,11 +253,15 @@ const MachOper*  MachNode::memory_inputs(Node* &base, Node* &index) const {
 
 //-----------------------------get_base_and_disp----------------------------
 const Node* MachNode::get_base_and_disp(intptr_t &offset, const TypePtr* &adr_type) const {
+  return get_base_and_disp_inner(memory_operand(), offset, adr_type);
+}
+
+const Node* MachNode::get_base_and_disp_inner(const MachOper* oper, intptr_t &offset, const TypePtr* &adr_type) const {
 
   // Find the memory inputs using our helper function
   Node* base;
   Node* index;
-  const MachOper* oper = memory_inputs(base, index);
+  memory_inputs_inner(oper, base, index);
 
   if (oper == NULL) {
     // Base has been set to NULL
