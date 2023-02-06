@@ -32,6 +32,7 @@
 #include "gc/shared/suspendibleThreadSet.hpp"
 #include "gc/shared/workerThread.hpp"
 #include "gc/z/zAbort.inline.hpp"
+#include "gc/z/zAdaptiveHeap.hpp"
 #include "gc/z/zAddress.inline.hpp"
 #include "gc/z/zBarrier.inline.hpp"
 #include "gc/z/zBarrierSetNMethod.hpp"
@@ -506,6 +507,10 @@ public:
       _flushed(false) {}
 
   void do_thread(Thread* thread) {
+    if (ZAdaptiveHeap::is_enabled() && thread->is_Java_thread()) {
+      size_t recorded_barriers = ZThreadLocalData::get_and_clear_barrier_slow_paths(JavaThread::cast(thread));
+      ZAdaptiveHeap::record_barrier_slow_paths(recorded_barriers);
+    }
     if (_mark->flush_and_free(thread)) {
       _flushed = true;
       if (SafepointSynchronize::is_at_safepoint()) {

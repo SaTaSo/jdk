@@ -41,6 +41,7 @@ private:
   uintptr_t              _store_bad_mask;
   uintptr_t              _uncolor_mask;
   uintptr_t              _nmethod_disarmed;
+  size_t                 _barrier_slow_paths;
   ZStoreBarrierBuffer*   _store_barrier_buffer;
   ZMarkThreadLocalStacks _mark_stacks[2];
   zaddress_unsafe*       _invisible_root;
@@ -53,6 +54,7 @@ private:
       _store_bad_mask(0),
       _uncolor_mask(0),
       _nmethod_disarmed(0),
+      _barrier_slow_paths(0),
       _store_barrier_buffer(new ZStoreBarrierBuffer()),
       _mark_stacks(),
       _invisible_root(NULL) {}
@@ -72,6 +74,16 @@ public:
 
   static void destroy(Thread* thread) {
     data(thread)->~ZThreadLocalData();
+  }
+
+  static size_t get_and_inc_barrier_slow_paths(Thread* thread) {
+    return data(thread)->_barrier_slow_paths++;
+  }
+
+  static size_t get_and_clear_barrier_slow_paths(Thread* thread) {
+    size_t result = data(thread)->_barrier_slow_paths;
+    data(thread)->_barrier_slow_paths = 0;
+    return result;
   }
 
   static void set_load_bad_mask(Thread* thread, uintptr_t mask) {

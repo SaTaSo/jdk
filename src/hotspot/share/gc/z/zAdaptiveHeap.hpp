@@ -32,6 +32,9 @@
 class ZAdaptiveHeap : public AllStatic {
 private:
   static bool _enabled;
+  static volatile size_t _barrier_slow_paths;
+  static NumberSeq _barrier_cpu_time;
+  static ZLock* _lock;
 
   struct ZGenerationData {
     double _last_cpu_time;
@@ -55,6 +58,9 @@ public:
   static bool is_enabled();
   static void try_enable();
   static void disable();
+
+  static void record_barrier_slow_path_time(double seconds);
+  static void record_barrier_slow_paths(size_t barrier_slow_paths);
 
   static void adapt(ZGenerationId generation, ZStatCycleStats stats);
 };

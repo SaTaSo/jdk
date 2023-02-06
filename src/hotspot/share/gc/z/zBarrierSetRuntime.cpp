@@ -22,44 +22,83 @@
  */
 
 #include "precompiled.hpp"
+#include "gc/z/zAdaptiveHeap.hpp"
 #include "gc/z/zBarrier.inline.hpp"
 #include "gc/z/zBarrierSetRuntime.hpp"
+#include "gc/z/zThreadLocalData.hpp"
 #include "oops/access.hpp"
 #include "runtime/interfaceSupport.inline.hpp"
 
+class ZSampleBarrierSlowPath {
+private:
+  bool _sample_time;
+  Ticks _start;
+
+public:
+  ZSampleBarrierSlowPath() :
+      _sample_time(),
+      _start() {
+    if (!ZAdaptiveHeap::is_enabled()) {
+      return;
+    }
+    size_t slow_paths = ZThreadLocalData::get_and_inc_barrier_slow_paths(JavaThread::current());
+    if ((slow_paths & 1023u) == 0) {
+      _sample_time = true;
+      _start = Ticks::now();
+    }
+  }
+
+  ~ZSampleBarrierSlowPath() {
+    if (_sample_time) {
+      Ticks end = Ticks::now();
+      Tickspan duration = end - _start;
+      ZAdaptiveHeap::record_barrier_slow_path_time(duration.seconds());
+    }
+  }
+};
+
 JRT_LEAF(oopDesc*, ZBarrierSetRuntime::load_barrier_on_oop_field_preloaded(oopDesc* o, oop* p))
+  ZSampleBarrierSlowPath sample;
   return to_oop(ZBarrier::load_barrier_on_oop_field_preloaded((zpointer*)p, to_zpointer(o)));
 JRT_END
 
 JRT_LEAF(zpointer, ZBarrierSetRuntime::load_barrier_on_oop_field_preloaded_store_good(oopDesc* o, oop* p))
+  ZSampleBarrierSlowPath sample;
   return ZAddress::color(ZBarrier::load_barrier_on_oop_field_preloaded((zpointer*)p, to_zpointer(o)), ZPointerStoreGoodMask);
 JRT_END
 
 JRT_LEAF(oopDesc*, ZBarrierSetRuntime::load_barrier_on_weak_oop_field_preloaded(oopDesc* o, oop* p))
+  ZSampleBarrierSlowPath sample;
   return to_oop(ZBarrier::load_barrier_on_weak_oop_field_preloaded((zpointer*)p, to_zpointer(o)));
 JRT_END
 
 JRT_LEAF(oopDesc*, ZBarrierSetRuntime::load_barrier_on_phantom_oop_field_preloaded(oopDesc* o, oop* p))
+  ZSampleBarrierSlowPath sample;
   return to_oop(ZBarrier::load_barrier_on_phantom_oop_field_preloaded((zpointer*)p, to_zpointer(o)));
 JRT_END
 
 JRT_LEAF(oopDesc*, ZBarrierSetRuntime::no_keepalive_load_barrier_on_weak_oop_field_preloaded(oopDesc* o, oop* p))
+  ZSampleBarrierSlowPath sample;
   return to_oop(ZBarrier::no_keep_alive_load_barrier_on_weak_oop_field_preloaded((zpointer*)p, to_zpointer(o)));
 JRT_END
 
 JRT_LEAF(oopDesc*, ZBarrierSetRuntime::no_keepalive_load_barrier_on_phantom_oop_field_preloaded(oopDesc* o, oop* p))
+  ZSampleBarrierSlowPath sample;
   return to_oop(ZBarrier::no_keep_alive_load_barrier_on_phantom_oop_field_preloaded((zpointer*)p, to_zpointer(o)));
 JRT_END
 
 JRT_LEAF(void, ZBarrierSetRuntime::store_barrier_on_oop_field_with_healing(oop* p))
+  ZSampleBarrierSlowPath sample;
   ZBarrier::store_barrier_on_heap_oop_field((zpointer*)p, true /* heal */);
 JRT_END
 
 JRT_LEAF(void, ZBarrierSetRuntime::store_barrier_on_oop_field_without_healing(oop* p))
+  ZSampleBarrierSlowPath sample;
   ZBarrier::store_barrier_on_heap_oop_field((zpointer*)p, false /* heal */);
 JRT_END
 
 JRT_LEAF(void, ZBarrierSetRuntime::store_barrier_on_native_oop_field_without_healing(oop* p))
+  ZSampleBarrierSlowPath sample;
   ZBarrier::store_barrier_on_native_oop_field((zpointer*)p, false /* heal */);
 JRT_END
 

@@ -26,6 +26,7 @@
 #include "gc/z/zAdaptiveHeap.hpp"
 #include "gc/z/zHeap.inline.hpp"
 #include "logging/log.hpp"
+#include "runtime/atomic.hpp"
 #include "runtime/os.hpp"
 #include "runtime/atomic.hpp"
 #include "utilities/debug.hpp"
@@ -38,7 +39,10 @@
 #endif
 
 bool ZAdaptiveHeap::_enabled = false;
+volatile size_t ZAdaptiveHeap::_barrier_slow_paths = 0;
 ZAdaptiveHeap::ZGenerationData ZAdaptiveHeap::_generation_data[2];
+NumberSeq ZAdaptiveHeap::_barrier_cpu_time(0.7);
+ZLock* ZAdaptiveHeap::_lock = nullptr;
 
 double ZAdaptiveHeap::process_cpu_time() {
 #ifdef _WINDOWS
@@ -101,6 +105,20 @@ void ZAdaptiveHeap::try_enable() {
   _enabled = true;
   young_data()._last_cpu_time = time_now;
   old_data()._last_cpu_time = time_now;
+  _lock = new ZLock();
+}
+
+void ZAdaptiveHeap::record_barrier_slow_path_time(double seconds) {
+  if (!_lock->try_lock()) {
+    // Contention - this isn't important enough to block
+    return;
+  }
+  _barrier_cpu_time.add(seconds);
+  _lock->unlock();
+}
+
+void ZAdaptiveHeap::record_barrier_slow_paths(size_t barrier_slow_paths) {
+  Atomic::add(&_barrier_slow_paths, barrier_slow_paths);
 }
 
 // Produces values in the range 0 - 1 in an S shape
@@ -111,7 +129,6 @@ static double sigmoid_function(double value) {
 void ZAdaptiveHeap::adapt(ZGenerationId generation, ZStatCycleStats stats) {
   assert(is_enabled(), "Adapting heap even though adaptation is disabled");
   ZGenerationData& generation_data = _generation_data[(int)generation];
-  double avg_gc_time = stats._avg_serial_time + stats._avg_parallelizable_time;
 
   double time_last = generation_data._last_cpu_time;
   double time_now = process_cpu_time();
@@ -120,10 +137,19 @@ void ZAdaptiveHeap::adapt(ZGenerationId generation, ZStatCycleStats stats) {
   double total_time = time_now - time_last;
   generation_data._process_cpu_time.add(total_time);
 
+  size_t barriers = Atomic::xchg(&_barrier_slow_paths, (size_t)0u);
+  double barrier_slow_path_time;
+  {
+    ZLocker<ZLock> locker(_lock);
+    barrier_slow_path_time = _barrier_cpu_time.davg();
+  }
+  double avg_barrier_time = barriers * barrier_slow_path_time;
+  double avg_gc_time = stats._avg_serial_time + stats._avg_parallelizable_time;
   double avg_total_time = generation_data._process_cpu_time.davg();
 
-  double avg_generation_cpu_overhead = avg_gc_time / avg_total_time;
-  log_debug(gc, adaptive)("Adaptive avg gc time %f, avg total time %f", avg_gc_time, avg_total_time);
+  double avg_generation_cpu_overhead = (avg_gc_time + avg_barrier_time) / avg_total_time;
+  log_debug(gc, adaptive)("Adaptive barriers " SIZE_FORMAT ", time %f", barriers, barrier_slow_path_time);
+  log_debug(gc, adaptive)("Adaptive avg gc time %f, avg barrier time %f, avg total time %f", avg_gc_time, avg_barrier_time, avg_total_time);
   Atomic::store(&generation_data._generation_cpu_overhead, avg_generation_cpu_overhead);
 
   double young_cpu_overhead = Atomic::load(&young_data()._generation_cpu_overhead);
