@@ -153,7 +153,7 @@ static double select_young_gc_workers(ZDirectorStats& stats, double serial_gc_ti
 ZDriverRequest rule_minor_allocation_rate_dynamic(ZDirectorStats& stats,
                                                   double serial_gc_time_passed,
                                                   double parallel_gc_time_passed,
-                                                  double allocation_spike_tolerance,
+                                                  bool conservative_alloc_rate,
                                                   size_t capacity) {
   if (!stats._old_stats._cycle._is_time_trustable) {
     // Rule disabled
@@ -177,7 +177,8 @@ ZDriverRequest rule_minor_allocation_rate_dynamic(ZDirectorStats& stats,
   const double alloc_rate_avg = alloc_rate_stats._avg;
   const double alloc_rate_sd = alloc_rate_stats._sd;
   const double alloc_rate_sd_percent = alloc_rate_sd / (alloc_rate_avg + 1.0);
-  const double alloc_rate = (MAX2(alloc_rate_predict, alloc_rate_avg) * allocation_spike_tolerance) + (alloc_rate_sd * one_in_1000) + 1.0;
+  const double alloc_rate_conservative = (MAX2(alloc_rate_predict, alloc_rate_avg) * ZAllocationSpikeTolerance) + (alloc_rate_sd * one_in_1000) + 1.0;
+  const double alloc_rate = conservative_alloc_rate ? alloc_rate_conservative : alloc_rate_stats._avg;
   const double time_until_oom = (free / alloc_rate) / (1.0 + alloc_rate_sd_percent);
 
   // Calculate max serial/parallel times of a GC cycle. The times are
@@ -226,8 +227,18 @@ ZDriverRequest rule_soft_minor_allocation_rate_dynamic(ZDirectorStats& stats,
     return rule_minor_allocation_rate_dynamic(stats,
                                               0.0 /* serial_gc_time_passed */,
                                               0.0 /* parallel_gc_time_passed */,
-                                              1.0 /* allocation spike tolerance */,
+                                              false /* conservative_alloc_rate */,
                                               stats._heap._soft_max_heap_size /* capacity */);
+}
+
+ZDriverRequest rule_semi_hard_minor_allocation_rate_dynamic(ZDirectorStats& stats,
+                                                            double serial_gc_time_passed,
+                                                            double parallel_gc_time_passed) {
+  return rule_minor_allocation_rate_dynamic(stats,
+                                            0.0 /* serial_gc_time_passed */,
+                                            0.0 /* parallel_gc_time_passed */,
+                                            false /* conservative_alloc_rate */,
+                                            ZHeap::heap()->max_capacity() /* capacity */);
 }
 
 ZDriverRequest rule_hard_minor_allocation_rate_dynamic(ZDirectorStats& stats,
@@ -236,7 +247,7 @@ ZDriverRequest rule_hard_minor_allocation_rate_dynamic(ZDirectorStats& stats,
   return rule_minor_allocation_rate_dynamic(stats,
                                             0.0 /* serial_gc_time_passed */,
                                             0.0 /* parallel_gc_time_passed */,
-                                            ZAllocationSpikeTolerance /* allocation spike tolerance */,
+                                            true /* conservative_alloc_rate */,
                                             ZHeap::heap()->max_capacity() /* capacity */);
 }
 
@@ -695,7 +706,7 @@ static ZWorkerResizeInfo wanted_young_nworkers(ZDirectorStats& stats) {
     };
   }
 
-  const ZDriverRequest request = rule_hard_minor_allocation_rate_dynamic(stats, resize_stats._serial_gc_time_passed, resize_stats._parallel_gc_time_passed);
+  const ZDriverRequest request = rule_semi_hard_minor_allocation_rate_dynamic(stats, resize_stats._serial_gc_time_passed, resize_stats._parallel_gc_time_passed);
   if (request.cause() == GCCause::_no_gc) {
     // No urgency
     return {
@@ -705,10 +716,22 @@ static ZWorkerResizeInfo wanted_young_nworkers(ZDirectorStats& stats) {
     };
   }
 
+  const uint min_young_nworkers = MAX2(request.young_nworkers(), resize_stats._nworkers_current);
+  uint desired_nworkers = min_young_nworkers;
+
+  if (desired_nworkers > resize_stats._nworkers_current) {
+    // We need to increase workers
+    uint needed_increase = desired_nworkers - resize_stats._nworkers_current;
+    // We want to increase by more than the minimum amount to ensure that
+    // there are enough margins, but also to avoid too frequent resizing.
+    uint desired_increase = needed_increase * 2;
+    desired_nworkers = MIN2(resize_stats._nworkers_current + desired_increase, ConcGCThreads);
+  }
+
   return {
-    resize_stats._is_active,                                       // _is_active
-    resize_stats._nworkers_current,                                // _current_nworkers
-    MAX2(resize_stats._nworkers_current, request.young_nworkers()) // _desired_nworkers
+    resize_stats._is_active,        // _is_active
+    resize_stats._nworkers_current, // _current_nworkers
+    desired_nworkers                // _desired_nworkers
   };
 }
 
@@ -740,6 +763,50 @@ static ZWorkerResizeInfo wanted_old_nworkers(ZDirectorStats& stats) {
   };
 }
 
+static uint compute_min_old_threads(ZDirectorStats& stats, ZWorkerResizeInfo young_info, ZWorkerResizeInfo& old_info) {
+  // TODO: Pick favourite policy
+  //return clamp(ConcGCThreads / 10, 1u, old_info._desired_nworkers);
+  ZWorkerResizeStats young_stats = stats._young_stats._resize;
+  if (!young_stats._is_active) {
+    // Only old active - take all you want
+    return old_info._desired_nworkers;
+  }
+
+  ZDriverRequest risky_request = rule_semi_hard_minor_allocation_rate_dynamic(stats,
+                                                                              young_stats._serial_gc_time_passed,
+                                                                              young_stats._parallel_gc_time_passed);
+
+  ZDriverRequest conservative_request = rule_hard_minor_allocation_rate_dynamic(stats,
+                                                                                young_stats._serial_gc_time_passed,
+                                                                                young_stats._parallel_gc_time_passed);
+
+  if (risky_request.cause() == GCCause::_no_gc) {
+    // Young collection is not urgent enough
+    if (old_info._desired_nworkers == ConcGCThreads && ConcGCThreads > 1) {
+      // Still need at least 1 thread for young collection.
+      return ConcGCThreads - 1;
+    } else {
+      return old_info._desired_nworkers;
+    }
+  } else {
+    // Young collection is urgent; how urgent?
+    uint risky_young_thread_count = risky_request.young_nworkers();
+    uint conservative_young_thread_count = conservative_request.young_nworkers();
+
+    uint debatable_margin = risky_young_thread_count <= conservative_young_thread_count ?
+                            (conservative_young_thread_count - risky_young_thread_count) :
+                            (risky_young_thread_count - conservative_young_thread_count);
+
+    if (debatable_margin == 0u) {
+      // There is no margin for young collections; we choose to prioritize young gen
+      return 1u;
+    } else {
+      // Let the old generation claim what it needs from the safety margin
+      return MIN2(debatable_margin, old_info._desired_nworkers);
+    }
+  }
+}
+
 static void adjust_gc(ZDirectorStats& stats, ZWorkerResizeInfo young_info, ZWorkerResizeInfo old_info) {
   uint young_workers = young_info._desired_nworkers;
   uint old_workers = old_info._desired_nworkers;
@@ -752,8 +819,9 @@ static void adjust_gc(ZDirectorStats& stats, ZWorkerResizeInfo young_info, ZWork
       old_workers = MAX2(ConcGCThreads - 1u, 1u);
       young_workers = 1u;
     } else {
+      const uint min_old_threads = compute_min_old_threads(stats, young_info, old_info);
       // In the normal case, the minor GC is urgent, so give it what it wants
-      const uint max_young_threads = MAX2(ConcGCThreads - 1, 1u);
+      const uint max_young_threads = MAX2(ConcGCThreads - min_old_threads, 1u);
       young_workers = MIN2(young_info._desired_nworkers, max_young_threads);
       // Adjust old threads so we don't have more than ConcGCThreads in total
       const uint max_old_threads = MAX2(ConcGCThreads - young_info._desired_nworkers, 1u);

@@ -127,12 +127,6 @@ void ZArguments::initialize() {
                                           "MaxTenuringThreshold"));
   }
 
-  // The heuristics used when UseDynamicNumberOfGCThreads is
-  // enabled defaults to using a ZAllocationSpikeTolerance of 1.
-  if (UseDynamicNumberOfGCThreads && FLAG_IS_DEFAULT(ZAllocationSpikeTolerance)) {
-    FLAG_SET_DEFAULT(ZAllocationSpikeTolerance, 1);
-  }
-
 #ifdef COMPILER2
   // Enable loop strip mining by default
   if (FLAG_IS_DEFAULT(UseCountedLoopSafepoints)) {
