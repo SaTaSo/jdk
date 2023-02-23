@@ -22,11 +22,31 @@
  */
 
 #include "precompiled.hpp"
+#include "gc/shared/concurrentGCThread.hpp"
 #include "gc/z/zAbort.hpp"
 #include "runtime/atomic.hpp"
+#include "runtime/mutexLocker.hpp"
 
 volatile bool ZAbort::_should_abort = false;
 
 void ZAbort::abort() {
   Atomic::store(&_should_abort, true);
+}
+
+void ZAbort::await_termination(ConcurrentGCThread* thread) {
+  MonitorLocker ml(Terminator_lock, Monitor::_no_safepoint_check_flag);
+
+  // Wait for signal to terminate
+  while (!thread->should_terminate()) {
+    ml.wait();
+  }
+}
+
+void ZAbort::terminate(ConcurrentGCThread* thread) {
+  // Signal thread to terminate
+  // The should_terminate() flag should be true, and this notifies waiters
+  // to wake up.
+  MonitorLocker ml(Terminator_lock);
+  assert(thread->should_terminate(), "This should be called when should_terminate has been set");
+  ml.notify_all();
 }

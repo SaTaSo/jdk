@@ -87,9 +87,12 @@ void ZUncommitter::run_service() {
       event.commit(uncommitted);
     }
   }
+
+  ZAbort::await_termination(this);
 }
 
 void ZUncommitter::stop_service() {
+  ZAbort::terminate(this);
   ZLocker<ZConditionLock> locker(&_lock);
   _stop = true;
   _lock.notify_all();
