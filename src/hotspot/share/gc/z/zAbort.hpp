@@ -26,6 +26,8 @@
 
 #include "memory/allStatic.hpp"
 
+class ConcurrentGCThread;
+
 class ZAbort : public AllStatic {
 private:
   static volatile bool _should_abort;
@@ -33,6 +35,9 @@ private:
 public:
   static bool should_abort();
   static void abort();
+
+  static void await_termination(ConcurrentGCThread* thread);
+  static void terminate(ConcurrentGCThread* thread);
 };
 
 // Macro to execute a abortion check

@@ -1071,9 +1071,12 @@ void ZStat::run_service() {
   }
 
   delete [] history;
+
+  ZAbort::await_termination(this);
 }
 
 void ZStat::stop_service() {
+  ZAbort::terminate(this);
   _metronome.stop();
 }
 

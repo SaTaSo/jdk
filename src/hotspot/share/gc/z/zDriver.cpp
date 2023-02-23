@@ -204,12 +204,16 @@ void ZDriverMinor::run_service() {
 
     ZDriverLocker locker;
 
-    abortpoint();
+    if (ZAbort::should_abort()) {
+      break;
+    }
 
     // Run GC
     gc(request);
 
-    abortpoint();
+    if (ZAbort::should_abort()) {
+      break;
+    }
 
     // Notify GC completed
     _port.ack();
@@ -220,9 +224,12 @@ void ZDriverMinor::run_service() {
     // Good point to consider back-to-back GC
     ZDirector::evaluate_rules();
   }
+
+  ZAbort::await_termination(this);
 }
 
 void ZDriverMinor::stop_service() {
+  ZAbort::terminate(this);
   const ZDriverRequest request(GCCause::_no_gc, 0, 0);
   _port.send_async(request);
 }
@@ -450,12 +457,16 @@ void ZDriverMajor::run_service() {
 
     ZBreakpoint::at_before_gc();
 
-    abortpoint();
+    if (ZAbort::should_abort()) {
+      break;
+    }
 
     // Run GC
     gc(request);
 
-    abortpoint();
+    if (ZAbort::should_abort()) {
+      break;
+    }
 
     // Notify GC completed
     _port.ack();
@@ -465,9 +476,12 @@ void ZDriverMajor::run_service() {
 
     ZBreakpoint::at_after_gc();
   }
+
+  ZAbort::await_termination(this);
 }
 
 void ZDriverMajor::stop_service() {
+  ZAbort::terminate(this);
   const ZDriverRequest request(GCCause::_no_gc, 0, 0);
   _port.send_async(request);
 }

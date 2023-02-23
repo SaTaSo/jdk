@@ -81,14 +81,17 @@ void ZUnmapper::run_service() {
     ZPage* const page = dequeue();
     if (page == nullptr) {
       // Stop
-      return;
+      break;
     }
 
     do_unmap_and_destroy_page(page);
   }
+
+  ZAbort::await_termination(this);
 }
 
 void ZUnmapper::stop_service() {
+  ZAbort::terminate(this);
   ZLocker<ZConditionLock> locker(&_lock);
   _stop = true;
   _lock.notify_all();

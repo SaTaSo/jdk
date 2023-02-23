@@ -919,9 +919,11 @@ void ZDirector::run_service() {
       adjust_gc(stats);
     }
   }
+  ZAbort::await_termination(this);
 }
 
 void ZDirector::stop_service() {
+  ZAbort::terminate(this);
   ZLocker<ZConditionLock> locker(&_monitor);
   _stopped = true;
   _monitor.notify();
