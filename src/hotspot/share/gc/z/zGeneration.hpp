@@ -277,7 +277,6 @@ private:
   void relocate_start();
   void relocate();
   void remap_roots();
-  void remap_remembered_sets();
 
   void concurrent_mark();
   bool pause_mark_end();

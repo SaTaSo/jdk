@@ -103,6 +103,7 @@ static const ZStatSubPhase ZSubPhaseConcurrentMarkRootsOld("Concurrent Mark Root
 static const ZStatSubPhase ZSubPhaseConcurrentMarkFollowOld("Concurrent Mark Follow", ZGenerationId::old);
 static const ZStatSubPhase ZSubPhaseConcurrentRemapRootsColoredOld("Concurrent Remap Roots Colored", ZGenerationId::old);
 static const ZStatSubPhase ZSubPhaseConcurrentRemapRootsUncoloredOld("Concurrent Remap Roots Uncolored", ZGenerationId::old);
+static const ZStatSubPhase ZSubPhaseConcurrentRemapRememberedOld("Concurrent Remap Remembered", ZGenerationId::old);
 
 static const ZStatSampler ZSamplerJavaThreads("System", "Java Threads", ZStatUnitThreads);
 
@@ -1383,18 +1384,21 @@ typedef ClaimingCLDToOopClosure<ClassLoaderData::_claim_none> ZRemapCLDClosure;
 
 class ZRemapRootsTask : public ZTask {
 private:
-  ZRootsIteratorAllColored   _roots_colored;
-  ZRootsIteratorAllUncolored _roots_uncolored;
+  ZGenerationPagesParallelIterator _old_pages_parallel_iterator;
 
-  ZRemapOopClosure           _cl_colored;
-  ZRemapCLDClosure           _cld_cl;
+  ZRootsIteratorAllColored         _roots_colored;
+  ZRootsIteratorAllUncolored       _roots_uncolored;
 
-  ZRemapThreadClosure        _thread_cl;
-  ZRemapNMethodClosure       _nm_cl;
+  ZRemapOopClosure                 _cl_colored;
+  ZRemapCLDClosure                 _cld_cl;
+
+  ZRemapThreadClosure              _thread_cl;
+  ZRemapNMethodClosure             _nm_cl;
 
 public:
-  ZRemapRootsTask() :
+  ZRemapRootsTask(ZPageTable* page_table, ZPageAllocator* page_allocator) :
       ZTask("ZRemapRootsTask"),
+      _old_pages_parallel_iterator(page_table, ZGenerationId::old, page_allocator),
       _roots_colored(ZGenerationIdOptional::old),
       _roots_uncolored(ZGenerationIdOptional::old),
       _cl_colored(),
@@ -1420,27 +1424,29 @@ public:
       _roots_uncolored.apply(&_thread_cl,
                              &_nm_cl);
     }
+
+    {
+      ZStatTimerWorker timer(ZSubPhaseConcurrentRemapRememberedOld);
+      _old_pages_parallel_iterator.do_pages([&](ZPage* page) {
+        // Visit all object fields that potentially pointing into young generation
+        page->oops_do_current_remembered(ZBarrier::load_barrier_on_oop_field);
+        return true;
+      });
+    }
   }
 };
 
-void ZGenerationOld::remap_remembered_sets() {
-  ZGenerationPagesIterator iter(_page_table, ZGenerationId::old, _page_allocator);
-  for (ZPage* page; iter.next(&page);) {
-    // Visit all object fields that potentially pointing into young generation
-    page->oops_do_current_remembered(ZBarrier::load_barrier_on_oop_field);
-  }
-}
-
 void ZGenerationOld::remap_roots() {
+  uint prev_nworkers = _workers.active_workers();
+  uint remap_nworkers = clamp(MAX2(_workers.active_workers(), ZGeneration::young()->workers()->active_workers()), 1u, ZOldGCThreads);
+  _workers.set_active_workers(remap_nworkers);
   SuspendibleThreadSetJoiner sts_joiner;
-
-  // Remap remembered sets
-  remap_remembered_sets();
 
   sts_joiner.yield();
 
-  ZRemapRootsTask task;
+  ZRemapRootsTask task(_page_table, _page_allocator);
   workers()->run(&task);
+  _workers.set_active_workers(prev_nworkers);
 }
 
 uint ZGenerationOld::total_collections_at_end() const {
