@@ -197,7 +197,7 @@ static void mark_barrier_on_oop_array(volatile zpointer* p, size_t length, bool 
     if (young) {
       ZBarrier::mark_barrier_on_young_oop_field(p);
     } else {
-      ZBarrier::mark_barrier_on_oop_field(p, finalizable);
+      ZBarrier::mark_barrier_on_old_oop_field(p, finalizable);
     }
   }
 }
@@ -266,8 +266,8 @@ void ZMark::follow_partial_array(ZMarkStackEntry entry, bool finalizable) {
   follow_array_elements(addr, length, finalizable);
 }
 
-template <bool finalizable, bool young>
-class ZMarkBarrierOldOopClosure : public ClaimMetadataVisitingOopIterateClosure {
+template <bool finalizable, bool young, bool old>
+class ZMarkBarrierFollowOopClosure : public ClaimMetadataVisitingOopIterateClosure {
 private:
   static int claim_value() {
     return finalizable ? ClassLoaderData::_claim_finalizable
@@ -290,7 +290,7 @@ private:
   const bool _visit_metadata;
 
 public:
-  ZMarkBarrierOldOopClosure() :
+  ZMarkBarrierFollowOopClosure() :
       ClaimMetadataVisitingOopIterateClosure(claim_value(),
                                              discoverer()),
       _visit_metadata(visit_metadata()) {}
@@ -298,6 +298,8 @@ public:
   virtual void do_oop(oop* p) {
     if (young) {
       ZBarrier::mark_barrier_on_young_oop_field((zpointer*)p);
+    } else if (old) {
+      ZBarrier::mark_barrier_on_old_oop_field((zpointer*)p, finalizable);
     } else {
       ZBarrier::mark_barrier_on_oop_field((zpointer*)p, finalizable);
     }
@@ -317,15 +319,26 @@ public:
     assert(!finalizable, "Can't handle finalizable marking of nmethods");
     nm->run_nmethod_entry_barrier();
   }
+
+  virtual void do_klass(Klass* klass) {
+    ClassLoaderData* cld = klass->class_loader_data();
+    ZMarkBarrierFollowOopClosure<finalizable, false, false> cl;
+    cld->oops_do(&cl, claim_value());
+  }
+
+  virtual void do_cld(ClassLoaderData* cld) {
+    ZMarkBarrierFollowOopClosure<finalizable, false, false> cl;
+    cld->oops_do(&cl, claim_value());
+  }
 };
 
 void ZMark::follow_array_object(objArrayOop obj, bool finalizable) {
   if (_generation->is_old()) {
     if (finalizable) {
-      ZMarkBarrierOldOopClosure<true /* finalizable */, false /* young */> cl;
+      ZMarkBarrierFollowOopClosure<true /* finalizable */, false /* young */, true /* old */> cl;
       cl.do_klass(obj->klass());
     } else {
-      ZMarkBarrierOldOopClosure<false /* finalizable */, false /* young */> cl;
+      ZMarkBarrierFollowOopClosure<false /* finalizable */, false /* young */, true /* old */> cl;
       cl.do_klass(obj->klass());
     }
   }
@@ -343,10 +356,10 @@ void ZMark::follow_object(oop obj, bool finalizable) {
   if (_generation->is_old()) {
     if (ZHeap::heap()->is_old(to_zaddress(obj))) {
       if (finalizable) {
-        ZMarkBarrierOldOopClosure<true /* finalizable */, false /* young */> cl;
+        ZMarkBarrierFollowOopClosure<true /* finalizable */, false /* young */, true /* old */> cl;
         ZIterator::oop_iterate(obj, &cl);
       } else {
-        ZMarkBarrierOldOopClosure<false /* finalizable */, false /* young */> cl;
+        ZMarkBarrierFollowOopClosure<false /* finalizable */, false /* young */, true /* old */> cl;
         ZIterator::oop_iterate(obj, &cl);
       }
     } else {
@@ -354,7 +367,7 @@ void ZMark::follow_object(oop obj, bool finalizable) {
     }
   } else {
     // Young gen must help out with old marking
-    ZMarkBarrierOldOopClosure<false /* finalizable */, true /* young */> cl;
+    ZMarkBarrierFollowOopClosure<false /* finalizable */, true /* young */, false /* old */> cl;
     ZIterator::oop_iterate(obj, &cl);
   }
 }
@@ -509,7 +522,7 @@ public:
     if (_mark->flush_and_free(thread)) {
       _flushed = true;
       if (SafepointSynchronize::is_at_safepoint()) {
-        log_debug(gc, marking)("Thread broke mark termination %s", thread->name());
+        log_info(gc, marking)("Thread broke mark termination %s", thread->name());
       }
     }
   }
@@ -522,25 +535,16 @@ public:
 class VM_ZMarkFlushOperation : public VM_Operation {
 private:
   ThreadClosure* _cl;
-  bool           _gc_threads;
 
 public:
-  VM_ZMarkFlushOperation(ThreadClosure* cl, bool gc_threads) :
-      _cl(cl),
-      _gc_threads(gc_threads) {}
+  VM_ZMarkFlushOperation(ThreadClosure* cl) :
+      _cl(cl) {}
 
   virtual bool evaluate_at_safepoint() const {
     return false;
   }
 
   virtual void doit() {
-    // Flush GC threads
-    if (_gc_threads) {
-      SuspendibleThreadSet::synchronize();
-      ZGeneration::young()->threads_do(_cl);
-      ZGeneration::old()->threads_do(_cl);
-      SuspendibleThreadSet::desynchronize();
-    }
     // Flush VM thread
     Thread* const thread = Thread::current();
     _cl->do_thread(thread);
@@ -551,9 +555,9 @@ public:
   }
 };
 
-bool ZMark::flush(bool gc_threads) {
+bool ZMark::flush() {
   ZMarkFlushAndFreeStacksClosure cl(this);
-  VM_ZMarkFlushOperation vm_cl(&cl, gc_threads);
+  VM_ZMarkFlushOperation vm_cl(&cl);
   Handshake::execute(&cl);
   VMThread::execute(&vm_cl);
 
@@ -565,7 +569,11 @@ bool ZMark::try_terminate_flush() {
   Atomic::inc(&_work_nterminateflush);
   _terminate.set_resurrected(false);
 
-  return flush(true /* gc_threads */) ||
+  if (ZVerifyMarking) {
+    verify_worker_stacks_empty();
+  }
+
+  return flush() ||
          _terminate.resurrected();
 }
 
@@ -583,7 +591,7 @@ bool ZMark::try_proactive_flush() {
   Atomic::inc(&_work_nproactiveflush);
 
   SuspendibleThreadSetLeaver sts_leaver;
-  return flush(false /* gc_threads */);
+  return flush();
 }
 
 bool ZMark::try_terminate() {
@@ -622,8 +630,8 @@ void ZMark::work() {
     }
   }
 
-  // Free remaining stacks
-  stacks->free(&_allocator);
+  // Flush mark stacks
+  ZHeap::heap()->mark_flush_and_free(Thread::current());
 }
 
 class ZMarkOopClosure : public OopClosure {
@@ -796,7 +804,7 @@ public:
     // the set of workers executing during root scanning
     // can be different from the set of workers executing
     // during mark.
-    _mark->flush_and_free();
+    ZHeap::heap()->mark_flush_and_free(Thread::current());
   }
 };
 
@@ -848,7 +856,7 @@ public:
     // the set of workers executing during root scanning
     // can be different from the set of workers executing
     // during mark.
-    _mark->flush_and_free();
+    ZHeap::heap()->mark_flush_and_free(Thread::current());
   }
 };
 
@@ -993,4 +1001,10 @@ void ZMark::verify_all_stacks_empty() const {
 
   // Verify stripe stacks
   guarantee(_stripes.is_empty(), "Should be empty");
+}
+
+void ZMark::verify_worker_stacks_empty() const {
+  // Verify thread stacks
+  ZVerifyMarkStacksEmptyClosure cl(&_stripes, _generation->id());
+  workers()->threads_do(&cl);
 }

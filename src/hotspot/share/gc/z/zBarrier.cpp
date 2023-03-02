@@ -160,8 +160,48 @@ zaddress ZBarrier::mark_slow_path(zaddress addr) {
   assert(during_any_mark(), "Invalid phase");
 
   // Mark
-  if (!is_null(addr)) {
-    mark<ZMark::DontResurrect, ZMark::GCThread, ZMark::Follow, ZMark::Strong>(addr);
+  if (is_null(addr)) {
+    return addr;
+  }
+
+  mark<ZMark::DontResurrect, ZMark::AnyThread, ZMark::Follow, ZMark::Strong>(addr);
+
+  return addr;
+}
+
+zaddress ZBarrier::mark_from_young_slow_path(zaddress addr) {
+  assert(during_young_mark(), "Invalid phase");
+
+  // Mark
+  if (is_null(addr)) {
+    return addr;
+  }
+
+  if (ZHeap::heap()->is_young(addr)) {
+    ZGeneration::young()->mark_object<ZMark::DontResurrect, ZMark::GCThread, ZMark::Follow, ZMark::Strong>(addr);
+  } else if (ZGeneration::young()->type() == ZYoungType::major_full_roots ||
+             ZGeneration::young()->type() == ZYoungType::major_partial_roots) {
+    ZGeneration::old()->mark_object<ZMark::DontResurrect, ZMark::GCThread, ZMark::Follow, ZMark::Strong>(addr);
+  } else {
+    // Don't mark region crossing pointers
+  }
+
+  return addr;
+}
+
+zaddress ZBarrier::mark_from_old_slow_path(zaddress addr) {
+  assert(during_old_mark(), "Invalid phase");
+
+  // Mark
+  if (is_null(addr)) {
+    return addr;
+  }
+
+  if (ZHeap::heap()->is_old(addr)) {
+    ZGeneration::old()->mark_object<ZMark::DontResurrect, ZMark::GCThread, ZMark::Follow, ZMark::Strong>(addr);
+  } else {
+    // Don't mark region crossing pointers
+    return zaddress::null;
   }
 
   return addr;
@@ -171,9 +211,11 @@ zaddress ZBarrier::mark_young_slow_path(zaddress addr) {
   assert(during_young_mark(), "Invalid phase");
 
   // Mark
-  if (!is_null(addr)) {
-    mark_if_young<ZMark::DontResurrect, ZMark::GCThread, ZMark::Follow>(addr);
+  if (is_null(addr)) {
+    return addr;
   }
+
+  mark_if_young<ZMark::DontResurrect, ZMark::GCThread, ZMark::Follow>(addr);
 
   return addr;
 }
@@ -182,8 +224,32 @@ zaddress ZBarrier::mark_finalizable_slow_path(zaddress addr) {
   assert(during_any_mark(), "Invalid phase");
 
   // Mark
-  if (!is_null(addr)) {
-    mark<ZMark::DontResurrect, ZMark::GCThread, ZMark::Follow, ZMark::Finalizable>(addr);
+  if (is_null(addr)) {
+    return addr;
+  }
+
+  if (ZHeap::heap()->is_old(addr)) {
+    ZGeneration::old()->mark_object<ZMark::DontResurrect, ZMark::GCThread, ZMark::Follow, ZMark::Finalizable>(addr);
+  } else {
+    ZGeneration::young()->mark_object_if_active<ZMark::DontResurrect, ZMark::GCThread, ZMark::Follow, ZMark::Strong>(addr);
+  }
+
+  return addr;
+}
+
+zaddress ZBarrier::mark_finalizable_from_old_slow_path(zaddress addr) {
+  assert(during_any_mark(), "Invalid phase");
+
+  // Mark
+  if (is_null(addr)) {
+    return addr;
+  }
+
+  if (ZHeap::heap()->is_old(addr)) {
+    ZGeneration::old()->mark_object<ZMark::DontResurrect, ZMark::GCThread, ZMark::Follow, ZMark::Finalizable>(addr);
+  } else {
+    // Don't mark region crossing pointers
+    return zaddress::null;
   }
 
   return addr;
