@@ -1440,6 +1440,7 @@ public:
 void ZGenerationOld::remap_roots() {
   uint prev_nworkers = _workers.active_workers();
   uint remap_nworkers = clamp(MAX2(_workers.active_workers(), ZGeneration::young()->workers()->active_workers()), 1u, ZOldGCThreads);
+  log_info(gc, task)("Using %u Workers for Old Generation Root Remapping", remap_nworkers);
   _workers.set_active_workers(remap_nworkers);
   SuspendibleThreadSetJoiner sts_joiner;
 
