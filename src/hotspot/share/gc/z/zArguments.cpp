@@ -63,7 +63,8 @@ void ZArguments::select_max_gc_threads() {
   }
 
   // The max number of concurrent threads we heuristically want
-  const uint max_nconcurrent = MIN2(ConcGCThreads, default_nconcurrent);
+  const uint max_nconcurrent = FLAG_IS_DEFAULT(ConcGCThreads) ? MIN2(ConcGCThreads, default_nconcurrent)
+                                                              : ConcGCThreads;
 
   if (FLAG_IS_DEFAULT(ZYoungGCThreads)) {
     if (UseDynamicNumberOfGCThreads) {
