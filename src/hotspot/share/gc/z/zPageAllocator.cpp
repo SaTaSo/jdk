@@ -26,6 +26,7 @@
 #include "gc/shared/suspendibleThreadSet.hpp"
 #include "gc/z/zArray.inline.hpp"
 #include "gc/z/zGeneration.inline.hpp"
+#include "gc/z/zDirector.hpp"
 #include "gc/z/zDriver.hpp"
 #include "gc/z/zFuture.inline.hpp"
 #include "gc/z/zGenerationId.hpp"
@@ -525,9 +526,14 @@ bool ZPageAllocator::alloc_page_stall(ZPageAllocation* allocation) {
   // We can only block if the VM is fully initialized
   check_out_of_memory_during_initialization();
 
-  // Start asynchronous minor GC
-  const ZDriverRequest request(GCCause::_z_allocation_stall, ZYoungGCThreads, 0);
-  ZDriver::minor()->collect(request);
+  if (ZCollectionIntervalOnly) {
+    // Start asynchronous minor GC
+    const ZDriverRequest request(GCCause::_z_allocation_stall, ZYoungGCThreads, 0);
+    ZDriver::minor()->collect(request);
+  } else {
+    // Let the director start a GC, keep allocation requests enqueued
+    ZDirector::evaluate_rules();
+  }
 
   // Wait for allocation to complete or fail
   const bool result = allocation->wait();
@@ -965,9 +971,8 @@ void ZPageAllocator::restart_gc() const {
   }
 
   if (!has_alloc_seen_young(allocation)) {
-    // Start asynchronous minor GC, keep allocation requests enqueued
-    const ZDriverRequest request(GCCause::_z_allocation_stall, ZYoungGCThreads, 0);
-    ZDriver::minor()->collect(request);
+    // Let the director start a GC, keep allocation requests enqueued
+    ZDirector::evaluate_rules();
   } else {
     // Start asynchronous major GC, keep allocation requests enqueued
     const ZDriverRequest request(GCCause::_z_allocation_stall, ZYoungGCThreads, ZOldGCThreads);
