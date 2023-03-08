@@ -3,3 +3,5 @@ dacapobench-dev-chopin-300acaa/ filter=lfs diff=lfs merge=lfs -text
 dacapobench-dev-chopin-300acaa/dacapo-evaluation-git-300acaa7/ filter=lfs diff=lfs merge=lfs -text
 dacapobench-dev-chopin-300acaa/dacapo-evaluation-git-300acaa7/dat/ filter=lfs diff=lfs merge=lfs -text
 dacapobench-dev-chopin-300acaa/dacapo-evaluation-git-300acaa7/jar/ filter=lfs diff=lfs merge=lfs -text
+dacapobench-dev-chopin-300acaa/dacapo-evaluation-git-300acaa7/jar/spring/spring-petclinic-2.7.3.jar filter=lfs diff=lfs merge=lfs -text
+dacapobench-dev-chopin-300acaa/dacapo-evaluation-git-300acaa7/jar/kafka/rocksdbjni-6.29.4.1.jar filter=lfs diff=lfs merge=lfs -text
