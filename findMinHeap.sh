@@ -61,8 +61,7 @@ function main {
 
 
 >"$work/finalMinHeapSizes.txt"
-#max_power=`free | grep 'Mem' | awk '/Mem:/ { printf "%.3f \n", $2/1024 }' | awk '{print log($1)/log(2)}' | awk -F"." '{print $1}'`
-max_power=` top -l 1 | grep "PhysMem" | awk -F"compressor),\|G unused" '{print $2}'`
+max_power=`free | grep 'Mem' | awk '/Mem:/ { printf "%.3f \n", $2/1024 }' | awk '{print log($1)/log(2)}' | awk -F"." '{print $1}'`
 echo "Max Power is : $max_power"
 # available BMs: jython spring tradebeans tradesoap h2 lusearch jme tomcat avrora batik biojava eclipse graphchi luindex pmd sunflow xalan jython spring tradebeans tradesoap 
 for BENCH in tomcat spring luindex batik 
