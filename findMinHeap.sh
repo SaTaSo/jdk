@@ -11,7 +11,7 @@ mkdir $reults_dir &> /dev/null
 function run {
 
     >$reults_dir/$1-$4-$3.txt
-    $jdk_dir/build/linux-x86_64-server-release/jdk/bin/java -Xmx$2m -Xms16m -Xlog:gc* -XX:+UseZGC -XX:+ShowMessageBoxOnError -jar $chopin_jar $1 -n 3 -s $4 --no-pre-iteration-gc &> $reults_dir/$1-$4-$3.txt
+    $jdk_dir/build/linux-x86_64-server-release/jdk/bin/java -Xmx$2m -Xms16m -Xlog:gc -XX:+UseZGC -XX:+ShowMessageBoxOnError -jar $chopin_jar $1 -n 3 -s $4 --no-pre-iteration-gc &> $reults_dir/$1-$4-$3.txt
 }
 
 function main {
@@ -61,7 +61,8 @@ function main {
 
 
 >"$work/finalMinHeapSizes.txt"
-max_power=`free | grep 'Mem' | awk '/Mem:/ { printf "%.3f \n", $2/1024 }' | awk '{print log($1)/log(2)}' | awk -F"." '{print $1}'`
+#max_power=`free | grep 'Mem' | awk '/Mem:/ { printf "%.3f \n", $2/1024 }' | awk '{print log($1)/log(2)}' | awk -F"." '{print $1}'`
+max_power=` top -l 1 | grep "PhysMem" | awk -F"compressor),\|G unused" '{print $2}'`
 echo "Max Power is : $max_power"
 # available BMs: jython spring tradebeans tradesoap h2 lusearch jme tomcat avrora batik biojava eclipse graphchi luindex pmd sunflow xalan jython spring tradebeans tradesoap 
 for BENCH in tomcat spring luindex batik 
