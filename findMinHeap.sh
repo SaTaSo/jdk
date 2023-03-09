@@ -1,10 +1,9 @@
 #!/bin/bash
 
 work="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
-
 reults_dir="$work/results"
-jdk_dir="$work/jdk"
-chopin_jar="$work/chopin/dacapo-evaluation-git-e5ee303d.jar"
+jdk_dir="$work"
+chopin_jar="$work/dacapobench-dev-chopin-300acaa/dacapo-evaluation-git-300acaa7.jar"
 
 
 mkdir $reults_dir &> /dev/null
@@ -16,7 +15,7 @@ function run {
 }
 
 function main {
-    start_power=10
+    start_power=5
     current_power=$start_power
     last_power=0
     bm=$1 #benchmark name
