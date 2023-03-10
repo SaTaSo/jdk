@@ -16,7 +16,8 @@ function run {
     if [[ -z "$check" ]]
     then
         echo "Running $1 with -Xmx$2m"
-        $jdk_dir/build/linux-x86_64-server-release/jdk/bin/java -Xmx$2m -Xms16m -Xlog:gc -XX:+UseZGC -XX:+ShowMessageBoxOnError -jar $chopin_jar $1 -n 3 -s $4 --no-pre-iteration-gc &> $reults_dir/$1-$4-$3.txt
+        timeout -s 9 5m $jdk_dir/build/linux-x86_64-server-release/jdk/bin/java -Xmx$2m -Xms16m -Xlog:gc -XX:+UseZGC -XX:+ShowMessageBoxOnError -jar 
+$chopin_jar $1 -n 3 -s $4 --no-pre-iteration-gc &> $reults_dir/$1-$4-$3.txt
     else
         echo "Skipping $1 with -Xmx$2m"
     fi
