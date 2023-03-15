@@ -67,6 +67,9 @@
                                                                             \
   product(double, ZCPUOverheadPercent, 0.0,                                 \
           "Heuristic target GC CPU overhead for dynamic heap resizing")     \
+ 									    \
+  product(bool, PrintGCOverhead, false,                                 \
+          "Print ZCPUOverhead wihtout resizing soft heap size")     \
                                                                             \
   product(bool, ZBufferStoreBarriers, true, DIAGNOSTIC,                     \
           "Buffer store barriers")                                          \

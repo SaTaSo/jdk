@@ -127,6 +127,7 @@ static double sigmoid_function(double value) {
 }
 
 void ZAdaptiveHeap::adapt(ZGenerationId generation, ZStatCycleStats stats) {
+  log_info(gc)("We gonna print something ");
   assert(is_enabled(), "Adapting heap even though adaptation is disabled");
   ZGenerationData& generation_data = _generation_data[(int)generation];
 

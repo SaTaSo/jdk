@@ -56,7 +56,8 @@ void ZArguments::initialize_adaptive_heap_sizing() {
                                           !FLAG_IS_CMDLINE(InitialRAMFraction) &&
                                           !FLAG_IS_CMDLINE(InitialRAMPercentage);
   const bool unspecified_cpu_overhead =   !FLAG_IS_CMDLINE(ZCPUOverheadPercent);
-
+  const bool printgcoverhead          =   !FLAG_IS_CMDLINE(PrintGCOverhead);
+ 
   if (unspecified_max_heap_size) {
     // We are really just guessing how much memory the program needs.
     // Let's guess something high but try to keep it down adaptively.
@@ -69,6 +70,9 @@ void ZArguments::initialize_adaptive_heap_sizing() {
   }
 
   if (!ZAdaptiveHeap::is_enabled()) {
+  	if (printgcoverhead) {
+   		 FLAG_SET_ERGO(PrintGCOverhead, true);
+  	}
     // If adaptive heap sizing is switched off, we are done here.
     return;
   }
