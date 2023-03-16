@@ -127,13 +127,13 @@ static double sigmoid_function(double value) {
 }
 
 void ZAdaptiveHeap::adapt(ZGenerationId generation, ZStatCycleStats stats) {
-  log_info(gc)("We gonna print something ");
-  assert(is_enabled(), "Adapting heap even though adaptation is disabled");
+  //assert(is_enabled(), "Adapting heap even though adaptation is disabled");
   ZGenerationData& generation_data = _generation_data[(int)generation];
 
   double time_last = generation_data._last_cpu_time;
   double time_now = process_cpu_time();
   generation_data._last_cpu_time = time_now;
+
 
   double total_time = time_now - time_last;
   generation_data._process_cpu_time.add(total_time);
@@ -163,8 +163,14 @@ void ZAdaptiveHeap::adapt(ZGenerationId generation, ZStatCycleStats stats) {
 
   log_debug(gc, adaptive)("Adaptive total time %f, avg gc time %f, avg total CPU time %f, avg young cpu overhead %f, avg old cpu overhead %f, avg total gc overhead %f, cpu overhead error %f sigmoid error %f correction factor %f",
                           total_time, avg_gc_time, avg_total_time, young_cpu_overhead, old_cpu_overhead, cpu_overhead, cpu_overhead_error, cpu_overhead_sigmoid_error, correction_factor);
-
-  ZHeap::heap()->resize_heap(correction_factor);
+ 
+  if (PrintGCOverhead){
+  	log_info(gc)("Adaptive total time %f, avg gc time %f, avg total CPU time %f, avg young cpu overhead %f, avg old cpu overhead %f, avg total gc overhead %f, cpu overhead error %f sigmoid error %f correction factor %f",
+                          total_time, avg_gc_time, avg_total_time, young_cpu_overhead, old_cpu_overhead, cpu_overhead, cpu_overhead_error, cpu_overhead_sigmoid_error, correction_factor);
+  }
+  if (is_enabled()){
+  	ZHeap::heap()->resize_heap(correction_factor);
+  }
 }
 
 bool ZAdaptiveHeap::is_enabled() {

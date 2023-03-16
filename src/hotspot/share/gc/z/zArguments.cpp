@@ -33,7 +33,7 @@
 #include "runtime/globals.hpp"
 #include "runtime/globals_extension.hpp"
 #include "runtime/java.hpp"
-
+#include <iostream>
 void ZArguments::initialize_alignments() {
   SpaceAlignment = ZGranuleSize;
   HeapAlignment = SpaceAlignment;
@@ -56,7 +56,7 @@ void ZArguments::initialize_adaptive_heap_sizing() {
                                           !FLAG_IS_CMDLINE(InitialRAMFraction) &&
                                           !FLAG_IS_CMDLINE(InitialRAMPercentage);
   const bool unspecified_cpu_overhead =   !FLAG_IS_CMDLINE(ZCPUOverheadPercent);
-  const bool printgcoverhead          =   !FLAG_IS_CMDLINE(PrintGCOverhead);
+  const bool donot_printgcoverhead    =   !FLAG_IS_CMDLINE(PrintGCOverhead);
  
   if (unspecified_max_heap_size) {
     // We are really just guessing how much memory the program needs.
@@ -69,10 +69,10 @@ void ZArguments::initialize_adaptive_heap_sizing() {
     ZAdaptiveHeap::try_enable();
   }
 
+  if (!donot_printgcoverhead) {
+   	FLAG_SET_ERGO(PrintGCOverhead, true);
+  }
   if (!ZAdaptiveHeap::is_enabled()) {
-  	if (printgcoverhead) {
-   		 FLAG_SET_ERGO(PrintGCOverhead, true);
-  	}
     // If adaptive heap sizing is switched off, we are done here.
     return;
   }

@@ -379,11 +379,7 @@ void ZGeneration::at_collection_start(ConcurrentGCTimer* gc_timer) {
 void ZGeneration::at_collection_end() {
   workers()->set_inactive();
   stat_cycle()->at_end(stat_workers(), should_record_stats());
-  if (should_record_stats() && ZAdaptiveHeap::is_enabled()) {
-    ZAdaptiveHeap::adapt(_id, stat_cycle()->stats());
-  }
-  if (!ZAdaptiveHeap::is_enabled() && PrintGCOverhead)
-  {
+  if ((should_record_stats() && ZAdaptiveHeap::is_enabled()) or PrintGCOverhead) {
     ZAdaptiveHeap::adapt(_id, stat_cycle()->stats());
   }
   // The heap at collection end data is gathered at relocate end
