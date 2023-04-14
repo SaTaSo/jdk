@@ -101,6 +101,10 @@ protected:
 public:
   bool is_initialized() const;
 
+  virtual bool is_major() const {
+    return true;
+  }
+
   // GC phases
   void set_phase(Phase new_phase);
   bool is_phase_relocate() const;
@@ -223,6 +227,10 @@ public:
   ZGenerationYoung(ZPageTable* page_table, ZPageAllocator* page_allocator);
 
   ZYoungType type() const;
+
+  virtual bool is_major() const {
+    return type() != ZYoungType::minor;
+  }
 
   void collect(ZYoungType type, ConcurrentGCTimer* timer);
 

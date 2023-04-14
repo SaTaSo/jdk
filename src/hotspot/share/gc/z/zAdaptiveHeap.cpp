@@ -126,14 +126,35 @@ static double sigmoid_function(double value) {
   return 1.0 / (1.0 + pow(M_E, -value));
 }
 
+static ZLock adapt_lock;
+static bool run_every_other_time = false;
+static size_t gc_cycle_number;
+
 void ZAdaptiveHeap::adapt(ZGenerationId generation, ZStatCycleStats stats) {
+  ZGeneration* gen = ZGeneration::generation(generation);
+  bool is_major = gen->is_major();
+
+  if (is_major) {
+    ZLocker<ZLock> locker(&adapt_lock);
+    if (!run_every_other_time) {
+      run_every_other_time = true;
+      gc_cycle_number = gen->seqnum();
+
+      // Should we somehow cache the numbers that we want to have for the last GC in the major?
+      return;
+    } else {
+      run_every_other_time = false;
+    }
+  }
+  // We will only reach this line if we should adapt
+  // If is_major is true, we have stuff in the cache from the previous thread in the major collection
+
   //assert(is_enabled(), "Adapting heap even though adaptation is disabled");
   ZGenerationData& generation_data = _generation_data[(int)generation];
 
   double time_last = generation_data._last_cpu_time;
   double time_now = process_cpu_time();
   generation_data._last_cpu_time = time_now;
-
 
   double total_time = time_now - time_last;
   generation_data._process_cpu_time.add(total_time);
