@@ -134,18 +134,6 @@ void ZAdaptiveHeap::adapt(ZGenerationId generation, ZStatCycleStats stats) {
   ZGeneration* gen = ZGeneration::generation(generation);
   bool is_major = gen->is_major();
 
-  if (is_major) {
-    ZLocker<ZLock> locker(&adapt_lock);
-    if (!run_every_other_time) {
-      run_every_other_time = true;
-      gc_cycle_number = gen->seqnum();
-
-      // Should we somehow cache the numbers that we want to have for the last GC in the major?
-      return;
-    } else {
-      run_every_other_time = false;
-    }
-  }
   // We will only reach this line if we should adapt
   // If is_major is true, we have stuff in the cache from the previous thread in the major collection
 
@@ -173,11 +161,28 @@ void ZAdaptiveHeap::adapt(ZGenerationId generation, ZStatCycleStats stats) {
   log_debug(gc, adaptive)("Adaptive barriers " SIZE_FORMAT ", time %f", barriers, barrier_slow_path_time);
   log_debug(gc, adaptive)("Adaptive avg gc time %f, avg barrier time %f, avg total time %f", avg_gc_time, avg_barrier_time, avg_total_time);
   Atomic::store(&generation_data._generation_cpu_overhead, avg_generation_cpu_overhead);
+  
+  if (is_major) {
+    ZLocker<ZLock> locker(&adapt_lock);
+    if (!run_every_other_time) {
+      run_every_other_time = true;
+      //gc_cycle_number = gen->seqnum();
+
+      // Should we somehow cache the numbers that we want to have for the last GC in the major?
+      return;
+    } else {
+      run_every_other_time = false;
+    }
+  }
 
   double young_cpu_overhead = Atomic::load(&young_data()._generation_cpu_overhead);
   double old_cpu_overhead = Atomic::load(&old_data()._generation_cpu_overhead);
-  double cpu_overhead = young_cpu_overhead + old_cpu_overhead;
-
+  double cpu_overhead;
+  if(is_major == false){
+  	cpu_overhead = young_cpu_overhead;
+  }else {
+  	cpu_overhead = young_cpu_overhead + old_cpu_overhead;
+  }
   double cpu_overhead_error = cpu_overhead - (ZCPUOverheadPercent / 100.0);
   double cpu_overhead_sigmoid_error = sigmoid_function(cpu_overhead_error);
   double correction_factor = cpu_overhead_sigmoid_error + 0.5;
