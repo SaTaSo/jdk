@@ -47,10 +47,11 @@ private:
         _process_cpu_time(0.7 /* alpha */) {}
   };
 
-  static ZGenerationData& young_data();
+  static ZGenerationData& young_minor_data();
+  static ZGenerationData& young_major_data();
   static ZGenerationData& old_data();
 
-  static ZGenerationData _generation_data[2];
+  static ZGenerationData _generation_data[4];
 
   static double process_cpu_time();
 

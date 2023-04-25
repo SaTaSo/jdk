@@ -40,7 +40,7 @@
 
 bool ZAdaptiveHeap::_enabled = false;
 volatile size_t ZAdaptiveHeap::_barrier_slow_paths = 0;
-ZAdaptiveHeap::ZGenerationData ZAdaptiveHeap::_generation_data[2];
+ZAdaptiveHeap::ZGenerationData ZAdaptiveHeap::_generation_data[4];
 NumberSeq ZAdaptiveHeap::_barrier_cpu_time(0.7);
 ZLock* ZAdaptiveHeap::_lock = nullptr;
 
@@ -88,8 +88,11 @@ double ZAdaptiveHeap::process_cpu_time() {
 #endif
 }
 
-ZAdaptiveHeap::ZGenerationData& ZAdaptiveHeap::young_data() {
+ZAdaptiveHeap::ZGenerationData& ZAdaptiveHeap::young_minor_data() {
   return _generation_data[(int)ZGenerationId::young];
+}
+ZAdaptiveHeap::ZGenerationData& ZAdaptiveHeap::young_major_data() {
+  return _generation_data[2];
 }
 
 ZAdaptiveHeap::ZGenerationData& ZAdaptiveHeap::old_data() {
@@ -103,7 +106,8 @@ void ZAdaptiveHeap::try_enable() {
   }
 
   _enabled = true;
-  young_data()._last_cpu_time = time_now;
+  young_minor_data()._last_cpu_time = time_now;
+  young_major_data()._last_cpu_time = time_now;
   old_data()._last_cpu_time = time_now;
   _lock = new ZLock();
 }
@@ -138,30 +142,65 @@ void ZAdaptiveHeap::adapt(ZGenerationId generation, ZStatCycleStats stats) {
   // If is_major is true, we have stuff in the cache from the previous thread in the major collection
 
   //assert(is_enabled(), "Adapting heap even though adaptation is disabled");
-  ZGenerationData& generation_data = _generation_data[(int)generation];
+  if (is_major and (int(generation) == (int)ZGenerationId::young)){
+  	ZGenerationData& generation_data = _generation_data[2];
+  	//generation_data = _generation_data[2];
+  	double time_last = generation_data._last_cpu_time;
+  	double time_now = process_cpu_time();
+  	log_info(gc)("Time before  %f", generation_data._last_cpu_time);
+  	generation_data._last_cpu_time = time_now;
+  	log_info(gc)("Time after storing  %f", generation_data._last_cpu_time);
+  	double total_time = time_now - time_last;
+  	generation_data._process_cpu_time.add(total_time);
 
-  double time_last = generation_data._last_cpu_time;
-  double time_now = process_cpu_time();
-  generation_data._last_cpu_time = time_now;
+ 	size_t barriers = Atomic::xchg(&_barrier_slow_paths, (size_t)0u);
+  	double barrier_slow_path_time;
+ 	{
+    	ZLocker<ZLock> locker(_lock);
+    	barrier_slow_path_time = _barrier_cpu_time.davg();
+  	}
+  	double avg_barrier_time = barriers * barrier_slow_path_time;
+  	double avg_gc_time = stats._avg_serial_time + stats._avg_parallelizable_time;
+  	double avg_total_time = generation_data._process_cpu_time.davg();
 
-  double total_time = time_now - time_last;
-  generation_data._process_cpu_time.add(total_time);
+  	double avg_generation_cpu_overhead = (avg_gc_time + avg_barrier_time) / avg_total_time;
+  	log_info(gc)("avg generation overhead before storing  %f", avg_generation_cpu_overhead);
+  	//double avg_generation_cpu_overhead = (avg_gc_time) / avg_total_time;
+  	log_debug(gc, adaptive)("Adaptive barriers " SIZE_FORMAT ", time %f", barriers, barrier_slow_path_time);
+  	log_debug(gc, adaptive)("Adaptive avg gc time %f, avg barrier time %f, avg total time %f", avg_gc_time, avg_barrier_time, avg_total_time);
+  	Atomic::store(&generation_data._generation_cpu_overhead, avg_generation_cpu_overhead);
+  	if (PrintGCOverhead){
+  		log_info(gc)("Adaptive barriers " SIZE_FORMAT ", time %f", barriers, barrier_slow_path_time);
+  		log_info(gc)("Adaptive avg gc time %f, avg barrier time %f, avg total time %f", avg_gc_time, avg_barrier_time, avg_total_time);
+	}
+	}else {
+  	ZGenerationData& generation_data = _generation_data[(int)generation];
+  	double time_last = generation_data._last_cpu_time;
+  	double time_now = process_cpu_time();
+  	generation_data._last_cpu_time = time_now;
 
-  size_t barriers = Atomic::xchg(&_barrier_slow_paths, (size_t)0u);
-  double barrier_slow_path_time;
-  {
-    ZLocker<ZLock> locker(_lock);
-    barrier_slow_path_time = _barrier_cpu_time.davg();
-  }
-  double avg_barrier_time = barriers * barrier_slow_path_time;
-  double avg_gc_time = stats._avg_serial_time + stats._avg_parallelizable_time;
-  double avg_total_time = generation_data._process_cpu_time.davg();
+  	double total_time = time_now - time_last;
+  	generation_data._process_cpu_time.add(total_time);
 
-  double avg_generation_cpu_overhead = (avg_gc_time + avg_barrier_time) / avg_total_time;
-  log_debug(gc, adaptive)("Adaptive barriers " SIZE_FORMAT ", time %f", barriers, barrier_slow_path_time);
-  log_debug(gc, adaptive)("Adaptive avg gc time %f, avg barrier time %f, avg total time %f", avg_gc_time, avg_barrier_time, avg_total_time);
-  Atomic::store(&generation_data._generation_cpu_overhead, avg_generation_cpu_overhead);
-  
+  	size_t barriers = Atomic::xchg(&_barrier_slow_paths, (size_t)0u);
+  	double barrier_slow_path_time;
+  	{
+    	ZLocker<ZLock> locker(_lock);
+    	barrier_slow_path_time = _barrier_cpu_time.davg();
+  	}
+  	double avg_barrier_time = barriers * barrier_slow_path_time;
+  	double avg_gc_time = stats._avg_serial_time + stats._avg_parallelizable_time;
+  	double avg_total_time = generation_data._process_cpu_time.davg();
+
+  	double avg_generation_cpu_overhead = (avg_gc_time + avg_barrier_time) / avg_total_time;
+  	//double avg_generation_cpu_overhead = (avg_gc_time) / avg_total_time;
+  	log_debug(gc, adaptive)("Adaptive barriers " SIZE_FORMAT ", time %f", barriers, barrier_slow_path_time);
+  	log_debug(gc, adaptive)("Adaptive avg gc time %f, avg barrier time %f, avg total time %f", avg_gc_time, avg_barrier_time, avg_total_time);
+  	Atomic::store(&generation_data._generation_cpu_overhead, avg_generation_cpu_overhead);
+  	if (PrintGCOverhead){
+  		log_info(gc)("Adaptive barriers " SIZE_FORMAT ", time %f", barriers, barrier_slow_path_time);
+  		log_info(gc)("Adaptive avg gc time %f, avg barrier time %f, avg total time %f", avg_gc_time, avg_barrier_time, avg_total_time);
+  }}
   if (is_major) {
     ZLocker<ZLock> locker(&adapt_lock);
     if (!run_every_other_time) {
@@ -175,24 +214,27 @@ void ZAdaptiveHeap::adapt(ZGenerationId generation, ZStatCycleStats stats) {
     }
   }
 
-  double young_cpu_overhead = Atomic::load(&young_data()._generation_cpu_overhead);
-  double old_cpu_overhead = Atomic::load(&old_data()._generation_cpu_overhead);
+  double young_minor_cpu_overhead;
+  double young_major_cpu_overhead;
+  double old_cpu_overhead;
   double cpu_overhead;
   if(is_major == false){
-  	cpu_overhead = young_cpu_overhead;
+  	young_minor_cpu_overhead = Atomic::load(&young_minor_data()._generation_cpu_overhead);
+  	cpu_overhead = young_minor_cpu_overhead;
   }else {
-  	cpu_overhead = young_cpu_overhead + old_cpu_overhead;
+  	young_major_cpu_overhead = Atomic::load(&young_major_data()._generation_cpu_overhead);
+  	old_cpu_overhead = Atomic::load(&old_data()._generation_cpu_overhead);
+  	cpu_overhead = young_major_cpu_overhead + old_cpu_overhead;
   }
   double cpu_overhead_error = cpu_overhead - (ZCPUOverheadPercent / 100.0);
   double cpu_overhead_sigmoid_error = sigmoid_function(cpu_overhead_error);
   double correction_factor = cpu_overhead_sigmoid_error + 0.5;
 
-  log_debug(gc, adaptive)("Adaptive total time %f, avg gc time %f, avg total CPU time %f, avg young cpu overhead %f, avg old cpu overhead %f, avg total gc overhead %f, cpu overhead error %f sigmoid error %f correction factor %f",
-                          total_time, avg_gc_time, avg_total_time, young_cpu_overhead, old_cpu_overhead, cpu_overhead, cpu_overhead_error, cpu_overhead_sigmoid_error, correction_factor);
+  //log_debug(gc, adaptive)("Adaptive total time %f, avg gc time %f, avg total CPU time %f, avg young minor cpu overhead %f, avg young major cpu overhead %f, avg old cpu overhead %f, avg total gc overhead %f, cpu overhead error %f sigmoid error %f correction factor %f",
+ //                         total_time, avg_gc_time, avg_total_time, young_minor_cpu_overhead, young_major_cpu_overhead, old_cpu_overhead, cpu_overhead, cpu_overhead_error, cpu_overhead_sigmoid_error, correction_factor);
  
   if (PrintGCOverhead){
-  	log_info(gc)("Adaptive total time %f, avg gc time %f, avg total CPU time %f, avg young cpu overhead %f, avg old cpu overhead %f, avg total gc overhead %f, cpu overhead error %f sigmoid error %f correction factor %f",
-                          total_time, avg_gc_time, avg_total_time, young_cpu_overhead, old_cpu_overhead, cpu_overhead, cpu_overhead_error, cpu_overhead_sigmoid_error, correction_factor);
+  	log_info(gc)("Adaptive avg young minor cpu overhead %f, avg young major cpu overhead %f, avg old cpu overhead %f, avg total gc overhead %f, cpu overhead error %f sigmoid error %f correction factor %f",	young_minor_cpu_overhead, young_major_cpu_overhead, old_cpu_overhead, cpu_overhead, cpu_overhead_error, cpu_overhead_sigmoid_error, correction_factor);
   }
   if (is_enabled()){
   	ZHeap::heap()->resize_heap(correction_factor);
